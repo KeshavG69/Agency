@@ -1,0 +1,47 @@
+# EspoCRM stack (web + MariaDB + background daemon).
+# Start:   cd crm && docker compose up -d
+# URL:     http://localhost:8080   (admin / Esp0CRM!change)
+# Stop:    docker compose down      (data persists in named volumes)
+
+services:
+  espocrm-db:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: root_change_me
+      MARIADB_DATABASE: espocrm
+      MARIADB_USER: espocrm
+      MARIADB_PASSWORD: espocrm_change_me
+    volumes:
+      - espocrm-db:/var/lib/mysql
+    restart: unless-stopped
+
+  espocrm:
+    image: espocrm/espocrm:latest
+    environment:
+      ESPOCRM_DATABASE_HOST: espocrm-db
+      ESPOCRM_DATABASE_NAME: espocrm
+      ESPOCRM_DATABASE_USER: espocrm
+      ESPOCRM_DATABASE_PASSWORD: espocrm_change_me
+      ESPOCRM_ADMIN_USERNAME: admin
+      ESPOCRM_ADMIN_PASSWORD: Esp0CRM!change
+      ESPOCRM_SITE_URL: http://localhost:8080
+    volumes:
+      - espocrm:/var/www/html
+    ports:
+      - "8080:80"
+    depends_on:
+      - espocrm-db
+    restart: unless-stopped
+
+  espocrm-daemon:
+    image: espocrm/espocrm:latest
+    volumes:
+      - espocrm:/var/www/html
+    depends_on:
+      - espocrm
+    entrypoint: docker-daemon.sh
+    restart: unless-stopped
+
+volumes:
+  espocrm-db:
+  espocrm:

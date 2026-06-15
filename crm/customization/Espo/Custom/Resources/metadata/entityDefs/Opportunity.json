@@ -1,0 +1,82 @@
+{
+    "fields": {
+        "stage": {
+            "type": "enum",
+            "options": ["Discover", "Qualify", "Capture", "Pursue", "Submitted", "Won", "Lost"],
+            "default": "Discover",
+            "probabilityMap": {
+                "Discover": 5,
+                "Qualify": 20,
+                "Capture": 45,
+                "Pursue": 70,
+                "Submitted": 90,
+                "Won": 100,
+                "Lost": 0
+            },
+            "style": {
+                "Won": "success",
+                "Lost": "danger"
+            }
+        },
+        "naics": {
+            "type": "varchar",
+            "maxLength": 10
+        },
+        "setAside": {
+            "type": "enum",
+            "options": ["", "WOSB", "8(a)", "SDVOSB", "HUBZone", "Small Business", "Full & Open"]
+        },
+        "agency": {
+            "type": "varchar",
+            "maxLength": 255
+        },
+        "solicitationNumber": {
+            "type": "varchar",
+            "maxLength": 100
+        },
+        "oppType": {
+            "type": "enum",
+            "options": ["", "Solicitation", "Sources Sought", "Presolicitation", "Combined Synopsis/Solicitation", "Award Notice", "Special Notice"]
+        },
+        "responseDeadline": {
+            "type": "date"
+        },
+        "recompeteDate": {
+            "type": "date"
+        },
+        "pocName": {
+            "type": "varchar",
+            "maxLength": 255
+        },
+        "pocEmail": {
+            "type": "varchar",
+            "maxLength": 255
+        },
+        "samLink": {
+            "type": "url"
+        },
+        "source": {
+            "type": "varchar",
+            "maxLength": 50,
+            "default": "excel"
+        },
+        "noticeId": {
+            "type": "varchar",
+            "maxLength": 50
+        },
+        "postedDate": {
+            "type": "date"
+        },
+        "pscCode": {
+            "type": "varchar",
+            "maxLength": 10
+        },
+        "placeOfPerformance": {
+            "type": "varchar",
+            "maxLength": 255
+        },
+        "closeDate": {
+            "required": false
+        }
+    }
+}

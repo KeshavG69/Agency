@@ -1,0 +1,19 @@
+[project]
+name = "ai-agency"
+version = "0.1.0"
+description = "Govcon AI agency backend — opportunity ingestion + agents over EspoCRM"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "agno>=2.5.3",
+    "anthropic>=0.40.0",
+    "exa-py>=2.0.2",
+    "fastapi>=0.121.2",
+    "uvicorn>=0.38.0",
+    "httpx>=0.27.0",
+    "openpyxl>=3.1.5",
+    "pydantic>=2.12.4",
+    "pydantic-settings>=2.12.0",
+    "python-dotenv>=1.2.1",
+    "python-multipart>=0.0.6",
+]

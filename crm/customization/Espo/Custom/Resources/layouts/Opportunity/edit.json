@@ -1,0 +1,15 @@
+[
+    {
+        "label": "Overview",
+        "rows": [
+            [{"name": "name"}, {"name": "stage"}],
+            [{"name": "agency"}, {"name": "oppType"}],
+            [{"name": "naics"}, {"name": "setAside"}],
+            [{"name": "solicitationNumber"}, {"name": "amount"}],
+            [{"name": "responseDeadline"}, {"name": "recompeteDate"}],
+            [{"name": "pocName"}, {"name": "pocEmail"}],
+            [{"name": "samLink"}, {"name": "source"}],
+            [{"name": "assignedUser"}, {"name": "description"}]
+        ]
+    }
+]
