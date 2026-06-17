@@ -3,7 +3,7 @@ import tempfile
 
 from fastapi import APIRouter, File, UploadFile
 
-from client.espocrm_client import get_espocrm_client
+from client.crm_store import get_crm_store
 from utils.excel_ingest import ingest_excel
 
 router = APIRouter(prefix="/api/ingestion", tags=["ingestion"])
@@ -17,7 +17,7 @@ async def ingest_excel_file(file: UploadFile = File(...)) -> dict:
         tmp.flush()
         opportunities = ingest_excel(tmp.name)
 
-    crm = get_espocrm_client()
+    crm = get_crm_store()
     created = updated = 0
     results = []
     for opp in opportunities:

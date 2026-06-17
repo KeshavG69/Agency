@@ -8,11 +8,18 @@ syncs update rather than duplicate.
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from app.settings import settings
 from models.opportunity import Opportunity
+from models.verdict import AnalystVerdict
+
+
+def _utc_now() -> str:
+    """EspoCRM datetime format (UTC)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 # EspoCRM enum options (values outside these are dropped to avoid validation errors)
 _SET_ASIDE = {"WOSB", "8(a)", "SDVOSB", "HUBZone", "Small Business", "Full & Open"}
@@ -105,6 +112,88 @@ class EspoCRMClient:
             r = c.get("/Opportunity", params={"maxSize": 1})
             r.raise_for_status()
             return r.json()["total"]
+
+    # --- Analyst Agent support ---------------------------------------------
+
+    def list_unanalyzed_opportunities(self, page_size: int = 200) -> list[dict]:
+        """Return every opportunity the Analyst hasn't scored yet (analyzedAt is null).
+
+        Paginates through the CRM so it scales past EspoCRM's per-request cap.
+        """
+        items: list[dict] = []
+        offset = 0
+        with self._client() as c:
+            while True:
+                r = c.get("/Opportunity", params={
+                    "where[0][type]": "isNull",
+                    "where[0][attribute]": "analyzedAt",
+                    "maxSize": page_size,
+                    "offset": offset,
+                    "orderBy": "createdAt",
+                    "order": "asc",
+                })
+                r.raise_for_status()
+                data = r.json()
+                batch = data.get("list", [])
+                items.extend(batch)
+                offset += len(batch)
+                if not batch or offset >= data.get("total", 0):
+                    break
+        return items
+
+    def apply_verdict(self, opportunity_id: str, verdict: AnalystVerdict) -> None:
+        """Write the Analyst's verdict back and mark the opportunity analyzed."""
+        payload = {
+            "bidDecision": verdict.bid_decision,
+            "priorityScore": verdict.priority_score,
+            "analystRationale": verdict.rationale,
+            "stage": verdict.recommended_stage,
+            "analyzedAt": _utc_now(),
+        }
+        with self._client() as c:
+            r = c.put(f"/Opportunity/{opportunity_id}", json=payload)
+            r.raise_for_status()
+
+    def create_call(
+        self, opportunity_id: str, name: str, talking_point: str, direction: str = "Outbound"
+    ) -> str:
+        """Create a planned Call (a call-plan entry) linked to the opportunity."""
+        start = datetime.now(timezone.utc)
+        fmt = "%Y-%m-%d %H:%M:%S"
+        payload = {
+            "name": name,
+            "status": "Planned",
+            "direction": direction,
+            "parentType": "Opportunity",
+            "parentId": opportunity_id,
+            "description": talking_point,
+            "dateStart": start.strftime(fmt),
+            "dateEnd": (start + timedelta(minutes=15)).strftime(fmt),
+        }
+        with self._client() as c:
+            r = c.post("/Call", json=payload)
+            r.raise_for_status()
+            return r.json()["id"]
+
+    def create_task(
+        self, opportunity_id: str, name: str, description: str = "",
+        due_date: str | None = None, priority: str = "Normal",
+    ) -> str:
+        """Create a follow-up Task linked to the opportunity."""
+        payload = {
+            "name": name,
+            "status": "Not Started",
+            "priority": priority,
+            "parentType": "Opportunity",
+            "parentId": opportunity_id,
+            "description": description,
+        }
+        if due_date:
+            payload["dateEnd"] = due_date
+        with self._client() as c:
+            r = c.post("/Task", json=payload)
+            r.raise_for_status()
+            return r.json()["id"]
 
 
 _client: EspoCRMClient | None = None

@@ -11,3 +11,4 @@ wheels/
 crm
 .env
 .vscode/*
+.DS_Store

@@ -1,11 +1,12 @@
 """FastAPI app creation, middleware, and router registration."""
+import utils.agno_patches  # noqa: F401  -- apply agno reasoning patch before any agent runs
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
-from routers import ingestion
+from routers import ingestion, opportunities
 
 
 @asynccontextmanager
@@ -16,7 +17,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Nexagen AI Agency API",
-    description="Opportunity pipeline + AI agents over EspoCRM.",
+    description="Collecct — opportunity pipeline + AI agents over MongoDB.",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -38,3 +39,4 @@ def health() -> dict:
 
 
 app.include_router(ingestion.router)
+app.include_router(opportunities.router)

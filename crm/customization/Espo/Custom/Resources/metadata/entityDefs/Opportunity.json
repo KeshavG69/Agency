@@ -2,7 +2,7 @@
     "fields": {
         "stage": {
             "type": "enum",
-            "options": ["Discover", "Qualify", "Capture", "Pursue", "Submitted", "Won", "Lost"],
+            "options": ["Discover", "Qualify", "Capture", "Pursue", "Submitted", "Won", "Lost", "No-Bid"],
             "default": "Discover",
             "probabilityMap": {
                 "Discover": 5,
@@ -11,11 +11,13 @@
                 "Pursue": 70,
                 "Submitted": 90,
                 "Won": 100,
-                "Lost": 0
+                "Lost": 0,
+                "No-Bid": 0
             },
             "style": {
                 "Won": "success",
-                "Lost": "danger"
+                "Lost": "danger",
+                "No-Bid": "warning"
             }
         },
         "naics": {
@@ -74,6 +76,21 @@
         "placeOfPerformance": {
             "type": "varchar",
             "maxLength": 255
+        },
+        "bidDecision": {
+            "type": "enum",
+            "options": ["", "Bid", "No-Bid", "Watch"]
+        },
+        "priorityScore": {
+            "type": "int",
+            "min": 0,
+            "max": 100
+        },
+        "analystRationale": {
+            "type": "text"
+        },
+        "analyzedAt": {
+            "type": "datetime"
         },
         "closeDate": {
             "required": false
