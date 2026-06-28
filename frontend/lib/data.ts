@@ -70,7 +70,7 @@ export interface Opportunity {
   analyst_rationale?: string;
   poc_name?: string;
   capture_approved?: boolean;
-  captured_at?: string | null; // set when the full capture chain (plan + shaping) finishes
+  captured_at?: string | null; // set when the Capture agent finishes its deliverables
   // raw opportunity fields surfaced in the detail view
   source?: string; // "sam.gov" | "excel" — where this opportunity was ingested from
   solicitation_number?: string;

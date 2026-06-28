@@ -76,11 +76,11 @@ def set_decision(
 
 @router.post("/{opportunity_id}/approve-capture")
 def approve_capture(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:
-    """Human approves ONE opportunity → immediately runs the capture chain for that one.
+    """Human approves ONE opportunity → immediately runs the Capture agent for that one.
 
-    Marks it approved (the gate), then fires Capture Plan -> Shaping for just this
-    opportunity. The CRM contact search runs against the APPROVING employee's own
-    network (their email from the JWT). Other opportunities are untouched.
+    Marks it approved (the gate), then fires the Capture agent for just this opportunity.
+    The CRM contact search runs against the APPROVING employee's own network (their email
+    from the JWT). Other opportunities are untouched.
     """
     crm = get_crm_store()
     opp = crm.get_opportunity(opportunity_id, str(current_user["organization_id"]))

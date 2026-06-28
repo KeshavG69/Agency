@@ -7677,7 +7677,7 @@
         "kind": 2,
         "importPath": "backend.routers.opportunities",
         "description": "backend.routers.opportunities",
-        "peekOfCode": "def approve_capture(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"Human approves ONE opportunity → immediately runs the capture chain for that one.\n    Marks it approved (the gate), then fires Capture Plan -> Shaping for just this\n    opportunity. The CRM contact search runs against the APPROVING employee's own\n    network (their email from the JWT). Other opportunities are untouched.\n    \"\"\"\n    crm = get_crm_store()\n    opp = crm.get_opportunity(opportunity_id, str(current_user[\"organization_id\"]))\n    if opp is None:\n        raise HTTPException(status_code=404, detail=\"Opportunity not found\")",
+        "peekOfCode": "def approve_capture(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"Human approves ONE opportunity → immediately runs the Capture agent for that one.\n    Marks it approved (the gate), then fires the Capture agent for just this opportunity.\n    The CRM contact search runs against the APPROVING employee's own network (their email\n    from the JWT). Other opportunities are untouched.\n    \"\"\"\n    crm = get_crm_store()\n    opp = crm.get_opportunity(opportunity_id, str(current_user[\"organization_id\"]))\n    if opp is None:\n        raise HTTPException(status_code=404, detail=\"Opportunity not found\")",
         "detail": "backend.routers.opportunities",
         "documentation": {}
     },

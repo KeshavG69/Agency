@@ -25,7 +25,7 @@ Tracks what you've demonstrably mastered. `[ ]` = not yet, `[x]` = confirmed.
 - [ ] Analyst Agent: input, what it judges, structured output, parallel fan-out
 - [ ] Pattern: agentic-read vs code-feeds; deterministic write
 - [ ] CRM/Relation Agent: the knowledge-graph idea (5000 → 10)
-- [ ] Capture Plan → Shaping → Mail (the split + pipeline)
+- [ ] Capture agent (merged capture-plan + shaping) → Mail
 - [ ] Doc generation (python_repl + skills + iDrive) + SharePoint export
 
 ## Stage 5 — Key design decisions & edge cases
