@@ -1,0 +1,22 @@
+{
+  "share_point": {
+    "oauth": {
+      "app": "SHAREPOINT",
+      "auth_config_id": "ac_yZpaj2ORI7Fx"
+    },
+    "agent": {
+      "description": "Read-only SharePoint access for the Mail/Proposal agent — discover sites, browse document libraries and folders, search content, read files, and read list data to ground outreach and proposals in the company's real material.",
+      "actions": [
+        "SHARE_POINT_LIST_SITES",
+        "SHARE_POINT_LIST_DRIVES_REST_API",
+        "SHARE_POINT_LIST_DRIVE_CHILDREN",
+        "SHARE_POINT_SEARCH_QUERY",
+        "SHARE_POINT_GET_SITE_DRIVE_ITEM_BY_PATH",
+        "SHARE_POINT_DOWNLOAD_FILE_BY_SERVER_RELATIVE_URL",
+        "SHARE_POINT_LIST_ALL_LISTS",
+        "SHARE_POINT_LIST_LIST_COLUMNS",
+        "SHARE_POINT_GET_LIST_ITEMS_BY_GUID"
+      ]
+    }
+  }
+}

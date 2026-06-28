@@ -1,0 +1,38 @@
+{
+  "SHARE_POINT_LIST_SITES": {
+    "instruction": "List the SharePoint sites available. Use this first to discover which sites exist (e.g. the proposals/past-performance team sites) before browsing their contents. Use search='*' for all sites or a keyword to narrow.",
+    "usage": "Discover available SharePoint sites"
+  },
+  "SHARE_POINT_LIST_DRIVES_REST_API": {
+    "instruction": "List the document libraries (drives) inside a site. Pass site_name = the segment after /sites/ in the site URL (e.g. 'Servicesteam'). Use this to find where files live within a site.",
+    "usage": "List a site's document libraries"
+  },
+  "SHARE_POINT_LIST_DRIVE_CHILDREN": {
+    "instruction": "List the folders and files inside a document library or folder. Pass drive_id (and folder_id to go deeper). Folders have a 'folder' facet; recurse into them by passing their id as folder_id. Use this to walk a library's structure.",
+    "usage": "Browse folders and files in a library"
+  },
+  "SHARE_POINT_SEARCH_QUERY": {
+    "instruction": "Search SharePoint content with KQL (Keyword Query Language). Use to find documents by topic/keyword across a site quickly (e.g. 'capability statement cybersecurity', 'past performance Army'). Narrow with FileType, Author, or a site path to avoid noisy results.",
+    "usage": "Keyword-search SharePoint documents"
+  },
+  "SHARE_POINT_GET_SITE_DRIVE_ITEM_BY_PATH": {
+    "instruction": "Resolve a file or folder by its server-relative path (e.g. '/Shared Documents/Past Performance/Army-WIN-T.docx') to get its metadata + ids. Use to confirm a file exists and obtain drive_id/item_id or the server-relative URL before downloading.",
+    "usage": "Resolve a SharePoint item by path"
+  },
+  "SHARE_POINT_DOWNLOAD_FILE_BY_SERVER_RELATIVE_URL": {
+    "instruction": "Download a file's content by its server-relative URL. Returns a hosted content link (s3url) to fetch the bytes. Use ONLY for the specific file you need (e.g. one past-performance write-up) to ground the email — never bulk-download.",
+    "usage": "Read one SharePoint file's content"
+  },
+  "SHARE_POINT_LIST_ALL_LISTS": {
+    "instruction": "List the SharePoint Lists in a site (structured-data tables — trackers, registers, opportunity logs). Pass site_name. Use to discover data lists that may hold relevant info (e.g. an opportunities or past-performance list).",
+    "usage": "Discover a site's Lists"
+  },
+  "SHARE_POINT_LIST_LIST_COLUMNS": {
+    "instruction": "Get the columns (schema) of a SharePoint List by its GUID. Use to understand what fields a list holds before reading its items.",
+    "usage": "Read a List's column schema"
+  },
+  "SHARE_POINT_GET_LIST_ITEMS_BY_GUID": {
+    "instruction": "Read the items (rows) of a SharePoint List by its GUID. Use to pull the specific records you need (e.g. relevant past-performance entries) to ground the email — request a narrow set, not the whole list.",
+    "usage": "Read items from a SharePoint List"
+  }
+}

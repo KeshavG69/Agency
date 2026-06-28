@@ -28,14 +28,34 @@ class Settings(BaseSettings):
     # Exa — web search tool for agents
     EXA_API_KEY: str = ""
 
+    # Explorium — resolve a contact's name / title / company from their email
+    EXPLORIUM_API_KEY: str = ""
+    EXPLORIUM_BASE_URL: str = "https://api.explorium.ai/v1"
+
+    # SAM.gov Entity API — fetch a company's registration details from its UEI
+    # (free key from api.data.gov / sam.gov). Used by the Organisation settings.
+    SAM_GOV_API_KEY: str = ""
+    SAM_GOV_BASE_URL: str = "https://api.sam.gov"
+
+    # FalkorDB — the CRM knowledge graph (people / companies / relationships)
+    GRAPH_DATABASE_URL: str = "localhost"  # host
+    GRAPH_DATABASE_PORT: int = 6379
+    GRAPH_DATABASE_USERNAME: str = ""
+    GRAPH_DATABASE_PASSWORD: str = ""
+    GRAPH_DATABASE_SSL: bool = False
+    GRAPH_DATABASE_NAME: str = "collecct_network"
+
     # Redis / Celery (background tasks)
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
 
     # Composio — managed auth + tools (Outlook mail + calendar for the Relation Agent)
     COMPOSIO_API_KEY: str = ""
-    COMPOSIO_USER_ID: str = "nexagen-bd"
     COMPOSIO_OUTLOOK_AUTH_CONFIG_ID: str = ""
+    COMPOSIO_SHAREPOINT_AUTH_CONFIG_ID: str = "ac_yZpaj2ORI7Fx"
+
+    # SharePoint structure graph (separate FalkorDB graph from the contact network)
+    SHAREPOINT_GRAPH_NAME: str = "sharepoint_structure"
 
     # LLM (Phase 2 agents) — Analyst Agent runs Claude via OpenRouter (mirrors PriceIQ)
     ANTHROPIC_API_KEY: str = ""

@@ -1,4 +1,4 @@
-# Nexagen AI Agency — Project Plan
+# Collecct — Project Plan
 
 **Strategy:** Build the CRM tool the boss asked for first (real data, real value), prove
 it, then add the AI helpers on top. Each phase ends with something demo-able.

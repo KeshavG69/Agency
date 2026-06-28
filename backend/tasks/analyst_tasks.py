@@ -47,12 +47,12 @@ def analyze_opportunity_task(self, opp: dict) -> dict:
 
 
 @celery_app.task
-def run_analyst_batch() -> dict:
-    """Fan out one analyze task per unanalyzed opportunity."""
+def run_analyst_batch(organization_id: str) -> dict:
+    """Fan out one analyze task per unanalyzed opportunity IN ONE ORG."""
     crm = get_crm_store()
-    opps = crm.list_unanalyzed_opportunities()
+    opps = crm.list_unanalyzed_opportunities(organization_id)
     if not opps:
         return {"dispatched": 0}
     group(analyze_opportunity_task.s(o) for o in opps).apply_async()
-    logger.info("Dispatched %d analyst tasks", len(opps))
+    logger.info("Dispatched %d analyst tasks for org %s", len(opps), organization_id)
     return {"dispatched": len(opps)}

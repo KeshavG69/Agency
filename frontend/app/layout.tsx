@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Fraunces, Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import AuthProvider from "@/components/AuthProvider";
 
 const display = Fraunces({
   subsets: ["latin"],
@@ -23,13 +24,15 @@ const mono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: "Collecct — Capture Operations",
-  description: "Govcon business-development pipeline for Nexagen Networks.",
+  description: "Govcon business-development pipeline.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${display.variable} ${sans.variable} ${mono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

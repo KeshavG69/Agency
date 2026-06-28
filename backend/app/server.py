@@ -6,7 +6,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
-from routers import ingestion, opportunities
+from routers import (
+    auth,
+    composio,
+    contacts,
+    ingestion,
+    invitations,
+    mail,
+    opportunities,
+    organizations,
+    sharepoint,
+    users,
+    workspace,
+)
 
 
 @asynccontextmanager
@@ -16,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Nexagen AI Agency API",
+    title="Collecct API",
     description="Collecct — opportunity pipeline + AI agents over MongoDB.",
     version="0.1.0",
     lifespan=lifespan,
@@ -40,3 +52,13 @@ def health() -> dict:
 
 app.include_router(ingestion.router)
 app.include_router(opportunities.router)
+app.include_router(composio.router)
+app.include_router(contacts.router)
+app.include_router(sharepoint.router)
+app.include_router(mail.router)
+# --- authentication / org-tenancy (ported from PriceIQ) ---
+app.include_router(auth.router, prefix="/api", tags=["authentication"])
+app.include_router(users.router, prefix="/api/users", tags=["users"])
+app.include_router(invitations.router, tags=["invitations"])
+app.include_router(workspace.router, tags=["workspace"])
+app.include_router(organizations.router, tags=["organizations"])

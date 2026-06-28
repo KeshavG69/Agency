@@ -1,40 +1,167 @@
 """Opportunity actions — the human approval gate + kicking off capture."""
-from fastapi import APIRouter
+from celery import group
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
+from auth.dependencies import get_current_user
 from client.crm_store import get_crm_store
-from tasks.analyst_tasks import run_analyst_batch
-from tasks.capture_tasks import run_capture_batch
+from tasks.analyst_tasks import analyze_opportunity_task, run_analyst_batch
+from tasks.capture_tasks import capture_task, run_capture_batch
+from tasks.crm_tasks import recommend_contacts_task
+from tasks.mail_tasks import draft_one_outreach_task, draft_outreach_task
 
 router = APIRouter(prefix="/api/opportunities", tags=["opportunities"])
 
 
 @router.get("")
-def list_opportunities() -> dict:
-    """All opportunities, each enriched with its documents and calls (for the UI)."""
+def list_opportunities(current_user: dict = Depends(get_current_user)) -> dict:
+    """This org's opportunities, each enriched with its documents and calls (for the UI)."""
     crm = get_crm_store()
-    opps = crm.list_all()
-    for o in opps:
-        o["documents"] = crm.list_documents(o["id"])
-        o["calls"] = crm.list_calls(o["id"])
-    return {"opportunities": opps}
+    # Batched enrichment (a few queries total) — not N+1, so a large SAM.gov pull stays fast.
+    return {"opportunities": crm.list_all_enriched(str(current_user["organization_id"]))}
 
 
 @router.post("/analyze/run")
-def run_analyst() -> dict:
-    """Phase 1 — kick off the Analyst on all unanalyzed opportunities (Celery)."""
-    task = run_analyst_batch.delay()
+def run_analyst(current_user: dict = Depends(get_current_user)) -> dict:
+    """Phase 1 — kick off the Analyst on this org's unanalyzed opportunities (Celery)."""
+    task = run_analyst_batch.delay(str(current_user["organization_id"]))
     return {"task_id": task.id}
 
 
+class AnalyzeSelectedRequest(BaseModel):
+    ids: list[str]
+
+
+@router.post("/analyze/selected")
+def run_analyst_selected(
+    req: AnalyzeSelectedRequest, current_user: dict = Depends(get_current_user)
+) -> dict:
+    """Analyze ONLY the opportunities the user hand-picked from the SAM.gov pull.
+
+    Each id is verified to belong to the caller's org before it's dispatched, so a
+    user can't queue analysis on another org's records.
+    """
+    crm = get_crm_store()
+    organization_id = str(current_user["organization_id"])
+    started = 0
+    for oid in req.ids:
+        opp = crm.get_opportunity(oid, organization_id)
+        if opp is not None:
+            analyze_opportunity_task.delay(opp)
+            started += 1
+    return {"started": started, "requested": len(req.ids)}
+
+
+class SetDecisionRequest(BaseModel):
+    decision: str  # "Bid" | "Watch" | "No-Bid"
+
+
+@router.post("/{opportunity_id}/decision")
+def set_decision(
+    opportunity_id: str,
+    req: SetDecisionRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Human override of the Analyst's verdict — flip an opportunity between
+    Bid / Watch / No-Bid. Bid enables the capture flow; No-Bid/Watch disable it."""
+    decision = req.decision.strip()
+    if decision not in ("Bid", "Watch", "No-Bid"):
+        raise HTTPException(status_code=400, detail="decision must be Bid, Watch, or No-Bid")
+    crm = get_crm_store()
+    ok = crm.set_decision(opportunity_id, str(current_user["organization_id"]), decision)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    return {"opportunity_id": opportunity_id, "bid_decision": decision, "overridden": True}
+
+
 @router.post("/{opportunity_id}/approve-capture")
-def approve_capture(opportunity_id: str) -> dict:
-    """Human approves an opportunity for capture (Gate before the capture agents run)."""
-    get_crm_store().mark_capture_approved(opportunity_id)
-    return {"opportunity_id": opportunity_id, "capture_approved": True}
+def approve_capture(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:
+    """Human approves ONE opportunity → immediately runs the capture chain for that one.
+
+    Marks it approved (the gate), then fires Capture Plan -> Shaping for just this
+    opportunity. The CRM contact search runs against the APPROVING employee's own
+    network (their email from the JWT). Other opportunities are untouched.
+    """
+    crm = get_crm_store()
+    opp = crm.get_opportunity(opportunity_id, str(current_user["organization_id"]))
+    if opp is None:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    crm.mark_capture_approved(opportunity_id)
+    opp["capture_approved"] = True
+    employee_email = current_user["email"].lower()
+    # In parallel: Capture agent (strategy + deliverables)  ||  CRM contact search. Both are
+    # owner-scoped to the approving employee (SharePoint past-performance + contact network).
+    task = group(
+        capture_task.s(opp, employee_email),
+        recommend_contacts_task.s(opp, employee_email),
+    ).apply_async()
+    return {
+        "opportunity_id": opportunity_id,
+        "capture_approved": True,
+        "capture_started": True,
+        "task_id": task.id,
+    }
+
+
+@router.post("/{opportunity_id}/outreach")
+def run_outreach(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:
+    """Run the Mail Agent over this opportunity's recommended contacts.
+
+    Generates one outreach draft per emailable contact (in parallel) and stores
+    them on the opportunity. The UI polls `outreach_drafted_at`, then renders each
+    draft as a mail artifact with a Send button. Nothing is sent here.
+    The acting employee is taken from the JWT (NOT the request body) and scopes the
+    agent's SharePoint search to documents that employee may read — so the RBAC
+    filter can't be bypassed by spoofing an email.
+    """
+    crm = get_crm_store()
+    opp = crm.get_opportunity(opportunity_id, str(current_user["organization_id"]))
+    if opp is None:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    emailable = [c for c in (opp.get("recommended_contacts") or []) if c.get("email")]
+    employee_email = current_user["email"].lower()
+    task = draft_outreach_task.delay(opp, employee_email=employee_email)
+    return {
+        "opportunity_id": opportunity_id,
+        "outreach_started": True,
+        "contacts": len(emailable),
+        "task_id": task.id,
+    }
+
+
+class OutreachOneRequest(BaseModel):
+    email: str
+
+
+@router.post("/{opportunity_id}/outreach/one")
+def run_outreach_one(
+    opportunity_id: str,
+    req: OutreachOneRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Regenerate the outreach draft for ONE contact on this opportunity."""
+    crm = get_crm_store()
+    opp = crm.get_opportunity(opportunity_id, str(current_user["organization_id"]))
+    if opp is None:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    target = req.email.strip().lower()
+    contact = next(
+        (c for c in (opp.get("recommended_contacts") or [])
+         if (c.get("email") or "").lower() == target),
+        None,
+    )
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found on this opportunity")
+
+    task = draft_one_outreach_task.delay(opp, contact, employee_email=current_user["email"].lower())
+    return {"opportunity_id": opportunity_id, "email": req.email, "task_id": task.id, "started": True}
 
 
 @router.post("/capture/run")
-def run_capture() -> dict:
-    """Kick off the capture pipeline for all approved, not-yet-captured opportunities."""
-    task = run_capture_batch.delay()
+def run_capture(current_user: dict = Depends(get_current_user)) -> dict:
+    """Kick off the capture pipeline for this org's approved, not-yet-captured opportunities."""
+    task = run_capture_batch.delay(str(current_user["organization_id"]))
     return {"task_id": task.id}

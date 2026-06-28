@@ -29,4 +29,11 @@ dependencies = [
     "pydantic-settings>=2.12.0",
     "python-dotenv>=1.2.1",
     "python-multipart>=0.0.6",
+    "falkordb>=1.6.1",
+    "liteparse>=2.1.1",
+    "python-jose[cryptography]>=3.5.0",
+    "bcrypt>=5.0.0",
+    "google-auth>=2.55.0",
+    "email-validator>=2.3.0",
+    "resend>=2.32.2",
 ]

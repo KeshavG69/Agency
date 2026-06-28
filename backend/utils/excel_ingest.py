@@ -40,6 +40,7 @@ _SCHEMA_FIELDS: dict[str, str] = {
     "poc_email": "point of contact email",
     "description": "short description / notes",
     "link": "source URL",
+    "document_url": "link/URL or path to the full solicitation PDF / PWS / SOW document",
 }
 
 

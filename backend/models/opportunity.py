@@ -28,5 +28,8 @@ class Opportunity(BaseModel):
     stage: str = Field("Discover", description="Pipeline stage")
     description: str | None = None
     link: str | None = Field(None, description="SAM.gov / source URL")
+    # Full solicitation / PWS document — link + parsed text (grounds every agent)
+    document_url: str | None = Field(None, description="URL or path to the solicitation PDF/document")
+    document_text: str | None = Field(None, description="Parsed text of the solicitation document (LiteParse)")
     source: str = Field("excel", description="Where the record came from")
     extra: dict = Field(default_factory=dict, description="Unmapped source columns")
