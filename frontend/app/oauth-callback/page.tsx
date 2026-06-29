@@ -7,6 +7,7 @@ import {
   syncOutlookContacts,
   syncSharePointStructure,
 } from "@/lib/data";
+import { useConnectionStore, type Provider } from "@/lib/stores/connectionStore";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -37,6 +38,10 @@ function CallbackInner() {
         try {
           const s = await getConnStatus(provider);
           if (s.connected) {
+            // Cache the connection so the app never has to poll status again.
+            useConnectionStore
+              .getState()
+              .setConnection(provider as Provider, true, s.connected_account_id);
             if (provider === "sharepoint") {
               setMsg("Connected — mapping your SharePoint documents…");
               await syncSharePointStructure();

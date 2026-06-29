@@ -16,6 +16,7 @@ function authHeader(): Record<string, string> {
 export type BidDecision = "Bid" | "No-Bid" | "Watch";
 
 export interface DocItem {
+  id: string;
   title: string;
   type: string;
   url: string;
@@ -66,6 +67,7 @@ export interface Opportunity {
   stage: string;
   bid_decision?: BidDecision;
   decision_overridden?: boolean; // true when a human set the verdict manually
+  assigned_to?: string[]; // member user-ids this opportunity is assigned to (empty = unassigned)
   priority_score?: number;
   analyst_rationale?: string;
   poc_name?: string;
@@ -243,6 +245,60 @@ export async function analyzeSelected(ids: string[]): Promise<{ started: number 
 // Human override of the Analyst verdict — flip Bid / Watch / No-Bid.
 export async function setDecision(id: string, decision: BidDecision): Promise<void> {
   await apiClient.post(`/api/opportunities/${id}/decision`, { decision });
+}
+
+// Assign an opportunity to members (by user id). Admin only. Empty list = unassign.
+export async function assignOpportunity(id: string, userIds: string[]): Promise<void> {
+  await apiClient.post(`/api/opportunities/${id}/assign`, { user_ids: userIds });
+}
+
+// Mint a FRESH presigned URL for a generated document (the stored one expires).
+export async function getDocUrl(documentId: string): Promise<string> {
+  const { data } = await apiClient.get(`/api/documents/${documentId}/url`);
+  return data.url;
+}
+
+// ---- Call plan (consolidated BD call sheet across the pipeline) ----
+export interface CallPlanItem {
+  call_id: string;
+  opportunity_id: string;
+  opportunity_title?: string;
+  agency?: string;
+  priority_score?: number;
+  bid_decision?: BidDecision;
+  response_deadline?: string;
+  poc_name?: string;
+  poc_email?: string;
+  name?: string;
+  talking_point?: string;
+  status: string; // "Planned" | "Done" | "Dismissed"
+  created_at?: string;
+}
+
+export async function fetchCallPlan(): Promise<CallPlanItem[]> {
+  const { data } = await apiClient.get("/api/calls/plan");
+  return data.calls ?? [];
+}
+
+export async function setCallStatus(callId: string, status: string): Promise<void> {
+  await apiClient.post(`/api/calls/${callId}/status`, { status });
+}
+
+// ---- Outreach collision ("someone's already talking to this contact") ----
+export interface CollisionItem {
+  employee_email: string;
+  action: string; // "drafted" | "sent"
+  opportunity_title?: string | null;
+  created_at?: string;
+}
+
+// For each contact email, which OTHER teammates have drafted/sent to them.
+export async function fetchCollisions(
+  emails: string[],
+): Promise<Record<string, CollisionItem[]>> {
+  if (emails.length === 0) return {};
+  const { data } = await apiClient.post("/api/mail/collisions", { emails });
+  return data.collisions ?? {};
 }
 
 // Approve ONE opportunity for capture — immediately runs the capture agents on it.

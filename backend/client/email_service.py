@@ -126,6 +126,47 @@ class EmailService:
             print(f"Failed to send email: {e}")
             raise
 
+    def send_assignment_email(
+        self,
+        to_email: str,
+        user_name: str,
+        opportunity_title: str,
+        opportunity_link: str = None,
+        assigned_by: str = None,
+    ):
+        """Notify a member that an opportunity has been assigned to them."""
+        name = user_name or to_email
+        by = f" by {assigned_by}" if assigned_by else ""
+        link_block = (
+            f'<p><a href="{opportunity_link}" style="color:#2f6f60;">View it on SAM.gov</a></p>'
+            if opportunity_link
+            else ""
+        )
+        html = f"""
+        <html>
+        <body>
+            <h2>A new opportunity was assigned to you</h2>
+            <p>Hi {name},</p>
+            <p>You've been assigned a government-contracting opportunity{by} on {self.brand}:</p>
+            <p style="font-size:16px;"><strong>{opportunity_title}</strong></p>
+            {link_block}
+            <p>
+                <a href="{self.frontend_url}"
+                   style="background-color:#2f6f60;color:#fff;padding:12px 24px;
+                          text-decoration:none;border-radius:6px;display:inline-block;">
+                    Open {self.brand}
+                </a>
+            </p>
+            <p style="color:#666;font-size:12px;">Log in to review it and plan your capture.</p>
+        </body>
+        </html>
+        """
+        try:
+            self._send(to_email=to_email, subject=f"Assigned to you: {opportunity_title}", html=html)
+        except Exception as e:
+            print(f"Failed to send assignment email: {e}")
+            raise
+
     def send_verification_email(self, to_email: str, token: str, user_name: str = None):
         """Send email verification magic link"""
         verification_url = f"{self.frontend_url}/auth/verify-email?token={token}"

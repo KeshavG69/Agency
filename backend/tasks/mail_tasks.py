@@ -39,6 +39,16 @@ def draft_outreach_task(self, opp: dict, employee_email: str | None = None) -> d
 
     out = [d.model_dump() for d in drafts if d is not None]
     crm.set_outreach_drafts(opp["id"], out)
+    # Log each draft for collision detection (best-effort).
+    if employee_email and opp.get("organization_id"):
+        for d in out:
+            try:
+                crm.log_outreach(
+                    str(opp["organization_id"]), d.get("to"), employee_email, "drafted",
+                    opp.get("id"), opp.get("title"),
+                )
+            except Exception:  # noqa: BLE001
+                pass
     logger.info("Drafted %d/%d outreach emails for %s", len(out), len(contacts), opp.get("id"))
     return {"id": opp["id"], "drafts": len(out)}
 
@@ -59,5 +69,13 @@ def draft_one_outreach_task(self, opp: dict, contact: dict, employee_email: str 
         raise self.retry(exc=exc)
 
     crm.upsert_outreach_draft(opp["id"], draft.model_dump())
+    if employee_email and opp.get("organization_id"):
+        try:
+            crm.log_outreach(
+                str(opp["organization_id"]), draft.to, employee_email, "drafted",
+                opp.get("id"), opp.get("title"),
+            )
+        except Exception:  # noqa: BLE001
+            pass
     logger.info("Re-drafted outreach for %s on %s", draft.to, opp.get("id"))
     return {"id": opp["id"], "to": draft.to}

@@ -1,30 +1,39 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchOpportunities,
-  uploadExcel,
   pullFromSam,
   analyzeSelected,
   setDecision,
+  assignOpportunity,
+  getDocUrl,
+  fetchCallPlan,
+  setCallStatus,
+  fetchCollisions,
+  type CallPlanItem,
+  type CollisionItem,
   approveCapture,
   runOutreach,
   runOutreachOne,
   sendMail,
-  getOutlookStatus,
   connectOutlook,
   disconnectOutlook,
-  getSharePointStatus,
+  syncOutlookContacts,
   connectSharePoint,
   disconnectSharePoint,
+  syncSharePointStructure,
   type Opportunity,
   type OutreachDraft,
   type BidDecision,
+  type DocItem,
 } from "@/lib/data";
 import ContactsGraph from "./ContactsGraph";
 import SharePointGraph from "./SharePointGraph";
 import CalendarStrip, { toLocalIso } from "./CalendarStrip";
+import FilePreview from "./FilePreview";
 import { useAuthStore } from "@/lib/stores/authStore";
+import { useConnectionStore } from "@/lib/stores/connectionStore";
 import { organizationsApi, type Organization } from "@/lib/api/organizations";
 import { invitationsApi } from "@/lib/api/invitations";
 import type { User, TeamMember, Invitation } from "@/lib/types";
@@ -111,22 +120,29 @@ function Console({ user }: { user: User }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("info");
-  const [analyzing, setAnalyzing] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [analyzingSel, setAnalyzingSel] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [members, setMembers] = useState<TeamMember[]>([]); // for the assign dropdown (admins)
   const [viewingDate, setViewingDate] = useState<string | null>(null); // calendar day, null = All
   const [capturing, setCapturing] = useState(false);
   const [outreachBusy, setOutreachBusy] = useState<string | null>(null);
   const [outreachOne, setOutreachOne] = useState<string | null>(null);
-  const [outlookConnected, setOutlookConnected] = useState(false);
-  const [outlookAccount, setOutlookAccount] = useState<string | null>(null);
+  // Connection state is cached (set on the OAuth redirect), not fetched on every load.
+  const outlook = useConnectionStore((s) => s.outlook);
+  const sharepoint = useConnectionStore((s) => s.sharepoint);
+  const setConnection = useConnectionStore((s) => s.setConnection);
+  const outlookConnected = outlook.connected;
+  const outlookAccount = outlook.accountId;
+  const spConnected = sharepoint.connected;
+  const spAccount = sharepoint.accountId;
   const [connecting, setConnecting] = useState(false);
-  const [spConnected, setSpConnected] = useState(false);
-  const [spAccount, setSpAccount] = useState<string | null>(null);
   const [spConnecting, setSpConnecting] = useState(false);
-  const [view, setView] = useState<"pipeline" | "contacts" | "documents" | "org">("pipeline");
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [resyncing, setResyncing] = useState(false);
+  const [spResyncing, setSpResyncing] = useState(false);
+  const [view, setView] = useState<
+    "pipeline" | "callplan" | "contacts" | "documents" | "org"
+  >("pipeline");
 
   const load = useCallback(async () => {
     try {
@@ -144,19 +160,31 @@ function Console({ user }: { user: User }) {
 
   useEffect(() => {
     load();
-    getOutlookStatus()
-      .then((s) => {
-        setOutlookConnected(s.connected);
-        setOutlookAccount(s.connected_account_id);
-      })
-      .catch(() => setOutlookConnected(false));
-    getSharePointStatus()
-      .then((s) => {
-        setSpConnected(s.connected);
-        setSpAccount(s.connected_account_id);
-      })
-      .catch(() => setSpConnected(false));
   }, [load]);
+
+  // Keep non-admins out of the admin-only views (e.g. if demoted mid-session).
+  useEffect(() => {
+    if (!isAdmin && (view === "documents" || view === "org")) {
+      setView("pipeline");
+    }
+  }, [isAdmin, view]);
+
+  // Admins need the member roster to assign opportunities.
+  useEffect(() => {
+    if (isAdmin) organizationsApi.getMembers().then(setMembers).catch(() => {});
+  }, [isAdmin]);
+
+  // Assign an opportunity to members (admin). Optimistic; reverts on failure.
+  const onAssign = async (id: string, userIds: string[]) => {
+    setError(null);
+    setOpps((prev) => prev.map((o) => (o.id === id ? { ...o, assigned_to: userIds } : o)));
+    try {
+      await assignOpportunity(id, userIds);
+    } catch {
+      setError("Couldn't update the assignment — reverting.");
+      load();
+    }
+  };
 
   const onConnectOutlook = async () => {
     setConnecting(true);
@@ -188,8 +216,7 @@ function Console({ user }: { user: User }) {
     setError(null);
     try {
       await disconnectSharePoint(spAccount);
-      setSpConnected(false);
-      setSpAccount(null);
+      setConnection("sharepoint", false, null);
     } catch {
       setError("Couldn't disconnect SharePoint.");
     } finally {
@@ -203,8 +230,7 @@ function Console({ user }: { user: User }) {
     setError(null);
     try {
       await disconnectOutlook(outlookAccount);
-      setOutlookConnected(false);
-      setOutlookAccount(null);
+      setConnection("outlook", false, null);
     } catch {
       setError("Couldn't disconnect Outlook.");
     } finally {
@@ -212,24 +238,31 @@ function Console({ user }: { user: User }) {
     }
   };
 
-  const onUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setAnalyzing(true);
+  // Resync this employee's Outlook contacts (background task).
+  const onResyncContacts = async () => {
+    setResyncing(true);
     setError(null);
     try {
-      await uploadExcel(file); // ingestion auto-fires the Analyst
-      await load();
-      for (let i = 0; i < 12; i++) {
-        await sleep(3000);
-        const fresh = await load();
-        if (fresh.length > 0 && fresh.every((o) => o.bid_decision)) break;
-      }
+      await syncOutlookContacts();
+      setError("Contacts resync started — it runs in the background.");
     } catch {
-      setError("Upload failed — check the backend, worker, and API keys.");
+      setError("Couldn't start the contacts resync.");
     } finally {
-      setAnalyzing(false);
-      if (fileRef.current) fileRef.current.value = "";
+      setResyncing(false);
+    }
+  };
+
+  // Resync the org's SharePoint structure (admin; background task).
+  const onResyncSharePoint = async () => {
+    setSpResyncing(true);
+    setError(null);
+    try {
+      await syncSharePointStructure();
+      setError("SharePoint resync started — it runs in the background.");
+    } catch {
+      setError("Couldn't start the SharePoint resync.");
+    } finally {
+      setSpResyncing(false);
     }
   };
 
@@ -372,18 +405,14 @@ function Console({ user }: { user: User }) {
     return c;
   }, [opps]);
 
-  // Days (posted_date) that actually have opportunities — drives the calendar dots.
-  const availableDates = useMemo(
-    () => [...new Set(opps.map((o) => o.posted_date).filter(Boolean) as string[])],
-    [opps],
-  );
-
-  const visible = useMemo(() => {
+  // Everything matching the active status filter + search, BEFORE the calendar-day filter.
+  // The calendar dots derive from this so a dot only shows on days that actually have
+  // opportunities in the current view — clicking a dotted day always shows results.
+  const dayPool = useMemo(() => {
     const f = FILTERS.find((x) => x.key === filter) ?? FILTERS[0];
     const q = query.trim().toLowerCase();
     return opps
       .filter(f.match)
-      .filter((o) => !viewingDate || o.posted_date === viewingDate)
       .filter(
         (o) =>
           !q ||
@@ -391,7 +420,17 @@ function Console({ user }: { user: User }) {
           (o.agency ?? "").toLowerCase().includes(q) ||
           (o.solicitation_number ?? "").toLowerCase().includes(q),
       );
-  }, [opps, filter, query, viewingDate]);
+  }, [opps, filter, query]);
+
+  const availableDates = useMemo(
+    () => [...new Set(dayPool.map((o) => o.posted_date).filter(Boolean) as string[])],
+    [dayPool],
+  );
+
+  const visible = useMemo(
+    () => dayPool.filter((o) => !viewingDate || o.posted_date === viewingDate),
+    [dayPool, viewingDate],
+  );
 
   const selected = opps.find((o) => o.id === selectedId) ?? null;
   const toPursue = counts["Bid"] ?? 0;
@@ -417,27 +456,37 @@ function Console({ user }: { user: User }) {
             <span className="nm">Pipeline</span>
           </button>
           <button
+            className={`nav-item ${view === "callplan" ? "on" : ""}`}
+            onClick={() => setView("callplan")}
+          >
+            <span className="ico" />
+            <span className="nm">Call Plan</span>
+          </button>
+          {/* Contacts is per-employee (everyone syncs their own). Library + Organisation are admin-only. */}
+          <button
             className={`nav-item ${view === "contacts" ? "on" : ""}`}
             onClick={() => setView("contacts")}
           >
             <span className="ico" />
             <span className="nm">Contacts</span>
           </button>
-          <button
-            className={`nav-item ${view === "documents" ? "on" : ""}`}
-            onClick={() => setView("documents")}
-          >
-            <span className="ico" />
-            <span className="nm">Library</span>
-          </button>
           {isAdmin && (
-            <button
-              className={`nav-item ${view === "org" ? "on" : ""}`}
-              onClick={() => setView("org")}
-            >
-              <span className="ico" />
-              <span className="nm">Organisation</span>
-            </button>
+            <>
+              <button
+                className={`nav-item ${view === "documents" ? "on" : ""}`}
+                onClick={() => setView("documents")}
+              >
+                <span className="ico" />
+                <span className="nm">Library</span>
+              </button>
+              <button
+                className={`nav-item ${view === "org" ? "on" : ""}`}
+                onClick={() => setView("org")}
+              >
+                <span className="ico" />
+                <span className="nm">Organisation</span>
+              </button>
+            </>
           )}
 
           {view === "pipeline" && (
@@ -499,6 +548,9 @@ function Console({ user }: { user: User }) {
             <div className="outlook-row">
               <span className="pri-dot" style={{ background: "var(--bid)" }} />
               <span className="nm">Outlook connected</span>
+              <button className="disconnect-link" onClick={onResyncContacts} disabled={resyncing}>
+                {resyncing ? "…" : "Resync"}
+              </button>
               <button className="disconnect-link" onClick={onDisconnectOutlook} disabled={connecting}>
                 {connecting ? "…" : "Disconnect"}
               </button>
@@ -520,6 +572,9 @@ function Console({ user }: { user: User }) {
               <div className="outlook-row">
                 <span className="pri-dot" style={{ background: "var(--bid)" }} />
                 <span className="nm">SharePoint connected</span>
+                <button className="disconnect-link" onClick={onResyncSharePoint} disabled={spResyncing}>
+                  {spResyncing ? "…" : "Resync"}
+                </button>
                 <button className="disconnect-link" onClick={onDisconnectSharePoint} disabled={spConnecting}>
                   {spConnecting ? "…" : "Disconnect"}
                 </button>
@@ -535,17 +590,10 @@ function Console({ user }: { user: User }) {
                 <span className="nm">{spConnecting ? "Opening Microsoft…" : "Connect SharePoint"}</span>
               </button>
             ))}
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={onUpload}
-            style={{ display: "none" }}
-          />
           <button
             className="upload-btn sam-btn"
             onClick={onPullSam}
-            disabled={pulling || analyzing}
+            disabled={pulling}
             title="Fetch today's open SAM.gov notices matching your company's NAICS"
           >
             {pulling ? (
@@ -556,23 +604,14 @@ function Console({ user }: { user: User }) {
               <>⟳ Pull from SAM.gov</>
             )}
           </button>
-          <button
-            className="upload-btn"
-            onClick={() => fileRef.current?.click()}
-            disabled={analyzing || pulling}
-          >
-            {analyzing ? (
-              <>
-                <span className="spin" /> Analyzing…
-              </>
-            ) : (
-              <>↑ Upload opportunities</>
-            )}
-          </button>
         </div>
       </aside>
 
-      {view === "contacts" ? (
+      {view === "callplan" ? (
+        <section className="graph-pane">
+          <CallPlanView />
+        </section>
+      ) : view === "contacts" ? (
         <section className="graph-pane">
           <ContactsGraph />
         </section>
@@ -706,6 +745,9 @@ function Console({ user }: { user: User }) {
             tab={tab}
             setTab={setTab}
             capturing={capturing}
+            isAdmin={isAdmin}
+            members={members}
+            onAssign={(ids) => onAssign(selected.id, ids)}
             onApproveCapture={() => onApproveCapture(selected.id)}
             onSetDecision={(d) => onSetDecision(selected.id, d)}
             outreachBusy={outreachBusy === selected.id}
@@ -723,11 +765,119 @@ function Console({ user }: { user: User }) {
   );
 }
 
+function CallPlanView() {
+  const [calls, setCalls] = useState<CallPlanItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setCalls(await fetchCallPlan());
+    } catch {
+      setErr("Couldn't load the call plan — is the backend running?");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const update = async (callId: string, status: string) => {
+    setErr(null);
+    setCalls((prev) => prev.map((c) => (c.call_id === callId ? { ...c, status } : c))); // optimistic
+    try {
+      await setCallStatus(callId, status);
+    } catch {
+      setErr("Couldn't update the call — reverting.");
+      load();
+    }
+  };
+
+  const active = calls.filter((c) => c.status === "Planned");
+  const resolved = calls.filter((c) => c.status !== "Planned");
+  const ordered = [...active, ...resolved];
+
+  return (
+    <div className="callplan">
+      <div className="cp-head">
+        <h2>
+          Call Plan <span className="c">{active.length}</span>
+        </h2>
+        <div className="cp-sub">
+          Calls the Analyst recommends across your pipeline — your consolidated call sheet.
+        </div>
+      </div>
+      {loading ? (
+        <div className="cp-empty">Loading…</div>
+      ) : calls.length === 0 ? (
+        <div className="cp-empty">
+          No calls planned yet. The Analyst adds a call here whenever it marks an
+          opportunity <b>Bid</b> with a recommended outreach.
+        </div>
+      ) : (
+        <div className="cp-list">
+          {ordered.map((c) => (
+            <div className={`cp-card ${c.status !== "Planned" ? "muted" : ""}`} key={c.call_id}>
+              <div className="cp-top">
+                <div style={{ minWidth: 0 }}>
+                  <div className="cp-title">{c.opportunity_title ?? "Opportunity"}</div>
+                  {c.agency && <div className="cp-agency">{c.agency}</div>}
+                </div>
+                <div className="cp-metric">
+                  {c.priority_score != null && (
+                    <span className="pscore">
+                      P<b>{c.priority_score}</b>
+                    </span>
+                  )}
+                  {c.response_deadline && (
+                    <span className="cp-due">due {fmtDate(c.response_deadline)}</span>
+                  )}
+                </div>
+              </div>
+              {c.talking_point && <div className="cp-talk">“{c.talking_point}”</div>}
+              <div className="cp-foot">
+                <span className="cp-contact">
+                  {c.poc_name || c.poc_email || "Contracting office"}
+                  {c.poc_email && c.poc_name ? ` · ${c.poc_email}` : ""}
+                </span>
+                <div className="cp-actions">
+                  {c.status === "Planned" ? (
+                    <>
+                      <button className="mini-btn" onClick={() => update(c.call_id, "Done")}>
+                        Mark done
+                      </button>
+                      <button className="sel-link" onClick={() => update(c.call_id, "Dismissed")}>
+                        Dismiss
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className={`cp-status ${c.status.toLowerCase()}`}>{c.status}</span>
+                      <button className="sel-link" onClick={() => update(c.call_id, "Planned")}>
+                        Reopen
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {err && <div className="toast">{err}</div>}
+    </div>
+  );
+}
+
 function Detail({
   opp,
   tab,
   setTab,
   capturing,
+  isAdmin,
+  members,
+  onAssign,
   onApproveCapture,
   onSetDecision,
   outreachBusy,
@@ -739,6 +889,9 @@ function Detail({
   tab: TabKey;
   setTab: (t: TabKey) => void;
   capturing: boolean;
+  isAdmin: boolean;
+  members: TeamMember[];
+  onAssign: (userIds: string[]) => void;
   onApproveCapture: () => void;
   onSetDecision: (d: BidDecision) => void;
   outreachBusy: boolean;
@@ -811,6 +964,36 @@ function Detail({
           ))}
           {opp.decision_overridden && <span className="dt-manual">set manually</span>}
         </div>
+
+        {/* Assign to members — admin only */}
+        {isAdmin && (
+          <div className="decision-toggle assign-row">
+            <span className="dt-label">Assign</span>
+            {members.length === 0 ? (
+              <span className="dt-manual">no members yet</span>
+            ) : (
+              members.map((m) => {
+                const on = (opp.assigned_to ?? []).includes(m.id);
+                const cur = opp.assigned_to ?? [];
+                return (
+                  <button
+                    key={m.id}
+                    className={`dt-btn ${on ? "on assigned" : ""}`}
+                    onClick={() =>
+                      onAssign(on ? cur.filter((x) => x !== m.id) : [...cur, m.id])
+                    }
+                    title={m.email}
+                  >
+                    {(m.firstName || m.email).trim()}
+                  </button>
+                );
+              })
+            )}
+            {(opp.assigned_to ?? []).length === 0 && (
+              <span className="dt-manual">unassigned · open to all</span>
+            )}
+          </div>
+        )}
 
         <div className="tabs">
           {tabs.map((t) => (
@@ -960,6 +1143,25 @@ function ContactsTab({
   const drafts = opp.outreach_drafts ?? [];
   const drafted = !!opp.outreach_drafted_at;
   const emailable = relevant.filter((c) => c.email).length;
+
+  // Collision check: which contacts a teammate is already engaging.
+  const [collisions, setCollisions] = useState<Record<string, CollisionItem[]>>({});
+  useEffect(() => {
+    const emails = (opp.recommended_contacts ?? [])
+      .map((c) => c.email)
+      .filter(Boolean) as string[];
+    if (!emails.length) {
+      setCollisions({});
+      return;
+    }
+    let alive = true;
+    fetchCollisions(emails)
+      .then((d) => alive && setCollisions(d))
+      .catch(() => alive && setCollisions({}));
+    return () => {
+      alive = false;
+    };
+  }, [opp.id]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
       <div className="sec-title first sec-row">
@@ -1001,6 +1203,20 @@ function ContactsTab({
                     </span>
                   )}
                 </div>
+                {c.email && (collisions[c.email.toLowerCase()]?.length ?? 0) > 0 && (
+                  <div className="collision-warn">
+                    ⚠{" "}
+                    {collisions[c.email.toLowerCase()]
+                      .map(
+                        (x) =>
+                          `${x.employee_email.split("@")[0]} ${x.action} this contact` +
+                          (x.opportunity_title ? ` (${x.opportunity_title})` : "") +
+                          (x.created_at ? ` on ${fmtDate(x.created_at)}` : ""),
+                      )
+                      .join("; ")}
+                    {" — coordinate before reaching out."}
+                  </div>
+                )}
                 {c.reason && <div className="rec-body">{c.reason}</div>}
                 {c.suggested_outreach && (
                   <div className="rec-body" style={{ color: "var(--accent)" }}>
@@ -1180,6 +1396,7 @@ function MailArtifact({
 
 function DocumentsTab({ opp }: { opp: Opportunity }) {
   const docs = opp.documents ?? [];
+  const [preview, setPreview] = useState<DocItem | null>(null);
   if (docs.length === 0) {
     return (
       <div className="empty-tab">
@@ -1194,7 +1411,12 @@ function DocumentsTab({ opp }: { opp: Opportunity }) {
       <div className="sec-title first">Generated documents</div>
       <div className="card-list">
         {docs.map((d, i) => (
-          <div className="rec" key={i}>
+          <button
+            className="rec rec-doc"
+            key={i}
+            onClick={() => setPreview(d)}
+            title="Preview"
+          >
             <div className="rec-top">
               <div>
                 <span className="doc-type">{d.type.replace(/_/g, " ")}</span>
@@ -1202,13 +1424,34 @@ function DocumentsTab({ opp }: { opp: Opportunity }) {
                   {d.title}
                 </div>
               </div>
-              <a href={d.url} target="_blank" rel="noreferrer">
-                Open ↗
-              </a>
+              <div className="doc-actions">
+                <span className="doc-preview-link">Preview</span>
+                <a
+                  href="#"
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    try {
+                      window.open(await getDocUrl(d.id), "_blank", "noopener");
+                    } catch {
+                      /* ignore — preview still works */
+                    }
+                  }}
+                >
+                  Open ↗
+                </a>
+              </div>
             </div>
-          </div>
+          </button>
         ))}
       </div>
+      {preview && (
+        <FilePreview
+          documentId={preview.id}
+          title={preview.title}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </>
   );
 }

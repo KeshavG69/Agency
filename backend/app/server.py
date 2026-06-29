@@ -8,8 +8,10 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from routers import (
     auth,
+    calls,
     composio,
     contacts,
+    documents,
     ingestion,
     invitations,
     mail,
@@ -23,7 +25,16 @@ from routers import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup / shutdown hooks go here (client pre-warming, etc.)
+    # Ensure DB indexes exist (idempotent) so reads stay fast.
+    try:
+        from auth.database import get_mongodb_client
+        from utils.db_indexes import ensure_indexes
+
+        ensure_indexes(get_mongodb_client().get_database())
+    except Exception as exc:  # noqa: BLE001 — never block startup on index creation
+        import logging
+
+        logging.getLogger(__name__).warning("ensure_indexes on startup failed: %s", exc)
     yield
 
 
@@ -52,6 +63,8 @@ def health() -> dict:
 
 app.include_router(ingestion.router)
 app.include_router(opportunities.router)
+app.include_router(documents.router)
+app.include_router(calls.router)
 app.include_router(composio.router)
 app.include_router(contacts.router)
 app.include_router(sharepoint.router)

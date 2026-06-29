@@ -2079,6 +2079,14 @@
         "documentation": {}
     },
     {
+        "label": "settings",
+        "importPath": "app.settings",
+        "description": "app.settings",
+        "isExtraImport": true,
+        "detail": "app.settings",
+        "documentation": {}
+    },
+    {
         "label": "get_chat_llm_agno",
         "importPath": "client.llm_client",
         "description": "client.llm_client",
@@ -2480,6 +2488,22 @@
         "documentation": {}
     },
     {
+        "label": "connection_status",
+        "importPath": "utils.composio_utils",
+        "description": "utils.composio_utils",
+        "isExtraImport": true,
+        "detail": "utils.composio_utils",
+        "documentation": {}
+    },
+    {
+        "label": "sharepoint_entity",
+        "importPath": "utils.composio_utils",
+        "description": "utils.composio_utils",
+        "isExtraImport": true,
+        "detail": "utils.composio_utils",
+        "documentation": {}
+    },
+    {
         "label": "sharepoint_entity",
         "importPath": "utils.composio_utils",
         "description": "utils.composio_utils",
@@ -2701,6 +2725,22 @@
         "description": "bson",
         "isExtraImport": true,
         "detail": "bson",
+        "documentation": {}
+    },
+    {
+        "label": "get_mongodb_client",
+        "importPath": "auth.database",
+        "description": "auth.database",
+        "isExtraImport": true,
+        "detail": "auth.database",
+        "documentation": {}
+    },
+    {
+        "label": "get_mongodb_client",
+        "importPath": "auth.database",
+        "description": "auth.database",
+        "isExtraImport": true,
+        "detail": "auth.database",
         "documentation": {}
     },
     {
@@ -3089,6 +3129,54 @@
         "documentation": {}
     },
     {
+        "label": "HTTPException",
+        "importPath": "fastapi",
+        "description": "fastapi",
+        "isExtraImport": true,
+        "detail": "fastapi",
+        "documentation": {}
+    },
+    {
+        "label": "APIRouter",
+        "importPath": "fastapi",
+        "description": "fastapi",
+        "isExtraImport": true,
+        "detail": "fastapi",
+        "documentation": {}
+    },
+    {
+        "label": "Depends",
+        "importPath": "fastapi",
+        "description": "fastapi",
+        "isExtraImport": true,
+        "detail": "fastapi",
+        "documentation": {}
+    },
+    {
+        "label": "HTTPException",
+        "importPath": "fastapi",
+        "description": "fastapi",
+        "isExtraImport": true,
+        "detail": "fastapi",
+        "documentation": {}
+    },
+    {
+        "label": "APIRouter",
+        "importPath": "fastapi",
+        "description": "fastapi",
+        "isExtraImport": true,
+        "detail": "fastapi",
+        "documentation": {}
+    },
+    {
+        "label": "Depends",
+        "importPath": "fastapi",
+        "description": "fastapi",
+        "isExtraImport": true,
+        "detail": "fastapi",
+        "documentation": {}
+    },
+    {
         "label": "File",
         "importPath": "fastapi",
         "description": "fastapi",
@@ -3337,6 +3425,14 @@
         "documentation": {}
     },
     {
+        "label": "calls",
+        "importPath": "routers",
+        "description": "routers",
+        "isExtraImport": true,
+        "detail": "routers",
+        "documentation": {}
+    },
+    {
         "label": "composio",
         "importPath": "routers",
         "description": "routers",
@@ -3346,6 +3442,14 @@
     },
     {
         "label": "contacts",
+        "importPath": "routers",
+        "description": "routers",
+        "isExtraImport": true,
+        "detail": "routers",
+        "documentation": {}
+    },
+    {
+        "label": "documents",
         "importPath": "routers",
         "description": "routers",
         "isExtraImport": true,
@@ -3574,6 +3678,24 @@
         "documentation": {}
     },
     {
+        "label": "tasks.notify_tasks",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "tasks.notify_tasks",
+        "description": "tasks.notify_tasks",
+        "detail": "tasks.notify_tasks",
+        "documentation": {}
+    },
+    {
+        "label": "tasks.resync_tasks",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "tasks.resync_tasks",
+        "description": "tasks.resync_tasks",
+        "detail": "tasks.resync_tasks",
+        "documentation": {}
+    },
+    {
         "label": "tasks.sam_radar_tasks",
         "kind": 6,
         "isExtraImport": true,
@@ -3635,6 +3757,22 @@
     },
     {
         "label": "MongoClient",
+        "importPath": "pymongo",
+        "description": "pymongo",
+        "isExtraImport": true,
+        "detail": "pymongo",
+        "documentation": {}
+    },
+    {
+        "label": "ASCENDING",
+        "importPath": "pymongo",
+        "description": "pymongo",
+        "isExtraImport": true,
+        "detail": "pymongo",
+        "documentation": {}
+    },
+    {
+        "label": "DESCENDING",
         "importPath": "pymongo",
         "description": "pymongo",
         "isExtraImport": true,
@@ -3874,6 +4012,14 @@
         "documentation": {}
     },
     {
+        "label": "BaseModel",
+        "importPath": "pydantic",
+        "description": "pydantic",
+        "isExtraImport": true,
+        "detail": "pydantic",
+        "documentation": {}
+    },
+    {
         "label": "EmailStr",
         "importPath": "pydantic",
         "description": "pydantic",
@@ -3883,6 +4029,14 @@
     },
     {
         "label": "Field",
+        "importPath": "pydantic",
+        "description": "pydantic",
+        "isExtraImport": true,
+        "detail": "pydantic",
+        "documentation": {}
+    },
+    {
+        "label": "BaseModel",
         "importPath": "pydantic",
         "description": "pydantic",
         "isExtraImport": true,
@@ -4327,6 +4481,22 @@
         "documentation": {}
     },
     {
+        "label": "get_current_user",
+        "importPath": "auth.dependencies",
+        "description": "auth.dependencies",
+        "isExtraImport": true,
+        "detail": "auth.dependencies",
+        "documentation": {}
+    },
+    {
+        "label": "get_current_user",
+        "importPath": "auth.dependencies",
+        "description": "auth.dependencies",
+        "isExtraImport": true,
+        "detail": "auth.dependencies",
+        "documentation": {}
+    },
+    {
         "label": "require_admin",
         "importPath": "auth.dependencies",
         "description": "auth.dependencies",
@@ -4463,6 +4633,86 @@
         "documentation": {}
     },
     {
+        "label": "get_crm_store",
+        "importPath": "client.crm_store",
+        "description": "client.crm_store",
+        "isExtraImport": true,
+        "detail": "client.crm_store",
+        "documentation": {}
+    },
+    {
+        "label": "get_crm_store",
+        "importPath": "client.crm_store",
+        "description": "client.crm_store",
+        "isExtraImport": true,
+        "detail": "client.crm_store",
+        "documentation": {}
+    },
+    {
+        "label": "get_crm_store",
+        "importPath": "client.crm_store",
+        "description": "client.crm_store",
+        "isExtraImport": true,
+        "detail": "client.crm_store",
+        "documentation": {}
+    },
+    {
+        "label": "get_crm_store",
+        "importPath": "client.crm_store",
+        "description": "client.crm_store",
+        "isExtraImport": true,
+        "detail": "client.crm_store",
+        "documentation": {}
+    },
+    {
+        "label": "get_crm_store",
+        "importPath": "client.crm_store",
+        "description": "client.crm_store",
+        "isExtraImport": true,
+        "detail": "client.crm_store",
+        "documentation": {}
+    },
+    {
+        "label": "get_crm_store",
+        "importPath": "client.crm_store",
+        "description": "client.crm_store",
+        "isExtraImport": true,
+        "detail": "client.crm_store",
+        "documentation": {}
+    },
+    {
+        "label": "get_crm_store",
+        "importPath": "client.crm_store",
+        "description": "client.crm_store",
+        "isExtraImport": true,
+        "detail": "client.crm_store",
+        "documentation": {}
+    },
+    {
+        "label": "get_crm_store",
+        "importPath": "client.crm_store",
+        "description": "client.crm_store",
+        "isExtraImport": true,
+        "detail": "client.crm_store",
+        "documentation": {}
+    },
+    {
+        "label": "get_crm_store",
+        "importPath": "client.crm_store",
+        "description": "client.crm_store",
+        "isExtraImport": true,
+        "detail": "client.crm_store",
+        "documentation": {}
+    },
+    {
+        "label": "get_crm_store",
+        "importPath": "client.crm_store",
+        "description": "client.crm_store",
+        "isExtraImport": true,
+        "detail": "client.crm_store",
+        "documentation": {}
+    },
+    {
         "label": "recommend_contacts",
         "importPath": "agent.crm_agent",
         "description": "agent.crm_agent",
@@ -4479,59 +4729,27 @@
         "documentation": {}
     },
     {
-        "label": "get_crm_store",
-        "importPath": "client.crm_store",
-        "description": "client.crm_store",
+        "label": "urlparse",
+        "importPath": "urllib.parse",
+        "description": "urllib.parse",
         "isExtraImport": true,
-        "detail": "client.crm_store",
+        "detail": "urllib.parse",
         "documentation": {}
     },
     {
-        "label": "get_crm_store",
-        "importPath": "client.crm_store",
-        "description": "client.crm_store",
+        "label": "get_idrive_storage",
+        "importPath": "client.idrive_storage",
+        "description": "client.idrive_storage",
         "isExtraImport": true,
-        "detail": "client.crm_store",
+        "detail": "client.idrive_storage",
         "documentation": {}
     },
     {
-        "label": "get_crm_store",
-        "importPath": "client.crm_store",
-        "description": "client.crm_store",
+        "label": "get_idrive_storage",
+        "importPath": "client.idrive_storage",
+        "description": "client.idrive_storage",
         "isExtraImport": true,
-        "detail": "client.crm_store",
-        "documentation": {}
-    },
-    {
-        "label": "get_crm_store",
-        "importPath": "client.crm_store",
-        "description": "client.crm_store",
-        "isExtraImport": true,
-        "detail": "client.crm_store",
-        "documentation": {}
-    },
-    {
-        "label": "get_crm_store",
-        "importPath": "client.crm_store",
-        "description": "client.crm_store",
-        "isExtraImport": true,
-        "detail": "client.crm_store",
-        "documentation": {}
-    },
-    {
-        "label": "get_crm_store",
-        "importPath": "client.crm_store",
-        "description": "client.crm_store",
-        "isExtraImport": true,
-        "detail": "client.crm_store",
-        "documentation": {}
-    },
-    {
-        "label": "get_crm_store",
-        "importPath": "client.crm_store",
-        "description": "client.crm_store",
-        "isExtraImport": true,
-        "detail": "client.crm_store",
+        "detail": "client.idrive_storage",
         "documentation": {}
     },
     {
@@ -4754,6 +4972,22 @@
         "documentation": {}
     },
     {
+        "label": "celery_app",
+        "importPath": "app.worker",
+        "description": "app.worker",
+        "isExtraImport": true,
+        "detail": "app.worker",
+        "documentation": {}
+    },
+    {
+        "label": "celery_app",
+        "importPath": "app.worker",
+        "description": "app.worker",
+        "isExtraImport": true,
+        "detail": "app.worker",
+        "documentation": {}
+    },
+    {
         "label": "generate_capture",
         "importPath": "agent.capture_agent",
         "description": "agent.capture_agent",
@@ -4767,6 +5001,38 @@
         "description": "utils.explorium",
         "isExtraImport": true,
         "detail": "utils.explorium",
+        "documentation": {}
+    },
+    {
+        "label": "EmailService",
+        "importPath": "client.email_service",
+        "description": "client.email_service",
+        "isExtraImport": true,
+        "detail": "client.email_service",
+        "documentation": {}
+    },
+    {
+        "label": "EmailService",
+        "importPath": "client.email_service",
+        "description": "client.email_service",
+        "isExtraImport": true,
+        "detail": "client.email_service",
+        "documentation": {}
+    },
+    {
+        "label": "EmailService",
+        "importPath": "client.email_service",
+        "description": "client.email_service",
+        "isExtraImport": true,
+        "detail": "client.email_service",
+        "documentation": {}
+    },
+    {
+        "label": "EmailService",
+        "importPath": "client.email_service",
+        "description": "client.email_service",
+        "isExtraImport": true,
+        "detail": "client.email_service",
         "documentation": {}
     },
     {
@@ -4891,30 +5157,6 @@
         "documentation": {}
     },
     {
-        "label": "EmailService",
-        "importPath": "client.email_service",
-        "description": "client.email_service",
-        "isExtraImport": true,
-        "detail": "client.email_service",
-        "documentation": {}
-    },
-    {
-        "label": "EmailService",
-        "importPath": "client.email_service",
-        "description": "client.email_service",
-        "isExtraImport": true,
-        "detail": "client.email_service",
-        "documentation": {}
-    },
-    {
-        "label": "EmailService",
-        "importPath": "client.email_service",
-        "description": "client.email_service",
-        "isExtraImport": true,
-        "detail": "client.email_service",
-        "documentation": {}
-    },
-    {
         "label": "tool",
         "importPath": "agno.tools",
         "description": "agno.tools",
@@ -4945,14 +5187,6 @@
         "importPath": "contextvars",
         "description": "contextvars",
         "detail": "contextvars",
-        "documentation": {}
-    },
-    {
-        "label": "get_idrive_storage",
-        "importPath": "client.idrive_storage",
-        "description": "client.idrive_storage",
-        "isExtraImport": true,
-        "detail": "client.idrive_storage",
         "documentation": {}
     },
     {
@@ -6246,7 +6480,7 @@
         "kind": 2,
         "importPath": "backend.app.server",
         "description": "backend.app.server",
-        "peekOfCode": "def health() -> dict:\n    return {\"status\": \"ok\"}\napp.include_router(ingestion.router)\napp.include_router(opportunities.router)\napp.include_router(composio.router)\napp.include_router(contacts.router)\napp.include_router(sharepoint.router)\napp.include_router(mail.router)\n# --- authentication / org-tenancy (ported from PriceIQ) ---\napp.include_router(auth.router, prefix=\"/api\", tags=[\"authentication\"])",
+        "peekOfCode": "def health() -> dict:\n    return {\"status\": \"ok\"}\napp.include_router(ingestion.router)\napp.include_router(opportunities.router)\napp.include_router(documents.router)\napp.include_router(calls.router)\napp.include_router(composio.router)\napp.include_router(contacts.router)\napp.include_router(sharepoint.router)\napp.include_router(mail.router)",
         "detail": "backend.app.server",
         "documentation": {}
     },
@@ -6291,7 +6525,7 @@
         "kind": 5,
         "importPath": "backend.app.worker",
         "description": "backend.app.worker",
-        "peekOfCode": "celery_app.conf.beat_schedule = {\n    \"sam-radar-daily-scan\": {\n        \"task\": \"sam_radar.daily_scan\",\n        \"schedule\": crontab(hour=11, minute=0),\n    },\n}",
+        "peekOfCode": "celery_app.conf.beat_schedule = {\n    \"sam-radar-daily-scan\": {\n        \"task\": \"sam_radar.daily_scan\",\n        \"schedule\": crontab(hour=11, minute=0),\n    },\n    # Refresh contacts + SharePoint structure once a day.\n    \"daily-resync\": {\n        \"task\": \"resync.daily\",\n        \"schedule\": crontab(hour=8, minute=0),\n    },",
         "detail": "backend.app.worker",
         "documentation": {}
     },
@@ -7403,6 +7637,51 @@
         "documentation": {}
     },
     {
+        "label": "CallStatusRequest",
+        "kind": 6,
+        "importPath": "backend.routers.calls",
+        "description": "backend.routers.calls",
+        "peekOfCode": "class CallStatusRequest(BaseModel):\n    status: str  # \"Planned\" | \"Done\" | \"Dismissed\"\n@router.post(\"/{call_id}/status\")\ndef set_call_status(\n    call_id: str, req: CallStatusRequest, current_user: dict = Depends(get_current_user)\n) -> dict:\n    \"\"\"Mark a call Done / Dismissed / Planned. Org-scoped to the call's opportunity.\"\"\"\n    status = req.status.strip()\n    if status not in _CALL_STATUSES:\n        raise HTTPException(status_code=400, detail=f\"status must be one of {_CALL_STATUSES}\")",
+        "detail": "backend.routers.calls",
+        "documentation": {}
+    },
+    {
+        "label": "call_plan",
+        "kind": 2,
+        "importPath": "backend.routers.calls",
+        "description": "backend.routers.calls",
+        "peekOfCode": "def call_plan(current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"All planned calls across this org's opportunities (priority-sorted).\"\"\"\n    crm = get_crm_store()\n    return {\"calls\": crm.call_plan(str(current_user[\"organization_id\"]))}\nclass CallStatusRequest(BaseModel):\n    status: str  # \"Planned\" | \"Done\" | \"Dismissed\"\n@router.post(\"/{call_id}/status\")\ndef set_call_status(\n    call_id: str, req: CallStatusRequest, current_user: dict = Depends(get_current_user)\n) -> dict:",
+        "detail": "backend.routers.calls",
+        "documentation": {}
+    },
+    {
+        "label": "set_call_status",
+        "kind": 2,
+        "importPath": "backend.routers.calls",
+        "description": "backend.routers.calls",
+        "peekOfCode": "def set_call_status(\n    call_id: str, req: CallStatusRequest, current_user: dict = Depends(get_current_user)\n) -> dict:\n    \"\"\"Mark a call Done / Dismissed / Planned. Org-scoped to the call's opportunity.\"\"\"\n    status = req.status.strip()\n    if status not in _CALL_STATUSES:\n        raise HTTPException(status_code=400, detail=f\"status must be one of {_CALL_STATUSES}\")\n    crm = get_crm_store()\n    ok = crm.set_call_status(call_id, str(current_user[\"organization_id\"]), status)\n    if not ok:",
+        "detail": "backend.routers.calls",
+        "documentation": {}
+    },
+    {
+        "label": "router",
+        "kind": 5,
+        "importPath": "backend.routers.calls",
+        "description": "backend.routers.calls",
+        "peekOfCode": "router = APIRouter(prefix=\"/api/calls\", tags=[\"calls\"])\n_CALL_STATUSES = (\"Planned\", \"Done\", \"Dismissed\")\n@router.get(\"/plan\")\ndef call_plan(current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"All planned calls across this org's opportunities (priority-sorted).\"\"\"\n    crm = get_crm_store()\n    return {\"calls\": crm.call_plan(str(current_user[\"organization_id\"]))}\nclass CallStatusRequest(BaseModel):\n    status: str  # \"Planned\" | \"Done\" | \"Dismissed\"\n@router.post(\"/{call_id}/status\")",
+        "detail": "backend.routers.calls",
+        "documentation": {}
+    },
+    {
+        "label": "_CALL_STATUSES",
+        "kind": 5,
+        "importPath": "backend.routers.calls",
+        "description": "backend.routers.calls",
+        "peekOfCode": "_CALL_STATUSES = (\"Planned\", \"Done\", \"Dismissed\")\n@router.get(\"/plan\")\ndef call_plan(current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"All planned calls across this org's opportunities (priority-sorted).\"\"\"\n    crm = get_crm_store()\n    return {\"calls\": crm.call_plan(str(current_user[\"organization_id\"]))}\nclass CallStatusRequest(BaseModel):\n    status: str  # \"Planned\" | \"Done\" | \"Dismissed\"\n@router.post(\"/{call_id}/status\")\ndef set_call_status(",
+        "detail": "backend.routers.calls",
+        "documentation": {}
+    },
+    {
         "label": "ConnectRequest",
         "kind": 6,
         "importPath": "backend.routers.composio",
@@ -7547,6 +7826,24 @@
         "documentation": {}
     },
     {
+        "label": "fresh_document_url",
+        "kind": 2,
+        "importPath": "backend.routers.documents",
+        "description": "backend.routers.documents",
+        "peekOfCode": "def fresh_document_url(\n    document_id: str, current_user: dict = Depends(get_current_user)\n) -> dict:\n    \"\"\"Return a freshly-minted presigned URL for a generated document.\n    Org-scoped: the document's opportunity must belong to the caller's org, so one org\n    can't fetch another's files. The link is short-lived (1 hour) and re-minted on demand.\n    \"\"\"\n    crm = get_crm_store()\n    doc = crm.get_document(document_id)\n    if not doc:",
+        "detail": "backend.routers.documents",
+        "documentation": {}
+    },
+    {
+        "label": "router",
+        "kind": 5,
+        "importPath": "backend.routers.documents",
+        "description": "backend.routers.documents",
+        "peekOfCode": "router = APIRouter(prefix=\"/api/documents\", tags=[\"documents\"])\ndef _object_key_from_url(url: str) -> str | None:\n    \"\"\"Pull the iDrive object key out of a stored (path-style) presigned URL.\"\"\"\n    try:\n        path = urlparse(url).path.lstrip(\"/\")  # \"{bucket}/{key}\"\n    except Exception:  # noqa: BLE001\n        return None\n    if not path:\n        return None\n    bucket = settings.IDRIVE_E2_BUCKET",
+        "detail": "backend.routers.documents",
+        "documentation": {}
+    },
+    {
         "label": "trigger_sam_scan",
         "kind": 2,
         "importPath": "backend.routers.ingestion",
@@ -7592,6 +7889,24 @@
         "documentation": {}
     },
     {
+        "label": "CollisionRequest",
+        "kind": 6,
+        "importPath": "backend.routers.mail",
+        "description": "backend.routers.mail",
+        "peekOfCode": "class CollisionRequest(BaseModel):\n    emails: list[str]\n@router.post(\"/collisions\")\ndef outreach_collisions(\n    req: CollisionRequest, current_user: dict = Depends(get_current_user)\n) -> dict:\n    \"\"\"For each contact email, list OTHER teammates who've drafted/sent to them — so the UI\n    can warn 'someone's already talking to this person'. Excludes the caller.\"\"\"\n    crm = get_crm_store()\n    data = crm.outreach_collisions(",
+        "detail": "backend.routers.mail",
+        "documentation": {}
+    },
+    {
+        "label": "outreach_collisions",
+        "kind": 2,
+        "importPath": "backend.routers.mail",
+        "description": "backend.routers.mail",
+        "peekOfCode": "def outreach_collisions(\n    req: CollisionRequest, current_user: dict = Depends(get_current_user)\n) -> dict:\n    \"\"\"For each contact email, list OTHER teammates who've drafted/sent to them — so the UI\n    can warn 'someone's already talking to this person'. Excludes the caller.\"\"\"\n    crm = get_crm_store()\n    data = crm.outreach_collisions(\n        str(current_user[\"organization_id\"]), req.emails, current_user[\"email\"].lower()\n    )\n    return {\"collisions\": data}",
+        "detail": "backend.routers.mail",
+        "documentation": {}
+    },
+    {
         "label": "send_mail",
         "kind": 2,
         "importPath": "backend.routers.mail",
@@ -7605,8 +7920,17 @@
         "kind": 5,
         "importPath": "backend.routers.mail",
         "description": "backend.routers.mail",
-        "peekOfCode": "router = APIRouter(prefix=\"/api/mail\", tags=[\"mail\"])\n@router.post(\"/send\")\ndef send_mail(draft: MailDraft, current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"Send one outreach email from the acting employee's OWN connected Outlook mailbox.\n    Outward action — only ever fired by an explicit human 'Send' click. The sender is\n    always the authenticated employee (their Composio Outlook connection), never a\n    shared account, so mail goes out from the person who approved it.\n    \"\"\"\n    if not draft.to or not draft.to.strip():\n        raise HTTPException(status_code=400, detail=\"A recipient ('to') is required.\")",
+        "peekOfCode": "router = APIRouter(prefix=\"/api/mail\", tags=[\"mail\"])\nclass CollisionRequest(BaseModel):\n    emails: list[str]\n@router.post(\"/collisions\")\ndef outreach_collisions(\n    req: CollisionRequest, current_user: dict = Depends(get_current_user)\n) -> dict:\n    \"\"\"For each contact email, list OTHER teammates who've drafted/sent to them — so the UI\n    can warn 'someone's already talking to this person'. Excludes the caller.\"\"\"\n    crm = get_crm_store()",
         "detail": "backend.routers.mail",
+        "documentation": {}
+    },
+    {
+        "label": "AssignRequest",
+        "kind": 6,
+        "importPath": "backend.routers.opportunities",
+        "description": "backend.routers.opportunities",
+        "peekOfCode": "class AssignRequest(BaseModel):\n    user_ids: list[str]\n@router.post(\"/{opportunity_id}/assign\")\ndef assign_opportunity(\n    opportunity_id: str,\n    req: AssignRequest,\n    current_user: dict = Depends(get_current_user),\n) -> dict:\n    \"\"\"Assign an opportunity to members (by user id). Admin only. Empty list = unassign.\n    Emails each NEWLY-added member (not those already assigned) that it's now theirs.",
+        "detail": "backend.routers.opportunities",
         "documentation": {}
     },
     {
@@ -7641,7 +7965,16 @@
         "kind": 2,
         "importPath": "backend.routers.opportunities",
         "description": "backend.routers.opportunities",
-        "peekOfCode": "def list_opportunities(current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"This org's opportunities, each enriched with its documents and calls (for the UI).\"\"\"\n    crm = get_crm_store()\n    # Batched enrichment (a few queries total) — not N+1, so a large SAM.gov pull stays fast.\n    return {\"opportunities\": crm.list_all_enriched(str(current_user[\"organization_id\"]))}\n@router.post(\"/analyze/run\")\ndef run_analyst(current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"Phase 1 — kick off the Analyst on this org's unanalyzed opportunities (Celery).\"\"\"\n    task = run_analyst_batch.delay(str(current_user[\"organization_id\"]))\n    return {\"task_id\": task.id}",
+        "peekOfCode": "def list_opportunities(current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"This org's opportunities, each enriched with its documents and calls (for the UI).\n    Admins see everything; members see only opportunities assigned to them or unassigned.\n    \"\"\"\n    crm = get_crm_store()\n    is_admin = current_user.get(\"role\") == \"admin\"\n    return {\n        \"opportunities\": crm.list_all_enriched(\n            str(current_user[\"organization_id\"]),\n            viewer_id=str(current_user[\"_id\"]),",
+        "detail": "backend.routers.opportunities",
+        "documentation": {}
+    },
+    {
+        "label": "assign_opportunity",
+        "kind": 2,
+        "importPath": "backend.routers.opportunities",
+        "description": "backend.routers.opportunities",
+        "peekOfCode": "def assign_opportunity(\n    opportunity_id: str,\n    req: AssignRequest,\n    current_user: dict = Depends(get_current_user),\n) -> dict:\n    \"\"\"Assign an opportunity to members (by user id). Admin only. Empty list = unassign.\n    Emails each NEWLY-added member (not those already assigned) that it's now theirs.\n    \"\"\"\n    if current_user.get(\"role\") != \"admin\":\n        raise HTTPException(status_code=403, detail=\"Only an admin can assign opportunities\")",
         "detail": "backend.routers.opportunities",
         "documentation": {}
     },
@@ -7713,7 +8046,7 @@
         "kind": 5,
         "importPath": "backend.routers.opportunities",
         "description": "backend.routers.opportunities",
-        "peekOfCode": "router = APIRouter(prefix=\"/api/opportunities\", tags=[\"opportunities\"])\n@router.get(\"\")\ndef list_opportunities(current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"This org's opportunities, each enriched with its documents and calls (for the UI).\"\"\"\n    crm = get_crm_store()\n    # Batched enrichment (a few queries total) — not N+1, so a large SAM.gov pull stays fast.\n    return {\"opportunities\": crm.list_all_enriched(str(current_user[\"organization_id\"]))}\n@router.post(\"/analyze/run\")\ndef run_analyst(current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"Phase 1 — kick off the Analyst on this org's unanalyzed opportunities (Celery).\"\"\"",
+        "peekOfCode": "router = APIRouter(prefix=\"/api/opportunities\", tags=[\"opportunities\"])\n@router.get(\"\")\ndef list_opportunities(current_user: dict = Depends(get_current_user)) -> dict:\n    \"\"\"This org's opportunities, each enriched with its documents and calls (for the UI).\n    Admins see everything; members see only opportunities assigned to them or unassigned.\n    \"\"\"\n    crm = get_crm_store()\n    is_admin = current_user.get(\"role\") == \"admin\"\n    return {\n        \"opportunities\": crm.list_all_enriched(",
         "detail": "backend.routers.opportunities",
         "documentation": {}
     },
@@ -8060,6 +8393,42 @@
         "documentation": {}
     },
     {
+        "label": "notify_assignment_task",
+        "kind": 2,
+        "importPath": "backend.tasks.notify_tasks",
+        "description": "backend.tasks.notify_tasks",
+        "peekOfCode": "def notify_assignment_task(\n    user_ids: list[str],\n    opportunity_title: str,\n    opportunity_link: str | None = None,\n    assigned_by: str | None = None,\n) -> dict:\n    \"\"\"Email each member (by user id) that an opportunity was assigned to them.\"\"\"\n    db = get_mongodb_client().get_database()\n    svc = EmailService()\n    sent = 0",
+        "detail": "backend.tasks.notify_tasks",
+        "documentation": {}
+    },
+    {
+        "label": "logger",
+        "kind": 5,
+        "importPath": "backend.tasks.notify_tasks",
+        "description": "backend.tasks.notify_tasks",
+        "peekOfCode": "logger = logging.getLogger(__name__)\n@celery_app.task(name=\"notify.assignment\")\ndef notify_assignment_task(\n    user_ids: list[str],\n    opportunity_title: str,\n    opportunity_link: str | None = None,\n    assigned_by: str | None = None,\n) -> dict:\n    \"\"\"Email each member (by user id) that an opportunity was assigned to them.\"\"\"\n    db = get_mongodb_client().get_database()",
+        "detail": "backend.tasks.notify_tasks",
+        "documentation": {}
+    },
+    {
+        "label": "daily_resync",
+        "kind": 2,
+        "importPath": "backend.tasks.resync_tasks",
+        "description": "backend.tasks.resync_tasks",
+        "peekOfCode": "def daily_resync() -> dict:\n    \"\"\"Re-pull contacts for every employee with Outlook connected, and SharePoint for every\n    org with it connected. Connection is checked first so we never retry-storm unconnected\n    accounts.\"\"\"\n    db = get_mongodb_client().get_database()\n    from tasks.contacts_tasks import sync_outlook_contacts_task  # lazy: avoid import cycle\n    from tasks.sharepoint_tasks import sync_sharepoint_structure_task\n    contacts = sp = 0\n    # Contacts — per employee (their own mailbox), only if Outlook is connected.\n    for u in db[\"users\"].find({}, {\"_id\": 1, \"email\": 1, \"current_organization_id\": 1}):",
+        "detail": "backend.tasks.resync_tasks",
+        "documentation": {}
+    },
+    {
+        "label": "logger",
+        "kind": 5,
+        "importPath": "backend.tasks.resync_tasks",
+        "description": "backend.tasks.resync_tasks",
+        "peekOfCode": "logger = logging.getLogger(__name__)\n@celery_app.task(name=\"resync.daily\")\ndef daily_resync() -> dict:\n    \"\"\"Re-pull contacts for every employee with Outlook connected, and SharePoint for every\n    org with it connected. Connection is checked first so we never retry-storm unconnected\n    accounts.\"\"\"\n    db = get_mongodb_client().get_database()\n    from tasks.contacts_tasks import sync_outlook_contacts_task  # lazy: avoid import cycle\n    from tasks.sharepoint_tasks import sync_sharepoint_structure_task\n    contacts = sp = 0",
+        "detail": "backend.tasks.resync_tasks",
+        "documentation": {}
+    },
+    {
         "label": "scan_org_sam",
         "kind": 2,
         "importPath": "backend.tasks.sam_radar_tasks",
@@ -8381,6 +8750,24 @@
         "description": "backend.utils.composio_utils",
         "peekOfCode": "_ROLE_LOCALPARTS = {\n    \"no-reply\", \"noreply\", \"no_reply\", \"donotreply\", \"do-not-reply\", \"notifications\",\n    \"notification\", \"notify\", \"mailer\", \"mailer-daemon\", \"postmaster\", \"bounce\", \"bounces\",\n    \"alert\", \"alerts\", \"info\", \"support\", \"team\", \"hello\", \"contact\", \"news\", \"newsletter\",\n    \"updates\", \"update\", \"marketing\", \"sales\", \"billing\", \"help\", \"admin\", \"automated\",\n}\ndef _is_human(email: str) -> bool:\n    \"\"\"Heuristic: keep real people, drop no-reply / notification / role inboxes.\"\"\"\n    local = email.split(\"@\", 1)[0].lower()\n    if any(tok in local for tok in (\"no-reply\", \"noreply\", \"no_reply\", \"donotreply\", \"do-not-reply\")):",
         "detail": "backend.utils.composio_utils",
+        "documentation": {}
+    },
+    {
+        "label": "ensure_indexes",
+        "kind": 2,
+        "importPath": "backend.utils.db_indexes",
+        "description": "backend.utils.db_indexes",
+        "peekOfCode": "def ensure_indexes(db) -> dict:\n    \"\"\"Create every index if missing. Each is wrapped so one failure (e.g. a unique index\n    on legacy duplicate data) never blocks the others or app startup.\"\"\"\n    results: dict[str, str] = {}\n    for coll, keys, opts in _INDEXES:\n        label = f\"{coll}:{'+'.join(k for k, _ in keys)}\"\n        try:\n            results[label] = db[coll].create_index(keys, **opts)\n        except Exception as exc:  # noqa: BLE001\n            logger.warning(\"ensure_indexes: %s failed: %s\", label, exc)",
+        "detail": "backend.utils.db_indexes",
+        "documentation": {}
+    },
+    {
+        "label": "logger",
+        "kind": 5,
+        "importPath": "backend.utils.db_indexes",
+        "description": "backend.utils.db_indexes",
+        "peekOfCode": "logger = logging.getLogger(__name__)\n# (collection, keys, options) — names are auto-derived (idempotent across restarts).\n_INDEXES: list[tuple[str, list, dict]] = [\n    # users: login + auth dependency hit find_one({email}) constantly; members listing\n    # uses organizations.$elemMatch.organization_id.\n    (\"users\", [(\"email\", ASCENDING)], {\"unique\": True}),\n    (\"users\", [(\"organizations.organization_id\", ASCENDING)], {}),\n    # organizations: slug lookups during signup/org resolution (find_one by _id is covered).\n    (\"organizations\", [(\"slug\", ASCENDING)], {}),\n    # invitations: accept-by-token, plus list-by-org / by-email.",
+        "detail": "backend.utils.db_indexes",
         "documentation": {}
     },
     {

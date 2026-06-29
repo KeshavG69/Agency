@@ -15,10 +15,58 @@ router = APIRouter(prefix="/api/opportunities", tags=["opportunities"])
 
 @router.get("")
 def list_opportunities(current_user: dict = Depends(get_current_user)) -> dict:
-    """This org's opportunities, each enriched with its documents and calls (for the UI)."""
+    """This org's opportunities, each enriched with its documents and calls (for the UI).
+
+    Admins see everything; members see only opportunities assigned to them or unassigned.
+    """
     crm = get_crm_store()
-    # Batched enrichment (a few queries total) — not N+1, so a large SAM.gov pull stays fast.
-    return {"opportunities": crm.list_all_enriched(str(current_user["organization_id"]))}
+    is_admin = current_user.get("role") == "admin"
+    return {
+        "opportunities": crm.list_all_enriched(
+            str(current_user["organization_id"]),
+            viewer_id=str(current_user["_id"]),
+            is_admin=is_admin,
+        )
+    }
+
+
+class AssignRequest(BaseModel):
+    user_ids: list[str]
+
+
+@router.post("/{opportunity_id}/assign")
+def assign_opportunity(
+    opportunity_id: str,
+    req: AssignRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Assign an opportunity to members (by user id). Admin only. Empty list = unassign.
+
+    Emails each NEWLY-added member (not those already assigned) that it's now theirs.
+    """
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can assign opportunities")
+    crm = get_crm_store()
+    organization_id = str(current_user["organization_id"])
+    opp = crm.get_opportunity(opportunity_id, organization_id)
+    if opp is None:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    previous = set(opp.get("assigned_to") or [])
+    crm.set_assignment(opportunity_id, organization_id, req.user_ids)
+
+    new_ids = [u for u in req.user_ids if u not in previous]
+    if new_ids:
+        from tasks.notify_tasks import notify_assignment_task  # lazy: avoid task import cycle
+
+        assigned_by = (
+            f"{current_user.get('firstName', '')} {current_user.get('lastName', '')}".strip()
+            or current_user.get("email")
+        )
+        notify_assignment_task.delay(
+            new_ids, opp.get("title") or "an opportunity", opp.get("link"), assigned_by
+        )
+    return {"opportunity_id": opportunity_id, "assigned_to": req.user_ids, "notified": len(new_ids)}
 
 
 @router.post("/analyze/run")

@@ -17,6 +17,8 @@ import tasks.capture_tasks  # noqa: E402,F401
 import tasks.contacts_tasks  # noqa: E402,F401
 import tasks.crm_tasks  # noqa: E402,F401
 import tasks.mail_tasks  # noqa: E402,F401
+import tasks.notify_tasks  # noqa: E402,F401
+import tasks.resync_tasks  # noqa: E402,F401
 import tasks.sam_radar_tasks  # noqa: E402,F401
 import tasks.sharepoint_tasks  # noqa: E402,F401
 
@@ -38,5 +40,10 @@ celery_app.conf.beat_schedule = {
     "sam-radar-daily-scan": {
         "task": "sam_radar.daily_scan",
         "schedule": crontab(hour=11, minute=0),
+    },
+    # Refresh contacts + SharePoint structure once a day.
+    "daily-resync": {
+        "task": "resync.daily",
+        "schedule": crontab(hour=8, minute=0),
     },
 }

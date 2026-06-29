@@ -266,24 +266,63 @@ class CRMStore:
         cursor = self.documents.find(query).sort("created_at", -1)
         return [_serialize(d) for d in cursor]
 
+    def get_document(self, document_id: str) -> dict | None:
+        try:
+            doc = self.documents.find_one({"_id": ObjectId(document_id)})
+        except Exception:  # noqa: BLE001 — malformed id
+            return None
+        return _serialize(doc) if doc else None
+
     def update_document(self, document_id: str, **fields) -> None:
         """Update a document (e.g. status -> 'filed', new url, bumped version)."""
         fields["updated_at"] = _utc_now()
         self.documents.update_one({"_id": ObjectId(document_id)}, {"$set": fields})
 
+    # --- assignment -------------------------------------------------------
+    def set_assignment(
+        self, opportunity_id: str, organization_id: str, user_ids: list[str]
+    ) -> bool:
+        """Assign an opportunity to zero or more members (by user id). Org-scoped."""
+        try:
+            res = self.opps.update_one(
+                {"_id": ObjectId(opportunity_id), "organization_id": organization_id},
+                {"$set": {"assigned_to": [str(u) for u in user_ids]}},
+            )
+        except Exception:  # noqa: BLE001 — malformed id
+            return False
+        return res.matched_count > 0
+
+    @staticmethod
+    def _visibility_query(organization_id: str, viewer_id: str | None, is_admin: bool) -> dict:
+        """Org filter + (for non-admins) only opps assigned to the viewer or unassigned."""
+        q: dict = {"organization_id": organization_id}
+        if not is_admin and viewer_id:
+            q["$or"] = [
+                {"assigned_to": viewer_id},               # array contains the viewer
+                {"assigned_to": {"$in": [None, []]}},     # explicitly unassigned
+                {"assigned_to": {"$exists": False}},      # never assigned
+            ]
+        return q
+
     # --- reads for the UI -------------------------------------------------
-    def list_all(self, organization_id: str) -> list[dict]:
-        """All of this org's opportunities (highest priority first)."""
-        cursor = self.opps.find({"organization_id": organization_id}).sort("priority_score", -1)
+    def list_all(
+        self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True
+    ) -> list[dict]:
+        """This org's opportunities (highest priority first). Non-admins see only the ones
+        assigned to them or unassigned."""
+        q = self._visibility_query(organization_id, viewer_id, is_admin)
+        cursor = self.opps.find(q).sort("priority_score", -1)
         return [_serialize(d) for d in cursor]
 
-    def list_all_enriched(self, organization_id: str) -> list[dict]:
+    def list_all_enriched(
+        self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True
+    ) -> list[dict]:
         """list_all + each opp's documents/calls/tasks attached — but BATCHED into a
         handful of queries (not 3-per-opp), so it scales to a large SAM.gov pull instead
         of firing thousands of round-trips at the DB."""
         from collections import defaultdict
 
-        opps = self.list_all(organization_id)
+        opps = self.list_all(organization_id, viewer_id=viewer_id, is_admin=is_admin)
         ids = [o["id"] for o in opps]
         if not ids:
             return opps
@@ -309,6 +348,104 @@ class CRMStore:
     def list_tasks(self, opportunity_id: str) -> list[dict]:
         cursor = self.tasks.find({"opportunity_id": opportunity_id})
         return [_serialize(d) for d in cursor]
+
+    # --- consolidated call plan (across the whole pipeline) ----------------
+    def call_plan(self, organization_id: str) -> list[dict]:
+        """Every planned call across this org's opportunities, joined with opportunity
+        context — the consolidated BD call sheet, sorted by priority (then nearest deadline)."""
+        opps = {o["id"]: o for o in self.list_all(organization_id)}
+        if not opps:
+            return []
+        rows: list[dict] = []
+        for c in self.calls.find({"opportunity_id": {"$in": list(opps.keys())}}):
+            sc = _serialize(c)
+            opp = opps.get(c["opportunity_id"], {})
+            rows.append({
+                "call_id": sc["id"],
+                "opportunity_id": c["opportunity_id"],
+                "opportunity_title": opp.get("title"),
+                "agency": opp.get("agency"),
+                "priority_score": opp.get("priority_score"),
+                "bid_decision": opp.get("bid_decision"),
+                "response_deadline": opp.get("response_deadline"),
+                "poc_name": opp.get("poc_name"),
+                "poc_email": opp.get("poc_email"),
+                "name": sc.get("name"),
+                "talking_point": sc.get("talking_point"),
+                "status": sc.get("status") or "Planned",
+                "created_at": sc.get("created_at"),
+            })
+        rows.sort(
+            key=lambda r: (r.get("priority_score") or -1, r.get("response_deadline") or "9999"),
+            reverse=True,
+        )
+        return rows
+
+    # --- outreach log (collision detection) -------------------------------
+    def log_outreach(
+        self, organization_id: str, contact_email: str, employee_email: str, action: str,
+        opportunity_id: str | None = None, opportunity_title: str | None = None,
+    ) -> None:
+        """Record that an employee drafted/sent outreach to a contact — powers the
+        'someone is already talking to this person' warning."""
+        ce = (contact_email or "").strip().lower()
+        if not ce:
+            return
+        self.db["outreach_log"].insert_one({
+            "organization_id": organization_id,
+            "contact_email": ce,
+            "employee_email": (employee_email or "").strip().lower(),
+            "action": action,  # "drafted" | "sent"
+            "opportunity_id": opportunity_id,
+            "opportunity_title": opportunity_title,
+            "created_at": _utc_now(),
+        })
+
+    def outreach_collisions(
+        self, organization_id: str, emails: list[str], exclude_employee: str
+    ) -> dict[str, list[dict]]:
+        """For each contact email, the latest outreach by OTHER employees in the org →
+        {email: [{employee_email, action, opportunity_title, created_at}, ...]} (one per
+        other employee, newest first). Empty when nobody else has engaged the contact."""
+        wanted = [e.strip().lower() for e in emails if e and e.strip()]
+        if not wanted:
+            return {}
+        exclude = (exclude_employee or "").strip().lower()
+        out: dict[str, dict[str, dict]] = {}  # email -> employee -> latest event
+        cursor = self.db["outreach_log"].find({
+            "organization_id": organization_id,
+            "contact_email": {"$in": wanted},
+        }).sort("created_at", -1)
+        for r in cursor:
+            emp = r.get("employee_email")
+            if not emp or emp == exclude:
+                continue
+            by_emp = out.setdefault(r["contact_email"], {})
+            if emp not in by_emp:  # cursor is newest-first → first seen is the latest
+                by_emp[emp] = {
+                    "employee_email": emp,
+                    "action": r.get("action"),
+                    "opportunity_title": r.get("opportunity_title"),
+                    "created_at": r.get("created_at"),
+                }
+        return {email: list(emps.values()) for email, emps in out.items()}
+
+    def set_call_status(self, call_id: str, organization_id: str, status: str) -> bool:
+        """Update a call's status (Planned / Done / Dismissed). Org-scoped: the call's
+        opportunity must belong to the caller's org."""
+        try:
+            call = self.calls.find_one({"_id": ObjectId(call_id)})
+        except Exception:  # noqa: BLE001 — malformed id
+            return False
+        if not call:
+            return False
+        if self.get_opportunity(call.get("opportunity_id", ""), organization_id) is None:
+            return False
+        self.calls.update_one(
+            {"_id": ObjectId(call_id)},
+            {"$set": {"status": status, "updated_at": _utc_now()}},
+        )
+        return True
 
 
 _store: CRMStore | None = None

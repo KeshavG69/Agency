@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { User, LoginCredentials, SignupData } from '@/lib/types';
 import { authApi } from '@/lib/api/auth';
+import { useConnectionStore } from '@/lib/stores/connectionStore';
 
 interface SignupResult {
   email: string;
@@ -82,6 +83,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } finally {
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
+      // Clear cached connection state so it never leaks to the next user on this browser.
+      try {
+        useConnectionStore.getState().reset();
+      } catch {
+        /* store not ready — ignore */
+      }
       set({ user: null });
     }
   },
