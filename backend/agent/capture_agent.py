@@ -61,11 +61,28 @@ Steps:
 2. Decide which deliverable(s) to produce (usually ONE, at most two — don't produce ones that
    aren't warranted):
    - "rfi_response"        -> a formal response to a Sources Sought / RFI (Word / docx).
-   - "white_paper"        -> a technical capability white paper (Word / docx).
+   - "white_paper"        -> a technical capability white paper (Word / docx). SEE THE
+                              WHITE-PAPER METHOD below — this one requires extra web research.
    - "capability_briefing" -> a capability slide deck (PowerPoint / pptx).
    - "capture_plan"       -> an OPTIONAL internal capture-plan document (Word / docx) for the
                               BD team — produce this ONLY when it genuinely adds value
                               (e.g. a complex, high-value pursuit worth a gate-review doc).
+
+WHITE-PAPER METHOD (when you produce a "white_paper"):
+   a. First, pin down the customer's actual technical PROBLEM / mission gap from the
+      opportunity (and the incumbent's current approach, if any).
+   b. Then USE THE WEB SEARCH TOOL to find the BEST, most ADVANCED way to solve it — current
+      state-of-the-art methods, modern architectures/technologies, relevant standards or
+      frameworks, and how leaders solve this class of problem TODAY (not the dated/default
+      approach). Search a few angles; cite the sources you actually read.
+   c. Pick the approach that solves the problem MEANINGFULLY BETTER than the status quo /
+      incumbent, and explain WHY it's superior (performance, cost, risk, security, schedule).
+   d. Write the white paper around that differentiated technical solution: problem statement →
+      proposed advanced approach (with the cited rationale) → why it beats the current way →
+      how {company} delivers it, backed by REAL past performance from SharePoint. Be technically
+      specific and credible — a discriminator, not a generic capabilities brochure.
+   Cite source URLs inline for the external tech claims; ground capability claims in SharePoint.
+
 3. For EACH deliverable you produce: write it in the right tone (customer-facing for the
    external ones, internal/strategic for the capture plan), grounded in the strategy + real
    past performance. Generate it with the right skill + python_repl_tool (pptx for a briefing,
