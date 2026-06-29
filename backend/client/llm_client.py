@@ -16,7 +16,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from app.settings import settings
 
-_DEFAULT_MODEL = "anthropic/claude-sonnet-4.6"
+_DEFAULT_MODEL = "openai/gpt-5.4-mini"
 
 
 class LLMClient:

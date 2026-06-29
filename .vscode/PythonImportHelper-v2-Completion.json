@@ -7353,7 +7353,7 @@
         "kind": 5,
         "importPath": "backend.client.llm_client",
         "description": "backend.client.llm_client",
-        "peekOfCode": "_DEFAULT_MODEL = \"anthropic/claude-sonnet-4.6\"\nclass LLMClient:\n    \"\"\"Thread-safe, cached LLM/embeddings client.\"\"\"\n    def __init__(self):\n        self._lock = threading.RLock()\n        self._chat_cache: Dict[str, ChatOpenAI] = {}\n        self._agno_cache: Dict[str, OpenAIChat] = {}\n        self._emb_cache: Dict[str, OpenAIEmbeddings] = {}\n    def get_chat_llm(\n        self,",
+        "peekOfCode": "_DEFAULT_MODEL = \"openai/gpt-5.4-mini\"\nclass LLMClient:\n    \"\"\"Thread-safe, cached LLM/embeddings client.\"\"\"\n    def __init__(self):\n        self._lock = threading.RLock()\n        self._chat_cache: Dict[str, ChatOpenAI] = {}\n        self._agno_cache: Dict[str, OpenAIChat] = {}\n        self._emb_cache: Dict[str, OpenAIEmbeddings] = {}\n    def get_chat_llm(\n        self,",
         "detail": "backend.client.llm_client",
         "documentation": {}
     },

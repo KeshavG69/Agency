@@ -32,6 +32,7 @@ import ContactsGraph from "./ContactsGraph";
 import SharePointGraph from "./SharePointGraph";
 import CalendarStrip, { toLocalIso } from "./CalendarStrip";
 import FilePreview from "./FilePreview";
+import AssignModal from "./AssignModal";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useConnectionStore } from "@/lib/stores/connectionStore";
 import { organizationsApi, type Organization } from "@/lib/api/organizations";
@@ -904,6 +905,7 @@ function Detail({
   const calls = opp.calls ?? [];
   const tasks = opp.tasks ?? [];
   const canCapture = opp.bid_decision === "Bid";
+  const [assignOpen, setAssignOpen] = useState(false);
 
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: "info", label: "Information" },
@@ -965,34 +967,28 @@ function Detail({
           {opp.decision_overridden && <span className="dt-manual">set manually</span>}
         </div>
 
-        {/* Assign to members — admin only */}
+        {/* Assign to members — admin only (PriceIQ-style share modal) */}
         {isAdmin && (
-          <div className="decision-toggle assign-row">
-            <span className="dt-label">Assign</span>
-            {members.length === 0 ? (
-              <span className="dt-manual">no members yet</span>
-            ) : (
-              members.map((m) => {
-                const on = (opp.assigned_to ?? []).includes(m.id);
-                const cur = opp.assigned_to ?? [];
-                return (
-                  <button
-                    key={m.id}
-                    className={`dt-btn ${on ? "on assigned" : ""}`}
-                    onClick={() =>
-                      onAssign(on ? cur.filter((x) => x !== m.id) : [...cur, m.id])
-                    }
-                    title={m.email}
-                  >
-                    {(m.firstName || m.email).trim()}
-                  </button>
-                );
-              })
-            )}
+          <div className="decision-toggle">
+            <span className="dt-label">Members</span>
+            <button className="dt-btn" onClick={() => setAssignOpen(true)}>
+              {(opp.assigned_to ?? []).length > 0
+                ? `Assigned · ${(opp.assigned_to ?? []).length}`
+                : "Assign…"}
+            </button>
             {(opp.assigned_to ?? []).length === 0 && (
               <span className="dt-manual">unassigned · open to all</span>
             )}
           </div>
+        )}
+        {assignOpen && (
+          <AssignModal
+            oppTitle={opp.title}
+            members={members}
+            assigned={opp.assigned_to ?? []}
+            onSave={(ids) => onAssign(ids)}
+            onClose={() => setAssignOpen(false)}
+          />
         )}
 
         <div className="tabs">
