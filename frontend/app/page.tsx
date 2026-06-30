@@ -548,7 +548,7 @@ function Console({ user }: { user: User }) {
           {outlookConnected ? (
             <div className="outlook-row">
               <span className="pri-dot" style={{ background: "var(--bid)" }} />
-              <span className="nm">Outlook connected</span>
+              <span className="nm">Contacts connected (Outlook)</span>
               <button className="disconnect-link" onClick={onResyncContacts} disabled={resyncing}>
                 {resyncing ? "…" : "Resync"}
               </button>
@@ -564,7 +564,7 @@ function Console({ user }: { user: User }) {
               style={{ marginBottom: 10, width: "100%", justifyContent: "flex-start" }}
             >
               <span className="pri-dot" style={{ background: "var(--rail-faint)" }} />
-              <span className="nm">{connecting ? "Opening Microsoft…" : "Connect Outlook"}</span>
+              <span className="nm">{connecting ? "Opening Microsoft…" : "Connect your Contacts (Outlook)"}</span>
             </button>
           )}
           {/* SharePoint is an org-wide connection — only admins can connect it. */}
@@ -572,7 +572,7 @@ function Console({ user }: { user: User }) {
             (spConnected ? (
               <div className="outlook-row">
                 <span className="pri-dot" style={{ background: "var(--bid)" }} />
-                <span className="nm">SharePoint connected</span>
+                <span className="nm">Library connected (SharePoint)</span>
                 <button className="disconnect-link" onClick={onResyncSharePoint} disabled={spResyncing}>
                   {spResyncing ? "…" : "Resync"}
                 </button>
@@ -588,7 +588,7 @@ function Console({ user }: { user: User }) {
                 style={{ marginBottom: 10, width: "100%", justifyContent: "flex-start" }}
               >
                 <span className="pri-dot" style={{ background: "var(--rail-faint)" }} />
-                <span className="nm">{spConnecting ? "Opening Microsoft…" : "Connect SharePoint"}</span>
+                <span className="nm">{spConnecting ? "Opening Microsoft…" : "Connect your Library (SharePoint)"}</span>
               </button>
             ))}
           <button

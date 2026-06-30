@@ -313,3 +313,54 @@ def fetch_outlook_correspondents(user_id: str, per_folder: int = 200) -> list[di
 
     out.sort(key=lambda x: x["count"], reverse=True)
     return out
+
+
+def fetch_outlook_network(user_id: str, per_folder: int = 200) -> list[dict]:
+    """The full network = email-history correspondents MERGED with the Outlook address book.
+
+    Correspondents give relationship strength (count / last_seen); the address book adds
+    company + title and people you've saved but not yet emailed. Deduped by email. Same
+    external-only + human filters as correspondents — colleagues (own domain) and
+    role/no-reply inboxes are dropped. Returns dicts: { email, name, count, last_seen,
+    domain, external, company?, title? }.
+    """
+    by_email: dict[str, dict] = {c["email"]: dict(c) for c in fetch_outlook_correspondents(user_id, per_folder)}
+
+    own_domain = user_id.split("@", 1)[1].lower() if "@" in user_id else ""
+    added = 0
+    try:
+        book = fetch_outlook_contacts(user_id)
+    except Exception as exc:  # noqa: BLE001 — address book optional; keep correspondents
+        logger.warning("Outlook address-book fetch failed for %s: %s", user_id, exc)
+        book = []
+
+    for c in book:
+        email = (c.get("email") or "").strip().lower()
+        if not email or "@" not in email or not _is_human(email):
+            continue
+        domain = email.split("@", 1)[1]
+        if own_domain and domain == own_domain:
+            continue  # internal colleague
+        if email in by_email:
+            e = by_email[email]  # merge: keep correspondence signal, fill richer fields
+            if not e.get("name") and c.get("name"):
+                e["name"] = c["name"]
+            if c.get("company"):
+                e["company"] = c["company"]
+            if c.get("title"):
+                e["title"] = c["title"]
+        else:
+            by_email[email] = {
+                "email": email, "name": c.get("name"),
+                "company": c.get("company"), "title": c.get("title"),
+                "count": 0, "last_seen": None, "domain": domain, "external": True,
+            }
+            added += 1
+
+    merged = list(by_email.values())
+    merged.sort(key=lambda x: x.get("count", 0), reverse=True)
+    logger.info(
+        "Outlook network for %s: %d correspondents + %d address-book-only = %d total",
+        user_id, len(by_email) - added, added, len(merged),
+    )
+    return merged

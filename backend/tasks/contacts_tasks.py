@@ -1,16 +1,16 @@
 """Celery task — rebuild ONE employee's contact network after they connect Outlook.
 
-The OAuth callback triggers this. It (1) pulls correspondents from the acting
-employee's email history via Composio, (2) enriches them via Explorium, and
-(3) prunes-then-rebuilds ONLY that employee's slice of the FalkorDB graph — so a
-re-sync drops their stale contacts and never touches another employee's network.
-`owner_email` is the employee's login email (their Composio entity).
+The OAuth callback triggers this. It (1) pulls the employee's network — email-history
+correspondents MERGED with their Outlook address book — via Composio, (2) enriches them
+via Explorium, and (3) prunes-then-rebuilds ONLY that employee's slice of the FalkorDB
+graph — so a re-sync drops their stale contacts and never touches another employee's
+network. `owner_email` is the employee's login email (their Composio entity).
 """
 import logging
 
 from app.worker import celery_app
 from client.graph_store import clear_owner_graph, upsert_contacts
-from utils.composio_utils import fetch_outlook_correspondents
+from utils.composio_utils import fetch_outlook_network
 from utils.explorium import enrich_contacts
 
 logger = logging.getLogger(__name__)
@@ -30,12 +30,13 @@ def sync_outlook_contacts_task(self, owner_email: str, organization_id: str) -> 
 
     try:
         # The Composio entity for this employee IS their email, so it doubles as
-        # both the mailbox to read and the graph owner.
-        contacts = fetch_outlook_correspondents(user_id=owner)
+        # both the mailbox to read and the graph owner. Network = email-history
+        # correspondents + Outlook address book, merged + deduped.
+        contacts = fetch_outlook_network(user_id=owner)
     except Exception as exc:  # transient Composio / Graph errors -> retry
-        logger.warning("Outlook correspondents fetch failed for %s: %s", owner, exc)
+        logger.warning("Outlook network fetch failed for %s: %s", owner, exc)
         raise self.retry(exc=exc)
-    logger.info("Found %d correspondents for owner=%s", len(contacts), owner)
+    logger.info("Found %d network contacts for owner=%s", len(contacts), owner)
 
     # Resolve designation / company / name from the email via Explorium.
     enriched = enrich_contacts(contacts)
