@@ -1,10 +1,8 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
-import { getApiBase } from '@/lib/runtimeApiBase';
 
-// Collecct's backend base — resolved from the runtime env (window.__ENV) first, then the
-// build-time NEXT_PUBLIC_API_BASE, then localhost. Callers include the full `/api/...` path,
-// so there is no `/api` suffix here.
-const API_BASE = getApiBase();
+// Collecct's backend base (baked at build from NEXT_PUBLIC_API_BASE). Callers include the
+// full `/api/...` path, so there is no `/api` suffix here.
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
 
 // Create axios instance
 export const apiClient = axios.create({

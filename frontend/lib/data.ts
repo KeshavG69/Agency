@@ -4,10 +4,9 @@
 // the Excel upload (multipart), which uses fetch with a manual auth header.
 
 import apiClient from "@/lib/api/client";
-import { getApiBase } from "@/lib/runtimeApiBase";
 
-// Runtime env (window.__ENV) > build-time NEXT_PUBLIC_API_BASE > localhost.
-export const API_BASE = getApiBase();
+export const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
 function authHeader(): Record<string, string> {
   const t = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
