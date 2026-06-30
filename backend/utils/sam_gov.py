@@ -30,9 +30,8 @@ _CACHE_KEY = "samgov:entity:{uei}"
 def _redis_client() -> redis.Redis:
     global _redis
     if _redis is None:
-        _redis = redis.Redis(
-            host=settings.REDIS_HOST, port=settings.REDIS_PORT, decode_responses=True
-        )
+        # from_url honours auth in REDIS_URL (Railway etc.); falls back to HOST/PORT locally.
+        _redis = redis.Redis.from_url(f"{settings.redis_base_url}/0", decode_responses=True)
     return _redis
 
 

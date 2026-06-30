@@ -6516,7 +6516,7 @@
         "kind": 5,
         "importPath": "backend.app.worker",
         "description": "backend.app.worker",
-        "peekOfCode": "celery_app = Celery(\n    \"worker\",\n    broker=f\"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0\",\n    backend=f\"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1\",\n)\n# Explicitly import task modules so they register (more reliable than autodiscovery).\nimport tasks.analyst_tasks  # noqa: E402,F401\nimport tasks.capture_tasks  # noqa: E402,F401\nimport tasks.contacts_tasks  # noqa: E402,F401\nimport tasks.crm_tasks  # noqa: E402,F401",
+        "peekOfCode": "celery_app = Celery(\n    \"worker\",\n    broker=f\"{settings.redis_base_url}/0\",\n    backend=f\"{settings.redis_base_url}/1\",\n)\n# Explicitly import task modules so they register (more reliable than autodiscovery).\nimport tasks.analyst_tasks  # noqa: E402,F401\nimport tasks.capture_tasks  # noqa: E402,F401\nimport tasks.contacts_tasks  # noqa: E402,F401\nimport tasks.crm_tasks  # noqa: E402,F401",
         "detail": "backend.app.worker",
         "documentation": {}
     },
@@ -9198,7 +9198,7 @@
         "kind": 5,
         "importPath": "backend.utils.sam_gov",
         "description": "backend.utils.sam_gov",
-        "peekOfCode": "logger = logging.getLogger(__name__)\n_redis: redis.Redis | None = None\n_CACHE_KEY = \"samgov:entity:{uei}\"\ndef _redis_client() -> redis.Redis:\n    global _redis\n    if _redis is None:\n        _redis = redis.Redis(\n            host=settings.REDIS_HOST, port=settings.REDIS_PORT, decode_responses=True\n        )\n    return _redis",
+        "peekOfCode": "logger = logging.getLogger(__name__)\n_redis: redis.Redis | None = None\n_CACHE_KEY = \"samgov:entity:{uei}\"\ndef _redis_client() -> redis.Redis:\n    global _redis\n    if _redis is None:\n        # from_url honours auth in REDIS_URL (Railway etc.); falls back to HOST/PORT locally.\n        _redis = redis.Redis.from_url(f\"{settings.redis_base_url}/0\", decode_responses=True)\n    return _redis\ndef entity_cached(uei: str) -> dict | None:",
         "detail": "backend.utils.sam_gov",
         "documentation": {}
     },
@@ -9207,7 +9207,7 @@
         "kind": 5,
         "importPath": "backend.utils.sam_gov",
         "description": "backend.utils.sam_gov",
-        "peekOfCode": "_CACHE_KEY = \"samgov:entity:{uei}\"\ndef _redis_client() -> redis.Redis:\n    global _redis\n    if _redis is None:\n        _redis = redis.Redis(\n            host=settings.REDIS_HOST, port=settings.REDIS_PORT, decode_responses=True\n        )\n    return _redis\ndef entity_cached(uei: str) -> dict | None:\n    \"\"\"SAM.gov entity for a UEI, cached in Redis FOREVER (no TTL).",
+        "peekOfCode": "_CACHE_KEY = \"samgov:entity:{uei}\"\ndef _redis_client() -> redis.Redis:\n    global _redis\n    if _redis is None:\n        # from_url honours auth in REDIS_URL (Railway etc.); falls back to HOST/PORT locally.\n        _redis = redis.Redis.from_url(f\"{settings.redis_base_url}/0\", decode_responses=True)\n    return _redis\ndef entity_cached(uei: str) -> dict | None:\n    \"\"\"SAM.gov entity for a UEI, cached in Redis FOREVER (no TTL).\n    Re-fetches from SAM.gov only on a cache miss or after `invalidate_entity()`.",
         "detail": "backend.utils.sam_gov",
         "documentation": {}
     },

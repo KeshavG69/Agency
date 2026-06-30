@@ -7,8 +7,8 @@ from app.settings import settings
 
 celery_app = Celery(
     "worker",
-    broker=f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0",
-    backend=f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/1",
+    broker=f"{settings.redis_base_url}/0",
+    backend=f"{settings.redis_base_url}/1",
 )
 
 # Explicitly import task modules so they register (more reliable than autodiscovery).

@@ -43,9 +43,21 @@ class Settings(BaseSettings):
     GRAPH_DATABASE_SSL: bool = False
     GRAPH_DATABASE_NAME: str = "collecct_network"
 
-    # Redis / Celery (background tasks)
+    # Redis / Celery (background tasks).
+    # Prefer REDIS_URL (a full redis://[:user]:pass@host:port URL — supports auth, as on
+    # Railway). HOST/PORT are the local-dev fallback when REDIS_URL is empty.
+    REDIS_URL: str = ""
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
+
+    @property
+    def redis_base_url(self) -> str:
+        """Base Redis URL with NO db suffix (callers append /0, /1, ...). Uses REDIS_URL
+        (incl. auth) when set, else builds from HOST/PORT. Strips a trailing /<db> if given."""
+        import re
+
+        url = self.REDIS_URL or f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}"
+        return re.sub(r"/\d+$", "", url.rstrip("/"))
 
     # Composio — managed auth + tools (Outlook mail + calendar for the Relation Agent)
     COMPOSIO_API_KEY: str = ""
