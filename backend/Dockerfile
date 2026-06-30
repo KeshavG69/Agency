@@ -9,6 +9,8 @@ WORKDIR /app
 #  - build-essential: any sdist that needs compiling during uv sync
 #  - libgomp1 / libgl1 / libglib2.0-0 / libsm6 / libxext6 / libxrender1:
 #    native libs LiteParse (PDFium + OCR) and numpy/matplotlib commonly need.
+#  - libreoffice-*: the docx/pptx agent skills shell out to `soffice` for PDF
+#    conversion / thumbnails (agent/skills/*/scripts/office/soffice.py).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     build-essential \
@@ -18,6 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsm6 \
     libxext6 \
     libxrender1 \
+    libreoffice-core \
+    libreoffice-writer \
+    libreoffice-impress \
+    libreoffice-calc \
     && rm -rf /var/lib/apt/lists/*
 
 # uv for fast, reproducible installs
@@ -26,9 +32,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-# Install dependencies from the lockfile first (better layer caching)
+# Install dependencies from the lockfile first (better layer caching).
+# --no-install-project: install ONLY deps at this layer (the app code isn't copied yet,
+# and the project runs from the working dir — it's not a pip-installed package).
 COPY pyproject.toml uv.lock ./
-RUN uv sync --no-dev
+RUN uv sync --no-dev --no-install-project
 
 # Application code
 COPY . .
@@ -40,7 +48,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || exit 1
+    CMD curl -f "http://localhost:${PORT:-8000}/api/health" || exit 1
 
 # start.sh dispatches on $SERVICE_ROLE (web | worker | beat | worker-beat | all).
 # Default `all` runs the API + Celery worker + Celery beat in ONE container.

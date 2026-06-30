@@ -7,9 +7,7 @@ class Settings(BaseSettings):
     MONGODB_URL: str = "mongodb://localhost:27017"
     MONGODB_DATABASE: str = "collecct"
 
-    # EspoCRM (legacy — superseded by MongoDB; kept for reference only)
-    ESPOCRM_BASE_URL: str = "http://localhost:8080"
-    ESPOCRM_API_KEY: str = ""
+    
 
     # OpenRouter — used for Excel extraction
     OPENROUTER_API_KEY: str = ""
@@ -51,16 +49,14 @@ class Settings(BaseSettings):
 
     # Composio — managed auth + tools (Outlook mail + calendar for the Relation Agent)
     COMPOSIO_API_KEY: str = ""
-    COMPOSIO_OUTLOOK_AUTH_CONFIG_ID: str = ""
+    COMPOSIO_OUTLOOK_AUTH_CONFIG_ID: str = "ac_5LWNOSF-2yRu"
     COMPOSIO_SHAREPOINT_AUTH_CONFIG_ID: str = "ac_yZpaj2ORI7Fx"
 
     # SharePoint structure graph (separate FalkorDB graph from the contact network)
     SHAREPOINT_GRAPH_NAME: str = "sharepoint_structure"
-
-    # LLM (Phase 2 agents) — Analyst Agent runs Claude via OpenRouter (mirrors PriceIQ)
-    ANTHROPIC_API_KEY: str = ""
-    CLAUDE_MODEL: str = "claude-sonnet-4-6"
-    ANALYST_MODEL: str = "google/gemini-3.5-flash"
+    
+    
+    ANALYST_MODEL: str = "openai/gpt-5.4-mini"
 
     class Config:
         env_file = ".env"

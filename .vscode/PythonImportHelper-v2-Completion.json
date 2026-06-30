@@ -6498,7 +6498,7 @@
         "kind": 6,
         "importPath": "backend.app.settings",
         "description": "backend.app.settings",
-        "peekOfCode": "class Settings(BaseSettings):\n    # MongoDB — the CRM / pipeline source of truth\n    MONGODB_URL: str = \"mongodb://localhost:27017\"\n    MONGODB_DATABASE: str = \"collecct\"\n    # EspoCRM (legacy — superseded by MongoDB; kept for reference only)\n    ESPOCRM_BASE_URL: str = \"http://localhost:8080\"\n    ESPOCRM_API_KEY: str = \"\"\n    # OpenRouter — used for Excel extraction\n    OPENROUTER_API_KEY: str = \"\"\n    OPENROUTER_BASE_URL: str = \"https://openrouter.ai/api/v1\"",
+        "peekOfCode": "class Settings(BaseSettings):\n    # MongoDB — the CRM / pipeline source of truth\n    MONGODB_URL: str = \"mongodb://localhost:27017\"\n    MONGODB_DATABASE: str = \"collecct\"\n    # OpenRouter — used for Excel extraction\n    OPENROUTER_API_KEY: str = \"\"\n    OPENROUTER_BASE_URL: str = \"https://openrouter.ai/api/v1\"\n    EXTRACTION_MODEL: str = \"google/gemini-3.1-flash-lite\"\n    # OpenAI — embeddings (optional, used by the cached LLM client)\n    OPENAI_API_KEY: str = \"\"",
         "detail": "backend.app.settings",
         "documentation": {}
     },

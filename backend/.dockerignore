@@ -13,10 +13,10 @@ venv/
 .env.*
 !.env.example
 
-# Local data / scratch
+# Local runtime data / scratch (NOT app code)
 *.log
-*.csv
 data/cache/
+data/oews/
 scratchpad/
 tmp/
 
@@ -27,6 +27,8 @@ tmp/
 .idea/
 .DS_Store
 
-# Docs / tests not needed at runtime
+# Tests (not needed at runtime)
 tests/
-*.md
+
+# NOTE: do NOT blanket-exclude *.md or *.csv — the agno skills ship SKILL.md +
+# references/*.md (agent/skills/**), and dropping them breaks LocalSkills(validate=True).
