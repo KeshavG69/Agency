@@ -156,7 +156,26 @@ def disconnect(req: DisconnectRequest, current_user: dict = Depends(get_current_
     if not (is_own or (is_org and is_admin)):
         raise HTTPException(status_code=403, detail="You can only disconnect your own connection.")
     try:
-        return disconnect_account(req.connected_account_id)
+        result = disconnect_account(req.connected_account_id)
     except Exception as e:  # noqa: BLE001
         logger.error("Composio disconnect failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to disconnect: {e}")
+
+    # Disconnecting removes the source, so purge the data it produced:
+    #  - Outlook  -> this employee's contact subgraph
+    #  - SharePoint -> the org's document-structure graph
+    org = str(current_user.get("organization_id") or "")
+    try:
+        if is_own:
+            from client.graph_store import clear_owner_graph
+
+            clear_owner_graph(owner_email=email, organization_id=org)
+            result["contacts_cleared"] = True
+        elif is_org:
+            from client.sharepoint_graph import clear_structure
+
+            clear_structure(org)
+            result["library_cleared"] = True
+    except Exception as e:  # noqa: BLE001 — the disconnect itself succeeded; graph purge is best-effort
+        logger.warning("Graph purge after disconnect failed for %s: %s", owner, e)
+    return result
