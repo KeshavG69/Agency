@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ContactCandidate } from "@/lib/data";
 
 /**
@@ -23,9 +23,16 @@ export default function ContactReviewModal({
   onClose: () => void;
 }) {
   // Selection keyed by email. Work is auto-selected; personal starts off.
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(contacts.filter((c) => c.category === "work").map((c) => c.email)),
-  );
+  //
+  // The modal opens BEFORE contacts finish loading (it starts with an empty list, then
+  // the real list arrives moments later via a prop update) — a useState initializer only
+  // runs on the very first render, so seeding it from `contacts` here would seed against
+  // that empty placeholder and never re-run once the real list lands. Seed it from an
+  // effect instead, so the Work pre-selection actually applies once contacts arrive.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setSelected(new Set(contacts.filter((c) => c.category === "work").map((c) => c.email)));
+  }, [contacts]);
 
   const { work, personal } = useMemo(() => {
     const w: ContactCandidate[] = [];
