@@ -1,4 +1,6 @@
 """Opportunity actions — the human approval gate + kicking off capture."""
+import logging
+
 from celery import group
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -9,6 +11,8 @@ from tasks.analyst_tasks import analyze_opportunity_task, run_analyst_batch
 from tasks.capture_tasks import capture_task, run_capture_batch
 from tasks.crm_tasks import recommend_contacts_task
 from tasks.mail_tasks import draft_one_outreach_task, draft_outreach_task
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/opportunities", tags=["opportunities"])
 
@@ -100,6 +104,39 @@ def run_analyst_selected(
     return {"started": started, "requested": len(req.ids)}
 
 
+@router.get("/{opportunity_id}/sharepoint-files")
+def sharepoint_files(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:
+    """List the Bid folder's contents LIVE from SharePoint (grouped client-side by subfolder).
+
+    This is the read half of the two-way sync: a file a human drops into the SharePoint
+    folder shows up here automatically. Returns {connected, folder, files:[…]}.
+    """
+    crm = get_crm_store()
+    org = str(current_user["organization_id"])
+    opp = crm.get_opportunity(opportunity_id, org)
+    if opp is None:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    folder = opp.get("sharepoint_folder")
+    if not folder:
+        return {"connected": False, "folder": None, "files": []}
+    from utils.sharepoint_writer import (
+        SharePointNotConnectedError, SharePointReadError, list_bid_documents,
+    )
+
+    try:
+        files = list_bid_documents(org, folder)
+    except SharePointNotConnectedError:
+        # A Bid folder exists but SharePoint has since been disconnected — don't pretend "empty".
+        return {"connected": False, "folder": folder, "files": [],
+                "error": "SharePoint is disconnected — reconnect it to see this folder's files."}
+    except SharePointReadError as exc:
+        return {"connected": True, "folder": folder, "files": [], "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001 — surface as empty, don't 500 the detail view
+        logger.warning("Live SharePoint listing failed for opp %s: %s", opportunity_id, exc)
+        return {"connected": True, "folder": folder, "files": [], "error": "Couldn't read the SharePoint folder just now."}
+    return {"connected": True, "folder": folder, "files": files}
+
+
 class SetDecisionRequest(BaseModel):
     decision: str  # "Bid" | "Watch" | "No-Bid"
 
@@ -116,9 +153,21 @@ def set_decision(
     if decision not in ("Bid", "Watch", "No-Bid"):
         raise HTTPException(status_code=400, detail="decision must be Bid, Watch, or No-Bid")
     crm = get_crm_store()
-    ok = crm.set_decision(opportunity_id, str(current_user["organization_id"]), decision)
+    organization_id = str(current_user["organization_id"])
+    ok = crm.set_decision(opportunity_id, organization_id, decision)
     if not ok:
         raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    # The moment an opportunity becomes a Bid, provision its SharePoint folder tree
+    # (idempotent + a graceful no-op if SharePoint isn't connected). Non-blocking.
+    if decision == "Bid":
+        try:
+            from tasks.sharepoint_tasks import provision_bid_folders_task
+
+            provision_bid_folders_task.delay(organization_id, opportunity_id)
+        except Exception as exc:  # noqa: BLE001 — never fail the decision on dispatch trouble
+            logger.warning("Could not dispatch Bid folder provisioning for %s: %s", opportunity_id, exc)
+
     return {"opportunity_id": opportunity_id, "bid_decision": decision, "overridden": True}
 
 

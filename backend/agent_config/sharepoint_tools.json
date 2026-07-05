@@ -1,21 +1,22 @@
 {
-  "share_point": {
+  "sharepoint_graph": {
     "oauth": {
-      "app": "SHAREPOINT",
-      "auth_config_id": "ac_yZpaj2ORI7Fx"
+      "app": "SHAREPOINT_GRAPH",
+      "auth_config_id": "ac_a66XcRBEkcNU"
     },
     "agent": {
-      "description": "Read-only SharePoint access for the Mail/Proposal agent — discover sites, browse document libraries and folders, search content, read files, and read list data to ground outreach and proposals in the company's real material.",
+      "description": "SharePoint access via Microsoft Graph for the Mail/Capture agent — discover sites, browse document libraries and folders, open/download a specific file BY ID, and read list data to ground outreach and proposals in the company's real material. Pair with the `search_sharepoint` graph tool: search FINDS the file and returns its drive_id + item id; pass those to GET_DRIVE_ITEM / DOWNLOAD_DRIVE_ITEM to OPEN/read it.",
       "actions": [
-        "SHARE_POINT_LIST_SITES",
-        "SHARE_POINT_LIST_DRIVES_REST_API",
-        "SHARE_POINT_LIST_DRIVE_CHILDREN",
-        "SHARE_POINT_SEARCH_QUERY",
-        "SHARE_POINT_GET_SITE_DRIVE_ITEM_BY_PATH",
-        "SHARE_POINT_DOWNLOAD_FILE_BY_SERVER_RELATIVE_URL",
-        "SHARE_POINT_LIST_ALL_LISTS",
-        "SHARE_POINT_LIST_LIST_COLUMNS",
-        "SHARE_POINT_GET_LIST_ITEMS_BY_GUID"
+        "SHAREPOINT_GRAPH_LIST_SITES",
+        "SHAREPOINT_GRAPH_LIST_SITE_DRIVES",
+        "SHAREPOINT_GRAPH_GET_DEFAULT_DRIVE",
+        "SHAREPOINT_GRAPH_LIST_DRIVE_ROOT_CHILDREN",
+        "SHAREPOINT_GRAPH_LIST_DRIVE_ITEM_CHILDREN",
+        "SHAREPOINT_GRAPH_GET_DRIVE_ITEM",
+        "SHAREPOINT_GRAPH_DOWNLOAD_DRIVE_ITEM",
+        "SHAREPOINT_GRAPH_LIST_LISTS",
+        "SHAREPOINT_GRAPH_LIST_LIST_COLUMNS",
+        "SHAREPOINT_GRAPH_LIST_LIST_ITEMS"
       ]
     }
   }

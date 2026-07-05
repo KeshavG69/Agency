@@ -8,6 +8,9 @@ import {
   setDecision,
   assignOpportunity,
   getDocUrl,
+  fetchOpportunitySharePointFiles,
+  type SharePointFile,
+  type SharePointFilesResponse,
   fetchCallPlan,
   setCallStatus,
   fetchCollisions,
@@ -20,8 +23,13 @@ import {
   connectOutlook,
   disconnectOutlook,
   syncOutlookContacts,
+  previewOutlookContacts,
+  ingestOutlookContacts,
+  type ContactCandidate,
   connectSharePoint,
+  connectSharePointRest,
   disconnectSharePoint,
+  getConnStatus,
   syncSharePointStructure,
   type Opportunity,
   type OutreachDraft,
@@ -30,9 +38,15 @@ import {
 } from "@/lib/data";
 import ContactsGraph from "./ContactsGraph";
 import SharePointGraph from "./SharePointGraph";
+import MailTriagePanel from "./MailTriage";
 import CalendarStrip, { toLocalIso } from "./CalendarStrip";
 import FilePreview from "./FilePreview";
 import AssignModal from "./AssignModal";
+import ContactReviewModal from "./ContactReviewModal";
+import TopBar, { type ViewKey } from "./TopBar";
+import BidSidebar from "./BidSidebar";
+import FilterBar, { type Facets, EMPTY_FACETS, activeFacetCount } from "./FilterBar";
+import { dueLabel } from "@/lib/format";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useConnectionStore } from "@/lib/stores/connectionStore";
 import { organizationsApi, type Organization } from "@/lib/api/organizations";
@@ -66,6 +80,7 @@ const fmtDate = (s?: string | null) => {
   if (isNaN(d.getTime())) return s;
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 };
+
 
 // Pipeline stages shown as the portfolio nav. "All" first.
 const FILTERS: { key: string; label: string; match: (o: Opportunity) => boolean }[] = [
@@ -119,6 +134,7 @@ function Console({ user }: { user: User }) {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
+  const [facets, setFacets] = useState<Facets>(EMPTY_FACETS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("info");
   const [pulling, setPulling] = useState(false);
@@ -136,14 +152,20 @@ function Console({ user }: { user: User }) {
   const outlookConnected = outlook.connected;
   const outlookAccount = outlook.accountId;
   const spConnected = sharepoint.connected;
-  const spAccount = sharepoint.accountId;
   const [connecting, setConnecting] = useState(false);
   const [spConnecting, setSpConnecting] = useState(false);
   const [resyncing, setResyncing] = useState(false);
   const [spResyncing, setSpResyncing] = useState(false);
-  const [view, setView] = useState<
-    "pipeline" | "callplan" | "contacts" | "documents" | "org"
-  >("pipeline");
+  // Bumped whenever a SharePoint sync starts (manual resync, or the post-connect OAuth
+  // landing) so the Library graph knows to start polling for the background crawl's
+  // result — the user shouldn't have to reload the page to see it appear.
+  const [spGraphRefresh, setSpGraphRefresh] = useState(0);
+  // Outlook contact-review dialog (pick which contacts to ingest).
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewContacts, setReviewContacts] = useState<ContactCandidate[]>([]);
+  const [view, setView] = useState<ViewKey>("dashboard");
 
   const load = useCallback(async () => {
     try {
@@ -162,6 +184,30 @@ function Console({ user }: { user: User }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Restore this user's saved filters (decision + facets) once on mount.
+  const filtersKey = `collecct:filters:${user.email}`;
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(filtersKey);
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (p.facets) setFacets({ ...EMPTY_FACETS, ...p.facets });
+        if (typeof p.filter === "string") setFilter(p.filter);
+      }
+    } catch {
+      /* ignore malformed cache */
+    }
+  }, [filtersKey]);
+
+  // Persist filters whenever they change.
+  useEffect(() => {
+    try {
+      localStorage.setItem(filtersKey, JSON.stringify({ facets, filter }));
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, [filtersKey, facets, filter]);
 
   // Keep non-admins out of the admin-only views (e.g. if demoted mid-session).
   useEffect(() => {
@@ -199,25 +245,53 @@ function Console({ user }: { user: User }) {
     }
   };
 
+  // "Connect Library" is ONE click but SharePoint is really two Composio connections
+  // chained back-to-back — Graph first (structure/ACL/write), then REST (exact
+  // site-group member emails, which Graph alone can't resolve). We check which stage
+  // still needs authorizing and start there; the oauth-callback page drives the rest
+  // of the chain automatically once the user returns from Microsoft.
   const onConnectSharePoint = async () => {
     setSpConnecting(true);
     try {
       sessionStorage.setItem("pendingProvider", "sharepoint");
-      const { auth_url } = await connectSharePoint(`${window.location.origin}/oauth-callback`);
-      window.location.href = auth_url; // Microsoft consent → /oauth-callback → structure sync
+      const graphStatus = await getConnStatus("sharepoint");
+      if (!graphStatus.connected) {
+        sessionStorage.setItem("spStage", "sharepoint");
+        const { auth_url } = await connectSharePoint(`${window.location.origin}/oauth-callback`);
+        window.location.href = auth_url;
+        return;
+      }
+      const restStatus = await getConnStatus("sharepoint_rest");
+      if (!restStatus.connected) {
+        sessionStorage.setItem("spStage", "sharepoint_rest");
+        const { auth_url } = await connectSharePointRest(`${window.location.origin}/oauth-callback`);
+        window.location.href = auth_url;
+        return;
+      }
+      // Both stages were already connected (e.g. a stale local cache) — nothing to do.
+      sessionStorage.removeItem("pendingProvider");
+      setConnection("sharepoint", true, graphStatus.connected_account_id ?? null);
+      setSpConnecting(false);
     } catch {
-      setError("Couldn't start the SharePoint connection — check COMPOSIO_SHAREPOINT_AUTH_CONFIG_ID.");
+      setError("Couldn't start the SharePoint connection — check the COMPOSIO_SHAREPOINT_* settings.");
       setSpConnecting(false);
     }
   };
 
   const onDisconnectSharePoint = async () => {
-    if (!spAccount) return;
     setSpConnecting(true);
     setError(null);
     try {
-      await disconnectSharePoint(spAccount);
+      const result = await disconnectSharePoint();
+      // Clear the local cache regardless — the next "Connect" click always re-checks the
+      // real backend status per stage, so this never causes a stage to be skipped. But if a
+      // stage's delete call itself errored, tell the admin rather than implying full success.
       setConnection("sharepoint", false, null);
+      if (result.failed.length > 0) {
+        setError(
+          `SharePoint disconnect was incomplete (${result.failed.join(", ")} still connected) — try again.`,
+        );
+      }
     } catch {
       setError("Couldn't disconnect SharePoint.");
     } finally {
@@ -239,19 +313,62 @@ function Console({ user }: { user: User }) {
     }
   };
 
-  // Resync this employee's Outlook contacts (background task).
-  const onResyncContacts = async () => {
+  // Open the contact-review dialog: fetch candidates (classified work/personal),
+  // let the user pick, then ingest only the selected ones. Used both right after
+  // connecting Outlook and on an explicit "Resync".
+  const openContactReview = useCallback(async () => {
+    setReviewOpen(true);
+    setReviewLoading(true);
+    setReviewError(null);
+    setReviewContacts([]);
+    try {
+      const { contacts } = await previewOutlookContacts();
+      setReviewContacts(contacts);
+    } catch {
+      setReviewError("Couldn't read your Outlook contacts. Make sure Outlook is connected, then retry.");
+    } finally {
+      setReviewLoading(false);
+    }
+  }, []);
+
+  const onResyncContacts = () => openContactReview();
+
+  // Confirm: enrich + graph only the selected contacts (background task).
+  const onConfirmContacts = async (selected: ContactCandidate[]) => {
+    setReviewOpen(false);
     setResyncing(true);
     setError(null);
     try {
-      await syncOutlookContacts();
-      setError("Contacts resync started — it runs in the background.");
+      await ingestOutlookContacts(selected);
+      setError(`Importing ${selected.length} contact${selected.length === 1 ? "" : "s"} — this runs in the background.`);
     } catch {
-      setError("Couldn't start the contacts resync.");
+      setError("Couldn't import the selected contacts.");
     } finally {
       setResyncing(false);
     }
   };
+
+  // Returning from the Outlook OAuth round-trip lands on /?review=outlook — open the
+  // review dialog automatically, then strip the param so a refresh doesn't re-open it.
+  // Landing on /?connected=sharepoint (after the Graph+REST OAuth chain) bumps
+  // spGraphRefresh so the Library graph starts polling for the background crawl's
+  // result automatically — the user shouldn't have to manually reload the page.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const p = new URLSearchParams(window.location.search);
+    if (p.get("review") === "outlook") {
+      openContactReview();
+    }
+    if (p.get("connected") === "sharepoint") {
+      setSpGraphRefresh((n) => n + 1);
+    }
+    if (p.has("review") || p.has("connected")) {
+      p.delete("review");
+      p.delete("connected");
+      const qs = p.toString();
+      window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    }
+  }, [openContactReview]);
 
   // Resync the org's SharePoint structure (admin; background task).
   const onResyncSharePoint = async () => {
@@ -260,6 +377,7 @@ function Console({ user }: { user: User }) {
     try {
       await syncSharePointStructure();
       setError("SharePoint resync started — it runs in the background.");
+      setSpGraphRefresh((n) => n + 1);
     } catch {
       setError("Couldn't start the SharePoint resync.");
     } finally {
@@ -271,6 +389,7 @@ function Console({ user }: { user: User }) {
     setPulling(true);
     setError(null);
     setPicked(new Set());
+    setView("pipeline"); // jump to the list so the incoming notices are actually visible
     const before = opps.length;
     try {
       await pullFromSam(1); // only TODAY's new still-open notices (fresh-per-day)
@@ -302,6 +421,21 @@ function Console({ user }: { user: User }) {
     });
   };
 
+  // Analyst core: send ids → poll until every one has a verdict. Shared by the
+  // pipeline "Analyze selected" action and the Dashboard "Analyze pending" action.
+  const analyzeIds = useCallback(
+    async (ids: string[]) => {
+      if (!ids.length) return;
+      await analyzeSelected(ids);
+      for (let i = 0; i < 60; i++) {
+        await sleep(4000);
+        const fresh = await load();
+        if (ids.every((id) => fresh.find((o) => o.id === id)?.bid_decision)) break;
+      }
+    },
+    [load],
+  );
+
   // Send only the hand-picked opportunities to the Analyst, then poll for their verdicts.
   const onAnalyzeSelected = async () => {
     const ids = [...picked];
@@ -309,18 +443,23 @@ function Console({ user }: { user: User }) {
     setAnalyzingSel(true);
     setError(null);
     try {
-      await analyzeSelected(ids);
-      for (let i = 0; i < 60; i++) {
-        await sleep(4000);
-        const fresh = await load();
-        if (ids.every((id) => fresh.find((o) => o.id === id)?.bid_decision)) break;
-      }
+      await analyzeIds(ids);
       setPicked(new Set());
     } catch {
       setError("Couldn't analyze the selected opportunities — is the backend + worker running?");
     } finally {
       setAnalyzingSel(false);
     }
+  };
+
+  // Jump from the Dashboard into an opportunity's detail in the Pipeline.
+  const openOpp = (id: string) => {
+    setSelectedId(id);
+    setTab("info");
+    setFilter("all");
+    setFacets(EMPTY_FACETS); // clear filters so the opened pursuit is actually in the list
+    setViewingDate(null);
+    setView("pipeline");
   };
 
   // Human override of the Analyst verdict (Bid / Watch / No-Bid).
@@ -406,14 +545,50 @@ function Console({ user }: { user: User }) {
     return c;
   }, [opps]);
 
-  // Everything matching the active status filter + search, BEFORE the calendar-day filter.
-  // The calendar dots derive from this so a dot only shows on days that actually have
-  // opportunities in the current view — clicking a dotted day always shows results.
+  // The Bid pursuits shown in the left sidebar (always visible).
+  const bidOpps = useMemo(() => opps.filter((o) => o.bid_decision === "Bid"), [opps]);
+
+  // Distinct facet values for the filter pickers (derived from the loaded opps).
+  const facetOptions = useMemo(() => {
+    const uniq = (arr: (string | undefined | null)[]) =>
+      [...new Set(arr.filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b));
+    return {
+      agencies: uniq(opps.map((o) => o.agency)),
+      naics: uniq(opps.map((o) => o.naics)),
+      setAsides: uniq(opps.map((o) => o.set_aside)),
+    };
+  }, [opps]);
+
+  // Everything matching the active status filter + facets + search, BEFORE the
+  // calendar-day filter. The calendar dots derive from this so a dot only shows on
+  // days that actually have opportunities in the current view.
   const dayPool = useMemo(() => {
     const f = FILTERS.find((x) => x.key === filter) ?? FILTERS[0];
     const q = query.trim().toLowerCase();
+    const inValue = (v?: number | null) => {
+      switch (facets.value) {
+        case "lt1m":
+          return v != null && v < 1_000_000;
+        case "1to10m":
+          return v != null && v >= 1_000_000 && v <= 10_000_000;
+        case "gt10m":
+          return v != null && v > 10_000_000;
+        default:
+          return true;
+      }
+    };
+    const inDue = (s?: string | null) => {
+      if (facets.due === "any") return true;
+      const d = dueLabel(s).days;
+      return d != null && d >= 0 && d <= Number(facets.due);
+    };
     return opps
       .filter(f.match)
+      .filter((o) => facets.agencies.length === 0 || (!!o.agency && facets.agencies.includes(o.agency)))
+      .filter((o) => facets.naics.length === 0 || (!!o.naics && facets.naics.includes(o.naics)))
+      .filter((o) => facets.setAsides.length === 0 || (!!o.set_aside && facets.setAsides.includes(o.set_aside)))
+      .filter((o) => inValue(o.estimated_value))
+      .filter((o) => inDue(o.response_deadline))
       .filter(
         (o) =>
           !q ||
@@ -421,7 +596,7 @@ function Console({ user }: { user: User }) {
           (o.agency ?? "").toLowerCase().includes(q) ||
           (o.solicitation_number ?? "").toLowerCase().includes(q),
       );
-  }, [opps, filter, query]);
+  }, [opps, filter, query, facets]);
 
   const availableDates = useMemo(
     () => [...new Set(dayPool.map((o) => o.posted_date).filter(Boolean) as string[])],
@@ -434,203 +609,82 @@ function Console({ user }: { user: User }) {
   );
 
   const selected = opps.find((o) => o.id === selectedId) ?? null;
-  const toPursue = counts["Bid"] ?? 0;
-
   return (
     <main className="console">
-      {/* ---------------- command rail ---------------- */}
-      <aside className="rail">
-        <div className="brand">
-          <div className="word">
-            Collecct<span className="dot">.</span>
-          </div>
-          <div className="sub">Capture Operations</div>
-        </div>
-
-        <nav className="nav">
-          <div className="nav-label">Views</div>
-          <button
-            className={`nav-item ${view === "pipeline" ? "on" : ""}`}
-            onClick={() => setView("pipeline")}
-          >
-            <span className="ico" />
-            <span className="nm">Pipeline</span>
-          </button>
-          <button
-            className={`nav-item ${view === "callplan" ? "on" : ""}`}
-            onClick={() => setView("callplan")}
-          >
-            <span className="ico" />
-            <span className="nm">Call Plan</span>
-          </button>
-          {/* Contacts is per-employee (everyone syncs their own). Library + Organisation are admin-only. */}
-          <button
-            className={`nav-item ${view === "contacts" ? "on" : ""}`}
-            onClick={() => setView("contacts")}
-          >
-            <span className="ico" />
-            <span className="nm">Contacts</span>
-          </button>
-          {isAdmin && (
-            <>
-              <button
-                className={`nav-item ${view === "documents" ? "on" : ""}`}
-                onClick={() => setView("documents")}
-              >
-                <span className="ico" />
-                <span className="nm">Library</span>
-              </button>
-              <button
-                className={`nav-item ${view === "org" ? "on" : ""}`}
-                onClick={() => setView("org")}
-              >
-                <span className="ico" />
-                <span className="nm">Organisation</span>
-              </button>
-            </>
-          )}
-
-          {view === "pipeline" && (
-            <>
-              <div className="nav-label">Portfolio</div>
-              {FILTERS.map((f) => (
-                <button
-                  key={f.key}
-                  className={`nav-item ${filter === f.key ? "on" : ""}`}
-                  onClick={() => setFilter(f.key)}
-                >
-                  <span className="ico" />
-                  <span className="nm">{f.label}</span>
-                  <span className="ct">{counts[f.key] ?? 0}</span>
-                </button>
-              ))}
-            </>
-          )}
-        </nav>
-
-        <div className="rail-foot">
-          <div
-            className="user-row"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              marginBottom: 12,
-              paddingBottom: 12,
-              borderBottom: "1px solid var(--rail-line, rgba(255,255,255,0.08))",
-            }}
-          >
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div
-                className="nm"
-                style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-              >
-                {user.firstName} {user.lastName}
-              </div>
-              <div style={{ fontSize: 11, color: "var(--rail-muted, var(--muted))", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                {isAdmin ? "Admin" : "Member"}
-              </div>
-            </div>
-            <button className="disconnect-link" onClick={onSignOut} title="Sign out">
-              Sign out
-            </button>
-          </div>
-          <div className="rail-stats">
-            <div className="rstat">
-              <div className="n">{opps.length}</div>
-              <div className="l">Pipeline</div>
-            </div>
-            <div className="rstat">
-              <div className="n">{toPursue}</div>
-              <div className="l">To pursue</div>
-            </div>
-          </div>
-          {outlookConnected ? (
-            <div className="outlook-row">
-              <span className="pri-dot" style={{ background: "var(--bid)" }} />
-              <span className="nm">Contacts connected (Outlook)</span>
-              <button className="disconnect-link" onClick={onResyncContacts} disabled={resyncing}>
-                {resyncing ? "…" : "Resync"}
-              </button>
-              <button className="disconnect-link" onClick={onDisconnectOutlook} disabled={connecting}>
-                {connecting ? "…" : "Disconnect"}
-              </button>
-            </div>
-          ) : (
-            <button
-              className="nav-item"
-              onClick={onConnectOutlook}
-              disabled={connecting}
-              style={{ marginBottom: 10, width: "100%", justifyContent: "flex-start" }}
-            >
-              <span className="pri-dot" style={{ background: "var(--rail-faint)" }} />
-              <span className="nm">{connecting ? "Opening Microsoft…" : "Connect your Contacts (Outlook)"}</span>
-            </button>
-          )}
-          {/* SharePoint is an org-wide connection — only admins can connect it. */}
-          {isAdmin &&
-            (spConnected ? (
-              <div className="outlook-row">
-                <span className="pri-dot" style={{ background: "var(--bid)" }} />
-                <span className="nm">Library connected (SharePoint)</span>
-                <button className="disconnect-link" onClick={onResyncSharePoint} disabled={spResyncing}>
-                  {spResyncing ? "…" : "Resync"}
-                </button>
-                <button className="disconnect-link" onClick={onDisconnectSharePoint} disabled={spConnecting}>
-                  {spConnecting ? "…" : "Disconnect"}
-                </button>
-              </div>
-            ) : (
-              <button
-                className="nav-item"
-                onClick={onConnectSharePoint}
-                disabled={spConnecting}
-                style={{ marginBottom: 10, width: "100%", justifyContent: "flex-start" }}
-              >
-                <span className="pri-dot" style={{ background: "var(--rail-faint)" }} />
-                <span className="nm">{spConnecting ? "Opening Microsoft…" : "Connect your Library (SharePoint)"}</span>
-              </button>
-            ))}
-          <button
-            className="upload-btn sam-btn"
-            onClick={onPullSam}
-            disabled={pulling}
-            title="Fetch today's open SAM.gov notices matching your company's NAICS"
-          >
-            {pulling ? (
-              <>
-                <span className="spin" /> Pulling from SAM.gov…
-              </>
-            ) : (
-              <>⟳ Pull from SAM.gov</>
-            )}
-          </button>
-        </div>
-      </aside>
-
-      {view === "callplan" ? (
+      <TopBar
+        user={user}
+        isAdmin={isAdmin}
+        view={view}
+        onNavigate={setView}
+        onPull={onPullSam}
+        pulling={pulling}
+        onSignOut={onSignOut}
+      />
+      <div className="workspace">
+        <BidSidebar bids={bidOpps} selectedId={selectedId} onOpen={openOpp} />
+        <div className="main">
+      {view === "dashboard" ? (
+        <section className="graph-pane">
+          <DashboardView opps={opps} loading={loading} onOpen={openOpp} />
+        </section>
+      ) : view === "callplan" ? (
         <section className="graph-pane">
           <CallPlanView />
         </section>
       ) : view === "contacts" ? (
         <section className="graph-pane">
+          <ConnectBar
+            connected={outlookConnected}
+            connectedLabel="Contacts connected (Outlook)"
+            connectLabel="Connect your Contacts (Outlook)"
+            hint="Syncs your Outlook address book + email correspondents into your private contact graph."
+            busy={connecting}
+            resyncing={resyncing}
+            onConnect={onConnectOutlook}
+            onDisconnect={onDisconnectOutlook}
+            onResync={onResyncContacts}
+          />
           <ContactsGraph />
         </section>
       ) : view === "documents" ? (
         <section className="graph-pane">
-          <SharePointGraph />
+          {isAdmin && (
+            <ConnectBar
+              connected={spConnected}
+              connectedLabel="Library connected (SharePoint)"
+              connectLabel="Connect your Library (SharePoint)"
+              hint="Org-wide. Crawls your SharePoint document structure so agents can ground on your library. Microsoft will show two sign-in confirmations back-to-back (one click here starts both)."
+              busy={spConnecting}
+              resyncing={spResyncing}
+              onConnect={onConnectSharePoint}
+              onDisconnect={onDisconnectSharePoint}
+              onResync={onResyncSharePoint}
+            />
+          )}
+          <SharePointGraph refreshSignal={spGraphRefresh} />
         </section>
       ) : view === "org" ? (
         <section className="graph-pane">
           <OrgPanel meEmail={user.email} />
         </section>
       ) : (
-        <>
+        <div className="pipeline">
+          <FilterBar
+            filters={FILTERS.map((f) => ({ key: f.key, label: f.label }))}
+            filter={filter}
+            onFilter={setFilter}
+            counts={counts}
+            facets={facets}
+            onFacets={setFacets}
+            options={facetOptions}
+            onClear={() => setFacets(EMPTY_FACETS)}
+          />
+          <div className="pipeline-panes">
       {/* ---------------- master list ---------------- */}
       <section className="list">
         <div className="list-head">
           <h2>
-            {FILTERS.find((f) => f.key === filter)?.label}
+            Opportunities
             <span className="c">{visible.length}</span>
           </h2>
           <input
@@ -680,11 +734,20 @@ function Console({ user }: { user: User }) {
           {loading && <div style={{ padding: 24, color: "var(--faint)" }}>Loading…</div>}
           {!loading && visible.length === 0 && (
             <div style={{ padding: 24, color: "var(--faint)", fontSize: 13 }}>
-              {opps.length === 0
-                ? "No opportunities yet — pull from SAM.gov or upload an Excel to begin."
-                : viewingDate
-                  ? `No fresh opportunities posted on ${fmtDate(viewingDate)}.`
-                  : "Nothing in this view."}
+              {opps.length === 0 ? (
+                "No opportunities yet — pull from SAM.gov or upload an Excel to begin."
+              ) : viewingDate ? (
+                `No fresh opportunities posted on ${fmtDate(viewingDate)}.`
+              ) : activeFacetCount(facets) > 0 ? (
+                <>
+                  No opportunities match your filters.{" "}
+                  <button className="sel-link" onClick={() => setFacets(EMPTY_FACETS)}>
+                    Clear filters
+                  </button>
+                </>
+              ) : (
+                "Nothing in this view."
+              )}
             </div>
           )}
           {visible.map((o, i) => (
@@ -758,11 +821,342 @@ function Console({ user }: { user: User }) {
           />
         )}
       </section>
-        </>
+          </div>
+        </div>
+      )}
+        </div>
+      </div>
+
+      {reviewOpen && (
+        <ContactReviewModal
+          contacts={reviewContacts}
+          loading={reviewLoading}
+          error={reviewError}
+          onConfirm={onConfirmContacts}
+          onClose={() => setReviewOpen(false)}
+        />
       )}
 
       {error && <div className="toast">{error}</div>}
     </main>
+  );
+}
+
+// A connect / disconnect / resync strip shown at the top of the Contacts and
+// Library sections (the connection lives WHERE its data lives, not in the nav).
+function ConnectBar({
+  connected,
+  connectedLabel,
+  connectLabel,
+  hint,
+  busy,
+  resyncing,
+  onConnect,
+  onDisconnect,
+  onResync,
+}: {
+  connected: boolean;
+  connectedLabel: string;
+  connectLabel: string;
+  hint: string;
+  busy: boolean;
+  resyncing: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onResync: () => void;
+}) {
+  return (
+    <div className={`connect-bar ${connected ? "on" : ""}`}>
+      <span className="cb-dot" />
+      <div className="cb-text">
+        <div className="cb-title">{connected ? connectedLabel : connectLabel}</div>
+        <div className="cb-hint">{hint}</div>
+      </div>
+      {connected ? (
+        <div className="cb-actions">
+          <button className="mini-btn" onClick={onResync} disabled={resyncing}>
+            {resyncing ? "Refreshing…" : "Refresh"}
+          </button>
+          <button className="sel-link" onClick={onDisconnect} disabled={busy}>
+            {busy ? "…" : "Disconnect"}
+          </button>
+        </div>
+      ) : (
+        <div className="cb-actions">
+          <button className="mini-btn" onClick={onConnect} disabled={busy}>
+            {busy ? "Opening Microsoft…" : "Connect"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The Dashboard: an at-a-glance view of the pipeline — what's pending, what's
+// done, what's in pursuit — plus a due-date agenda (keyed on the response
+// deadline, with human-relative labels like "Due tomorrow" / "Due Aug 2028").
+function DashboardView({
+  opps,
+  loading,
+  onOpen,
+}: {
+  opps: Opportunity[];
+  loading: boolean;
+  onOpen: (id: string) => void;
+}) {
+  // Dashboard shows ONLY the opportunities marked Bid (your active pursuits).
+  const bids = useMemo(() => opps.filter((o) => o.bid_decision === "Bid"), [opps]);
+
+  // Deadline agenda over the bids, soonest first. Overdue is excluded entirely;
+  // bids without a deadline fall into their own group so they're never hidden.
+  const agenda = useMemo(() => {
+    const rows = bids
+      .map((o) => ({ o, due: dueLabel(o.response_deadline) }))
+      .filter((r) => r.due.days == null || (r.due.days ?? 0) >= 0) // drop overdue
+      .sort((a, b) => (a.due.days ?? Infinity) - (b.due.days ?? Infinity));
+    const inRange = (r: (typeof rows)[number], lo: number, hi: number) =>
+      r.due.days != null && r.due.days >= lo && r.due.days <= hi;
+    const groups: { key: string; label: string; rows: typeof rows }[] = [
+      { key: "week", label: "Due this week", rows: rows.filter((r) => inRange(r, 0, 7)) },
+      { key: "month", label: "Due this month", rows: rows.filter((r) => inRange(r, 8, 31)) },
+      { key: "later", label: "Due later", rows: rows.filter((r) => (r.due.days ?? -1) > 31) },
+      { key: "none", label: "No deadline", rows: rows.filter((r) => r.due.days == null) },
+    ];
+    return groups.filter((g) => g.rows.length > 0);
+  }, [bids]);
+
+  const dueThisWeek = useMemo(
+    () =>
+      bids.filter((o) => {
+        const d = dueLabel(o.response_deadline).days;
+        return d != null && d >= 0 && d <= 7;
+      }).length,
+    [bids],
+  );
+  const capturedBids = useMemo(() => bids.filter((o) => !!o.captured_at).length, [bids]);
+
+  // Calendar day the user clicked (YYYY-MM-DD, local) — filters the right-hand panel.
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const selectedDayBids = useMemo(
+    () =>
+      !selectedDay
+        ? []
+        : bids.filter((o) => {
+            if (!o.response_deadline) return false;
+            const d = new Date(o.response_deadline);
+            if (isNaN(d.getTime())) return false;
+            return toLocalIso(new Date(d.getFullYear(), d.getMonth(), d.getDate())) === selectedDay;
+          }),
+    [bids, selectedDay],
+  );
+
+  const stats: { label: string; value: number; tone?: string }[] = [
+    { label: "Active pursuits", value: bids.length, tone: "bid" },
+    { label: "Captured", value: capturedBids, tone: "bid" },
+    { label: "Due this week", value: dueThisWeek, tone: dueThisWeek > 0 ? "watch" : "" },
+  ];
+
+  // id -> title, for the mail-triage cards to show which pursuit an incoming mail belongs to.
+  const opportunityTitles = useMemo(
+    () => Object.fromEntries(opps.map((o) => [o.id, o.title])),
+    [opps],
+  );
+
+  return (
+    <div className="dash">
+      <div className="dash-head">
+        <div>
+          <h1>Dashboard</h1>
+          <div className="dash-sub">
+            Your active pursuits — opportunities marked <b>Bid</b>, by deadline.
+          </div>
+        </div>
+      </div>
+
+      <div className="dash-stats dash-stats-3">
+        {stats.map((s) => (
+          <div className="dash-stat" key={s.label}>
+            <div className={`ds-n ${s.tone ?? ""}`}>{s.value}</div>
+            <div className="ds-l">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <MailTriagePanel opportunityTitles={opportunityTitles} onOpenOpportunity={onOpen} />
+
+      <div className="dash-cal2">
+        <DashCalendar bids={bids} selectedDay={selectedDay} onSelectDay={setSelectedDay} />
+
+        <div className="dash-col">
+          {selectedDay ? (
+            <>
+              <div className="dash-col-head">
+                <span>Due {fmtDate(selectedDay)}</span>
+                <button className="sel-link" onClick={() => setSelectedDay(null)}>
+                  Clear
+                </button>
+              </div>
+              {selectedDayBids.length === 0 ? (
+                <div className="dash-empty">No active pursuits due this day.</div>
+              ) : (
+                <div className="dash-agenda">
+                  {selectedDayBids.map((o) => (
+                    <button className="dash-row" key={o.id} onClick={() => onOpen(o.id)}>
+                      <div className="dr-main">
+                        <div className="dr-title">{o.title}</div>
+                        <div className="dr-sub">{o.agency ?? "—"}</div>
+                      </div>
+                      <span className={`due-chip ${dueLabel(o.response_deadline).tone}`}>
+                        {dueLabel(o.response_deadline).text}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="dash-col-head">
+                <span>Active pursuits · by deadline</span>
+              </div>
+              {loading ? (
+                <div className="dash-empty">Loading…</div>
+              ) : bids.length === 0 ? (
+                <div className="dash-empty">
+                  No active pursuits yet. Mark an opportunity <b>Bid</b> to see it here.
+                </div>
+              ) : agenda.length === 0 ? (
+                <div className="dash-empty">No upcoming deadlines on your active pursuits.</div>
+              ) : (
+                <div className="dash-agenda">
+                  {agenda.map((g) => (
+                    <div className="agenda-group" key={g.key}>
+                      <div className={`agenda-label ${g.key}`}>
+                        {g.label} <span className="c">{g.rows.length}</span>
+                      </div>
+                      {g.rows.map(({ o, due }) => (
+                        <button className="dash-row" key={o.id} onClick={() => onOpen(o.id)}>
+                          <div className="dr-main">
+                            <div className="dr-title">{o.title}</div>
+                            <div className="dr-sub">{o.agency ?? "—"}</div>
+                          </div>
+                          <span className={`due-chip ${due.tone}`}>{due.text}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Month calendar for the Dashboard — marks the days that have Bid opportunities due
+// (today-or-future only; overdue is never marked). Clicking a marked day selects it.
+function DashCalendar({
+  bids,
+  selectedDay,
+  onSelectDay,
+}: {
+  bids: Opportunity[];
+  selectedDay: string | null;
+  onSelectDay: (iso: string | null) => void;
+}) {
+  const [cursor, setCursor] = useState(() => {
+    const t = new Date();
+    return { y: t.getFullYear(), m: t.getMonth() };
+  });
+
+  // iso-day -> count of bids due that day (drop overdue).
+  const byDay = useMemo(() => {
+    const map = new Map<string, number>();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    for (const o of bids) {
+      if (!o.response_deadline) continue;
+      const d = new Date(o.response_deadline);
+      if (isNaN(d.getTime())) continue;
+      const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      if (day.getTime() < today.getTime()) continue; // no overdue
+      const iso = toLocalIso(day);
+      map.set(iso, (map.get(iso) ?? 0) + 1);
+    }
+    return map;
+  }, [bids]);
+
+  // 6-week grid (42 cells) starting on the Sunday on/before the 1st.
+  const cells = useMemo(() => {
+    const first = new Date(cursor.y, cursor.m, 1);
+    const start = new Date(cursor.y, cursor.m, 1 - first.getDay());
+    return Array.from({ length: 42 }, (_, i) =>
+      new Date(start.getFullYear(), start.getMonth(), start.getDate() + i),
+    );
+  }, [cursor]);
+
+  const todayIso = toLocalIso(new Date());
+  const monthLabel = new Date(cursor.y, cursor.m, 1).toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+  const step = (delta: number) =>
+    setCursor((c) => {
+      const m = c.m + delta;
+      if (m < 0) return { y: c.y - 1, m: 11 };
+      if (m > 11) return { y: c.y + 1, m: 0 };
+      return { y: c.y, m };
+    });
+
+  return (
+    <div className="dash-cal">
+      <div className="dcal-head">
+        <button className="dcal-nav" onClick={() => step(-1)} aria-label="Previous month">
+          ‹
+        </button>
+        <div className="dcal-month">{monthLabel}</div>
+        <button className="dcal-nav" onClick={() => step(1)} aria-label="Next month">
+          ›
+        </button>
+        <button
+          className="dcal-today"
+          onClick={() => {
+            const t = new Date();
+            setCursor({ y: t.getFullYear(), m: t.getMonth() });
+          }}
+        >
+          Today
+        </button>
+      </div>
+      <div className="dcal-grid">
+        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((w) => (
+          <div className="dcal-wd" key={w}>
+            {w}
+          </div>
+        ))}
+        {cells.map((d, i) => {
+          const iso = toLocalIso(d);
+          const count = byDay.get(iso) ?? 0;
+          const inMonth = d.getMonth() === cursor.m;
+          return (
+            <button
+              key={i}
+              className={`dcal-day ${inMonth ? "" : "muted"} ${count ? "has" : ""} ${
+                iso === todayIso ? "today" : ""
+              } ${iso === selectedDay ? "sel" : ""}`}
+              onClick={() => (count ? onSelectDay(iso === selectedDay ? null : iso) : undefined)}
+              disabled={!count}
+              title={count ? `${count} due` : undefined}
+            >
+              <span className="dcal-num">{d.getDate()}</span>
+              {count > 0 && <span className="dcal-dot">{count}</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -1140,12 +1534,16 @@ function ContactsTab({
   const drafted = !!opp.outreach_drafted_at;
   const emailable = relevant.filter((c) => c.email).length;
 
-  // Collision check: which contacts a teammate is already engaging.
+  // Collision check: which contacts a teammate is already engaging. Keyed on the
+  // actual contact emails (not just opp.id) so it refetches when a background reload
+  // repopulates recommended_contacts for the same opportunity (e.g. during capture).
   const [collisions, setCollisions] = useState<Record<string, CollisionItem[]>>({});
+  const contactEmailsKey = (opp.recommended_contacts ?? [])
+    .map((c) => c.email)
+    .filter(Boolean)
+    .join(",");
   useEffect(() => {
-    const emails = (opp.recommended_contacts ?? [])
-      .map((c) => c.email)
-      .filter(Boolean) as string[];
+    const emails = contactEmailsKey ? contactEmailsKey.split(",") : [];
     if (!emails.length) {
       setCollisions({});
       return;
@@ -1157,7 +1555,7 @@ function ContactsTab({
     return () => {
       alive = false;
     };
-  }, [opp.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [contactEmailsKey]);
   return (
     <>
       <div className="sec-title first sec-row">
@@ -1390,57 +1788,168 @@ function MailArtifact({
   );
 }
 
+// Fixed order for the Bid subfolders when grouping the live SharePoint listing.
+const SP_SUBFOLDER_ORDER = ["Solicitation", "Capture Docs", "Resources", "Response"];
+const fileSize = (n?: number) =>
+  n == null ? "" : n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+
 function DocumentsTab({ opp }: { opp: Opportunity }) {
   const docs = opp.documents ?? [];
+  const sp = opp.sharepoint_folder ?? null;
   const [preview, setPreview] = useState<DocItem | null>(null);
-  if (docs.length === 0) {
-    return (
-      <div className="empty-tab">
-        <div className="et-t">No documents yet</div>
-        Approve this opportunity for capture to generate the capture plan and customer
-        deliverables.
-      </div>
-    );
-  }
-  return (
+
+  // The read half of two-way sync: pull the Bid folder's LIVE contents so a file a human
+  // dropped into SharePoint appears here without any re-upload. Refetched per opportunity.
+  const [spResp, setSpResp] = useState<SharePointFilesResponse | null>(null);
+  const [spLoading, setSpLoading] = useState(false);
+  useEffect(() => {
+    if (!sp) {
+      setSpResp(null);
+      return;
+    }
+    let alive = true;
+    setSpResp(null); // clear the previous bid's files immediately so they don't bleed across a switch
+    setSpLoading(true);
+    fetchOpportunitySharePointFiles(opp.id)
+      .then((r) => alive && setSpResp(r))
+      .catch(
+        () =>
+          alive &&
+          setSpResp({ connected: true, files: [], error: "Couldn't read the SharePoint folder just now." }),
+      )
+      .finally(() => alive && setSpLoading(false));
+    return () => {
+      alive = false;
+    };
+    // Keyed on the folder id (a primitive) — `sp` is a fresh object on every poll-driven
+    // reload, so depending on it would refetch needlessly.
+  }, [opp.id, sp?.folder_id]);
+  const spFiles = spResp?.files ?? null;
+  const spError = spResp?.error ?? null;
+
+  // Group the live files by subfolder, in the canonical order.
+  const grouped = (() => {
+    const by: Record<string, SharePointFile[]> = {};
+    for (const f of spFiles ?? []) (by[f.subfolder] ??= []).push(f);
+    const names = [
+      ...SP_SUBFOLDER_ORDER.filter((n) => by[n]),
+      ...Object.keys(by).filter((n) => !SP_SUBFOLDER_ORDER.includes(n)),
+    ];
+    return names.map((n) => ({ name: n, files: by[n] }));
+  })();
+
+  const spCard = sp?.web_url ? (
     <>
-      <div className="sec-title first">Generated documents</div>
-      <div className="card-list">
-        {docs.map((d, i) => (
-          <button
-            className="rec rec-doc"
-            key={i}
-            onClick={() => setPreview(d)}
-            title="Preview"
-          >
-            <div className="rec-top">
-              <div>
-                <span className="doc-type">{d.type.replace(/_/g, " ")}</span>
-                <div className="rec-name" style={{ marginTop: 4 }}>
-                  {d.title}
+      <div className="sec-title first">Bid workspace · SharePoint</div>
+      <div className="sp-folder">
+        <div className="sp-folder-top">
+          <div className="sp-folder-name">📁 {sp.name}</div>
+          <a className="sp-open" href={sp.web_url} target="_blank" rel="noreferrer">
+            Open in SharePoint ↗
+          </a>
+        </div>
+        {/* Live folder contents, grouped by subfolder. Includes agent-written deliverables
+            AND anything a person dropped straight into SharePoint. */}
+        {spLoading && spResp === null ? (
+          <div className="sp-files-empty">Reading the SharePoint folder…</div>
+        ) : spError ? (
+          <div className="sp-files-empty sp-files-error">{spError}</div>
+        ) : grouped.length === 0 ? (
+          <div className="sp-files-empty">
+            Folder is empty. Files added here — by the capture agents or by anyone in SharePoint —
+            show up automatically.
+          </div>
+        ) : (
+          <div className="sp-groups">
+            {grouped.map((g) => (
+              <div className="sp-group" key={g.name}>
+                <div className="sp-group-head">
+                  <span className="sp-sub">{g.name}</span>
+                  <span className="sp-group-ct">{g.files.length}</span>
+                </div>
+                <div className="sp-file-list">
+                  {g.files.map((f) => (
+                    <a
+                      key={f.id ?? f.name}
+                      className="sp-file"
+                      // Files → open in Office-for-the-web edit mode (autosaves back to
+                      // SharePoint); folders → just open in SharePoint.
+                      href={
+                        (f.is_folder ? f.web_url : f.edit_url ?? f.web_url) ?? sp.web_url ?? "#"
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <span className="sp-file-ico">{f.is_folder ? "📁" : "📄"}</span>
+                      <span className="sp-file-name">{f.name}</span>
+                      {!f.is_folder && f.size != null && (
+                        <span className="sp-file-size">{fileSize(f.size)}</span>
+                      )}
+                      <span className="sp-file-open">{f.is_folder ? "Open ↗" : "Edit ↗"}</span>
+                    </a>
+                  ))}
                 </div>
               </div>
-              <div className="doc-actions">
-                <span className="doc-preview-link">Preview</span>
-                <a
-                  href="#"
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    try {
-                      window.open(await getDocUrl(d.id), "_blank", "noopener");
-                    } catch {
-                      /* ignore — preview still works */
-                    }
-                  }}
-                >
-                  Open ↗
-                </a>
-              </div>
-            </div>
-          </button>
-        ))}
+            ))}
+          </div>
+        )}
       </div>
+    </>
+  ) : null;
+
+  return (
+    <>
+      {spCard}
+      {docs.length === 0 ? (
+        // With a SharePoint card already showing the live folder, skip the big empty block.
+        spCard ? null : (
+          <div className="empty-tab">
+            <div className="et-t">No documents yet</div>
+            Approve this opportunity for capture to generate the capture plan and customer
+            deliverables.
+          </div>
+        )
+      ) : (
+        <>
+          <div className={`sec-title ${spCard ? "" : "first"}`}>Generated documents · preview</div>
+          <div className="card-list">
+            {docs.map((d, i) => (
+              <button
+                className="rec rec-doc"
+                key={i}
+                onClick={() => setPreview(d)}
+                title="Preview"
+              >
+                <div className="rec-top">
+                  <div>
+                    <span className="doc-type">{d.type.replace(/_/g, " ")}</span>
+                    <div className="rec-name" style={{ marginTop: 4 }}>
+                      {d.title}
+                    </div>
+                  </div>
+                  <div className="doc-actions">
+                    <span className="doc-preview-link">Preview</span>
+                    <a
+                      href="#"
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        try {
+                          window.open(await getDocUrl(d.id), "_blank", "noopener");
+                        } catch {
+                          /* ignore — preview still works */
+                        }
+                      }}
+                    >
+                      Open ↗
+                    </a>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       {preview && (
         <FilePreview
           documentId={preview.id}

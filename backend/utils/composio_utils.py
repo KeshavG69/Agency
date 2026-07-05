@@ -55,7 +55,10 @@ def get_tools(actions: List[str], user_id: str) -> list:
 
 
 # Some providers' Composio toolkit slug differs from the name we use in the app.
-_TOOLKIT_SLUG = {"sharepoint": "share_point"}
+# SharePoint is TWO chained connections: Graph (structure/ACL/write) + REST (site-group
+# member emails — see sharepoint_graph_client module docstring). "sharepoint_rest" is the
+# second stage's provider key, used only by the connect/status endpoints during chaining.
+_TOOLKIT_SLUG = {"sharepoint": "sharepoint_graph", "sharepoint_rest": "share_point"}
 
 
 def _toolkit_slug(provider: str) -> str:
@@ -364,3 +367,151 @@ def fetch_outlook_network(user_id: str, per_folder: int = 200) -> list[dict]:
         user_id, len(by_email) - added, added, len(merged),
     )
     return merged
+
+
+# Consumer / free mailbox providers — an address on one of these reads as a PERSONAL
+# contact. Anything else (corporate, .gov, .mil, .edu, an org's own domain) is WORK.
+FREE_EMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "rocketmail.com",
+    "hotmail.com", "outlook.com", "live.com", "msn.com", "hotmail.co.uk",
+    "icloud.com", "me.com", "mac.com", "aol.com", "aim.com",
+    "proton.me", "protonmail.com", "pm.me", "gmx.com", "gmx.net", "mail.com",
+    "zoho.com", "yandex.com", "hey.com", "fastmail.com", "tutanota.com",
+    "comcast.net", "verizon.net", "att.net", "sbcglobal.net", "cox.net",
+    "bellsouth.net", "charter.net", "ymail.co.uk", "yahoo.co.uk", "yahoo.co.in",
+}
+
+
+def classify_contact(contact: dict) -> str:
+    """"work" | "personal" for one contact, by its email domain (free provider -> personal)."""
+    domain = (contact.get("domain") or (contact.get("email", "").split("@", 1)[-1])).lower()
+    return "personal" if domain in FREE_EMAIL_DOMAINS else "work"
+
+
+def classify_network(contacts: list[dict]) -> list[dict]:
+    """Annotate each contact with a `category` ("work"/"personal") for the review dialog."""
+    return [{**c, "category": classify_contact(c)} for c in contacts]
+
+
+# --- mail triage: trigger lifecycle + message read/reply ---------------------
+
+MAIL_TRIAGE_TRIGGER_SLUG = "OUTLOOK_MESSAGE_TRIGGER"
+
+
+def ensure_outlook_message_trigger(connected_account_id: str) -> Optional[str]:
+    """Idempotently ensure an OUTLOOK_MESSAGE_TRIGGER exists for this connected Outlook
+    account — a real-time webhook Composio fires on every new inbound message, powering
+    mail triage. Best-effort: returns the trigger id, or None if it couldn't be set up.
+    NEVER raises — connecting Outlook must never fail just because trigger setup hiccups.
+
+    This is called on every manual Refresh (not just fresh connect), so it also SELF-HEALS
+    duplicates: the list-then-create check isn't atomic (two overlapping calls can both see
+    zero active triggers and both create one), so if more than one active trigger is ever
+    found, all but one are deleted here rather than left to accumulate indefinitely."""
+    client = get_composio_client()
+    try:
+        active = client.triggers.list_active(
+            trigger_names=[MAIL_TRIAGE_TRIGGER_SLUG],
+            connected_account_ids=[connected_account_id],
+            show_disabled=False,
+        )
+        live = [item for item in active.items if getattr(item, "disabled_at", None) is None]
+        if live:
+            keep, *dupes = live
+            for dupe in dupes:
+                try:
+                    client.triggers.delete(dupe.id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Failed deleting duplicate trigger %s: %s", dupe.id, exc)
+            return keep.id
+        created = client.triggers.create(
+            slug=MAIL_TRIAGE_TRIGGER_SLUG,
+            connected_account_id=connected_account_id,
+            trigger_config={},
+        )
+        return created.trigger_id
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ensure_outlook_message_trigger failed for account %s: %s", connected_account_id, exc
+        )
+        return None
+
+
+def delete_outlook_message_triggers(connected_account_id: str) -> bool:
+    """Remove any OUTLOOK_MESSAGE_TRIGGER instances for a connected account (Outlook
+    disconnect) so a stale trigger doesn't keep firing webhooks for a revoked connection.
+
+    Never raises (disconnect must succeed regardless of trigger cleanup), but DOES return
+    whether cleanup actually succeeded — call this BEFORE revoking the connected account
+    (while it still definitely exists) and surface a False result to the caller rather than
+    swallowing it, or a failed cleanup silently leaves an orphaned trigger with no signal."""
+    client = get_composio_client()
+    try:
+        active = client.triggers.list_active(
+            trigger_names=[MAIL_TRIAGE_TRIGGER_SLUG],
+            connected_account_ids=[connected_account_id],
+            show_disabled=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "delete_outlook_message_triggers: listing failed for account %s: %s",
+            connected_account_id, exc,
+        )
+        return False
+    ok = True
+    for item in active.items:
+        try:
+            client.triggers.delete(item.id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed deleting trigger %s: %s", item.id, exc)
+            ok = False
+    return ok
+
+
+def fetch_outlook_message(message_id: str, user_id: str) -> dict:
+    """One Outlook message's essentials for triage (sender, subject, snippet, ...).
+
+    Raises on failure — the triage task decides how to handle it (retry / drop).
+    """
+    client = get_composio_client()
+    resp = client.tools.execute(
+        "OUTLOOK_GET_MESSAGE",
+        {
+            "message_id": message_id, "user_id": "me",
+            "select": ["subject", "from", "bodyPreview", "receivedDateTime", "conversationId", "webLink"],
+        },
+        user_id=user_id, dangerously_skip_version_check=True,
+    )
+    ok, err = _resp_ok(resp)
+    if not ok:
+        raise RuntimeError(f"OUTLOOK_GET_MESSAGE failed: {err}")
+    data = _resp_data(resp)
+    sender_email, sender_name = _addr(data.get("from"))
+    return {
+        "message_id": message_id,
+        "sender_email": (sender_email or "").strip().lower(),
+        "sender_name": sender_name,
+        "subject": data.get("subject") or "",
+        "snippet": (data.get("bodyPreview") or "")[:280],
+        "received_at": data.get("receivedDateTime"),
+        "conversation_id": data.get("conversationId"),
+        "web_link": data.get("webLink"),
+    }
+
+
+def create_outlook_draft_reply(message_id: str, comment: str, user_id: str) -> dict:
+    """Create a threaded DRAFT reply in the user's OWN Outlook mailbox — it sits in their
+    Drafts folder for THEM to review and send. We never send it ourselves; this mirrors
+    the outward-action discipline of `send_outlook_email` (human-approved only), just one
+    notch more cautious: not even a send call exists on this path, only a draft."""
+    client = get_composio_client()
+    resp = client.tools.execute(
+        "OUTLOOK_CREATE_DRAFT_REPLY",
+        {"message_id": message_id, "comment": comment, "user_id": "me"},
+        user_id=user_id, dangerously_skip_version_check=True,
+    )
+    ok, err = _resp_ok(resp)
+    if not ok:
+        raise RuntimeError(f"OUTLOOK_CREATE_DRAFT_REPLY failed: {err}")
+    data = _resp_data(resp)
+    return {"id": data.get("id"), "web_link": data.get("webLink")}

@@ -15,10 +15,12 @@ from routers import (
     ingestion,
     invitations,
     mail,
+    mail_triage,
     opportunities,
     organizations,
     sharepoint,
     users,
+    webhooks,
     workspace,
 )
 
@@ -69,6 +71,8 @@ app.include_router(composio.router)
 app.include_router(contacts.router)
 app.include_router(sharepoint.router)
 app.include_router(mail.router)
+app.include_router(mail_triage.router)
+app.include_router(webhooks.router)
 # --- authentication / org-tenancy (ported from PriceIQ) ---
 app.include_router(auth.router, prefix="/api", tags=["authentication"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])

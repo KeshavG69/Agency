@@ -59,3 +59,42 @@ def sync_outlook_contacts_task(self, owner_email: str, organization_id: str) -> 
         "graphed": written,
         "owner_email": owner,
     }
+
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=20)
+def ingest_selected_contacts_task(
+    self, owner_email: str, organization_id: str, contacts: list[dict]
+) -> dict:
+    """Enrich + graph ONLY the contacts the user hand-picked in the review dialog.
+
+    Unlike `sync_outlook_contacts_task`, this skips the Outlook fetch entirely — the
+    candidates were already previewed and selected on the client. It still prunes-then-
+    rebuilds the owner's subgraph, so the graph ends up being EXACTLY the selected set.
+    """
+    owner = (owner_email or "").strip().lower()
+    org = (organization_id or "").strip()
+    picked = [c for c in (contacts or []) if (c.get("email") or "").strip()]
+    if not owner or not org:
+        logger.warning("ingest_selected_contacts_task missing owner/org — skipping.")
+        return {"selected": 0, "enriched": 0, "graphed": 0, "owner_email": owner or None}
+    if not picked:
+        # Nothing chosen: clear the owner's slice so the graph reflects "import none".
+        try:
+            clear_owner_graph(owner, org)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("FalkorDB clear failed for %s: %s", owner, exc)
+        return {"selected": 0, "enriched": 0, "graphed": 0, "owner_email": owner}
+
+    enriched = enrich_contacts(picked)
+    resolved = sum(1 for c in enriched if c.get("enriched"))
+    logger.info("Explorium resolved %d/%d selected contacts for %s", resolved, len(enriched), owner)
+
+    try:
+        clear_owner_graph(owner, org)
+        written = upsert_contacts(enriched, owner, org)
+        logger.info("Rebuilt %s's graph with %d selected contacts", owner, written)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FalkorDB rebuild failed: %s", exc)
+        raise self.retry(exc=exc)
+
+    return {"selected": len(picked), "enriched": resolved, "graphed": written, "owner_email": owner}

@@ -78,6 +78,21 @@ def _get_db() -> FalkorDB:
                     username=settings.GRAPH_DATABASE_USERNAME or None,
                     password=settings.GRAPH_DATABASE_PASSWORD or None,
                     ssl=settings.GRAPH_DATABASE_SSL,
+                    # --- connection resilience -------------------------------------------
+                    # Same class of issue as the Celery/Redis broker (see app/worker.py):
+                    # Railway's proxy drops an idle TCP socket after ~15 min. A long
+                    # SharePoint crawl spends several minutes doing pure Composio/Graph API
+                    # calls with NO graph activity, so by the time it writes (clear_structure
+                    # + upsert_structure), the pooled connection can already be dead —
+                    # surfacing as "Timeout reading from socket" and silently losing the
+                    # crawl's results. health_check_interval pings periodically to keep the
+                    # socket warm / detect a drop before a real write depends on it;
+                    # socket_keepalive + explicit timeouts make a genuinely dead connection
+                    # fail FAST instead of hanging.
+                    socket_keepalive=True,
+                    socket_connect_timeout=10,
+                    socket_timeout=30,
+                    health_check_interval=30,
                 )
     return _db
 

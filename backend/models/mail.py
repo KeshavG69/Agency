@@ -40,3 +40,18 @@ class MailDraft(BaseModel):
         if self.cc:
             args["cc_emails"] = self.cc
         return args
+
+
+class ReplyDraft(BaseModel):
+    """The Mail Agent's suggested reply to an incoming mail-triage message.
+
+    No to/subject/cc — Graph fills those in automatically for a threaded reply
+    (OUTLOOK_CREATE_DRAFT_REPLY only needs the original `message_id` + this body).
+    """
+
+    comment: str = Field(..., description="The reply body (plain text).")
+    grounded_on: list[str] = Field(
+        default_factory=list,
+        description="The real experience / SharePoint material the reply draws on. "
+        "UI-only traceability — not sent with the reply.",
+    )

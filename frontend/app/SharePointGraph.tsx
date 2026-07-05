@@ -39,15 +39,49 @@ const card = (n: SPNode) => (
   </>
 );
 
-export default function SharePointGraph() {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export default function SharePointGraph({ refreshSignal }: { refreshSignal?: number } = {}) {
   const [data, setData] = useState<SPGraph | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  // The structure crawl runs in the background (Composio calls to Microsoft, one per
+  // item — a real sync takes a few minutes) and can be triggered by a resync click OR
+  // by landing back here right after connecting. Rather than making the user manually
+  // reload the page once it's done, poll for a while and pick it up automatically —
+  // re-fetching on mount and every time `refreshSignal` changes (bumped by the parent
+  // on resync / post-connect).
   useEffect(() => {
-    fetchSharePointGraph()
-      .then(setData)
-      .catch(() => setErr("Couldn't load the SharePoint graph — connect SharePoint and sync first."));
-  }, []);
+    let cancelled = false;
+    let attempt = 0;
+    const maxAttempts = 60; // ~5 min at 5s intervals — covers a real-world crawl (~3 min) with buffer
+
+    const tick = async () => {
+      try {
+        const fresh = await fetchSharePointGraph();
+        if (cancelled) return;
+        setErr(null);
+        setData((prev) =>
+          // Skip the state update (and the graph's re-layout) when nothing changed.
+          prev && prev.nodes.length === fresh.nodes.length && prev.edges.length === fresh.edges.length
+            ? prev
+            : fresh,
+        );
+      } catch {
+        if (!cancelled) setErr("Couldn't load the SharePoint graph — connect SharePoint and sync first.");
+      }
+      attempt++;
+      if (!cancelled && attempt < maxAttempts) {
+        await sleep(5000);
+        if (!cancelled) tick();
+      }
+    };
+
+    tick();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshSignal]);
 
   if (err) return <div className="graph-empty">{err}</div>;
   if (!data) return <div className="graph-empty">Loading structure…</div>;

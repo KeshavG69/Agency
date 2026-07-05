@@ -92,6 +92,90 @@ export interface Opportunity {
   contacts_searched_at?: string | null;
   outreach_drafts?: OutreachDraft[]; // Mail agent's per-contact drafts
   outreach_drafted_at?: string | null;
+  sharepoint_folder?: SharePointFolder | null; // Bid workspace auto-created in SharePoint
+  sharepoint_folder_at?: string | null;
+}
+
+// Pointer to the per-Bid folder tree created in SharePoint (Shared Documents library).
+export interface SharePointFolder {
+  drive_id?: string;
+  folder_id?: string;
+  name?: string;
+  web_url?: string;
+  library?: string;
+  subfolders?: Record<string, { id?: string; web_url?: string }>;
+}
+
+// One item currently living in a Bid folder (read LIVE from SharePoint).
+export interface SharePointFile {
+  subfolder: string;
+  id?: string;
+  name?: string;
+  web_url?: string;
+  edit_url?: string | null; // opens the file in Office-for-the-web edit mode (files only)
+  size?: number;
+  is_folder?: boolean;
+  modified?: string | null;
+}
+export interface SharePointFilesResponse {
+  connected: boolean;
+  folder?: SharePointFolder | null;
+  files: SharePointFile[];
+  error?: string;
+}
+
+// The Documents tab's LIVE read of the Bid folder — a file a human drops into SharePoint
+// shows up here automatically (the "read" half of two-way sync).
+export async function fetchOpportunitySharePointFiles(id: string): Promise<SharePointFilesResponse> {
+  const { data } = await apiClient.get(`/api/opportunities/${id}/sharepoint-files`);
+  return data;
+}
+
+// One relevant incoming mail (from a known contact on an active Bid), surfaced on the
+// Dashboard. DRAFT-ONLY: `suggested_reply` is text only until the user explicitly asks to
+// create a real Outlook draft — nothing here ever gets sent by the app.
+export interface MailTriageCard {
+  id: string;
+  organization_id: string;
+  employee_email: string;
+  opportunity_id: string;
+  message_id: string;
+  sender_email: string;
+  sender_name?: string | null;
+  subject: string;
+  snippet: string;
+  received_at?: string | null;
+  conversation_id?: string | null;
+  web_link?: string | null; // opens the original mail in Outlook
+  status: "unread" | "read" | "dismissed" | "replied";
+  suggested_reply?: string | null;
+  reply_error?: string | null; // set if reply generation exhausted its retries
+}
+
+export async function fetchMailTriage(): Promise<{ cards: MailTriageCard[] }> {
+  const { data } = await apiClient.get("/api/mail-triage");
+  return data;
+}
+
+export async function markMailTriageRead(id: string): Promise<void> {
+  await apiClient.post(`/api/mail-triage/${id}/read`);
+}
+
+export async function dismissMailTriage(id: string): Promise<void> {
+  await apiClient.post(`/api/mail-triage/${id}/dismiss`);
+}
+
+export async function draftMailTriageReply(id: string): Promise<{ drafting_started: boolean; task_id: string }> {
+  const { data } = await apiClient.post(`/api/mail-triage/${id}/draft-reply`);
+  return data;
+}
+
+export async function createOutlookDraft(
+  id: string,
+  comment: string,
+): Promise<{ created: boolean; web_link?: string | null }> {
+  const { data } = await apiClient.post(`/api/mail-triage/${id}/create-outlook-draft`, { comment });
+  return data;
 }
 
 // The pipeline board columns.
@@ -205,6 +289,40 @@ export async function syncOutlookContacts(): Promise<void> {
   await apiClient.post("/api/composio/outlook/sync-contacts");
 }
 
+// ---- Outlook contact review (pick which contacts to ingest) ----
+export interface ContactCandidate {
+  email: string;
+  name?: string | null;
+  company?: string | null;
+  title?: string | null;
+  count?: number;
+  last_seen?: string | null;
+  domain?: string;
+  external?: boolean;
+  category: "work" | "personal";
+}
+export interface ContactPreview {
+  contacts: ContactCandidate[];
+  count: number;
+  work: number;
+  personal: number;
+}
+
+// Fetch the candidate contacts (classified work/personal) WITHOUT graphing them —
+// powers the review dialog. Synchronous on the backend; can take a few seconds.
+export async function previewOutlookContacts(): Promise<ContactPreview> {
+  const { data } = await apiClient.get("/api/composio/outlook/contacts/preview");
+  return data;
+}
+
+// Enrich + graph ONLY the contacts the user ticked in the review dialog.
+export async function ingestOutlookContacts(
+  contacts: ContactCandidate[],
+): Promise<{ selected: number; task_id: string }> {
+  const { data } = await apiClient.post("/api/composio/outlook/contacts/ingest", { contacts });
+  return data;
+}
+
 // ---- Composio / SharePoint connection (mirrors Outlook; provider-generic backend) ----
 export async function getConnStatus(provider: string): Promise<OutlookStatus> {
   const { data } = await apiClient.get(`/api/composio/status?provider=${provider}`);
@@ -215,6 +333,10 @@ export async function getSharePointStatus(): Promise<OutlookStatus> {
   return getConnStatus("sharepoint");
 }
 
+// SharePoint is TWO chained Composio connections under one "Connect Library" click:
+// Graph (structure/ACL/write) first, then REST (exact site-group member emails — Graph
+// can't resolve those). connectSharePoint starts stage 1; connectSharePointRest starts
+// stage 2 once stage 1 is ACTIVE (see the oauth-callback page, which drives the chain).
 export async function connectSharePoint(callbackUrl: string): Promise<{ auth_url: string }> {
   const { data } = await apiClient.post("/api/composio/connect", {
     provider: "sharepoint",
@@ -223,8 +345,24 @@ export async function connectSharePoint(callbackUrl: string): Promise<{ auth_url
   return data;
 }
 
-export async function disconnectSharePoint(connectedAccountId: string): Promise<void> {
-  await apiClient.post("/api/composio/disconnect", { connected_account_id: connectedAccountId });
+export async function connectSharePointRest(callbackUrl: string): Promise<{ auth_url: string }> {
+  const { data } = await apiClient.post("/api/composio/connect", {
+    provider: "sharepoint_rest",
+    callback_url: callbackUrl,
+  });
+  return data;
+}
+
+// Disconnects BOTH SharePoint connections (Graph + REST) in one action. `failed` lists any
+// stage whose delete call itself errored (still connected) — the caller should surface that
+// rather than assuming full success.
+export async function disconnectSharePoint(): Promise<{
+  disconnected: string[];
+  failed: string[];
+  library_cleared: boolean;
+}> {
+  const { data } = await apiClient.post("/api/composio/sharepoint/disconnect");
+  return data;
 }
 
 // Kick off the SharePoint structure crawl (called after the user returns from OAuth).

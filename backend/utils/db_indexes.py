@@ -39,6 +39,10 @@ _INDEXES: list[tuple[str, list, dict]] = [
     ("opportunities", [("assigned_to", ASCENDING)], {}),
     # outreach log: collision lookups by (org, contact_email).
     ("outreach_log", [("organization_id", ASCENDING), ("contact_email", ASCENDING)], {}),
+    # mail triage: unique per (employee, message) so a re-delivered webhook event never
+    # duplicates a card; the list endpoint queries by (employee_email, status) newest-first.
+    ("mail_triage", [("employee_email", ASCENDING), ("message_id", ASCENDING)], {"unique": True}),
+    ("mail_triage", [("employee_email", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)], {}),
 ]
 
 

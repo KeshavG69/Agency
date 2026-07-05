@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from bson import ObjectId
 from pymongo import MongoClient
+from pymongo.errors import DuplicateKeyError
 
 from app.settings import settings
 from models.opportunity import Opportunity
@@ -40,6 +41,7 @@ class CRMStore:
         self.calls = self.db["calls"]
         self.tasks = self.db["tasks"]
         self.documents = self.db["documents"]
+        self.mail_triage = self.db["mail_triage"]
         # Per-ORG uniqueness on solicitation number — two orgs may legitimately
         # track the same solicitation, so uniqueness is (organization_id, sol#).
         # Drop the legacy GLOBAL unique index if it's still present from before.
@@ -212,6 +214,14 @@ class CRMStore:
                 "decision_overridden_at": _utc_now(),
                 "analyzed_at": _utc_now(),
             }},
+        )
+        return res.matched_count > 0
+
+    def set_sharepoint_folder(self, opportunity_id: str, organization_id: str, folder: dict) -> bool:
+        """Record the SharePoint Bid folder pointer (drive/item/web_url/subfolders) on the opp."""
+        res = self.opps.update_one(
+            {"_id": ObjectId(opportunity_id), "organization_id": organization_id},
+            {"$set": {"sharepoint_folder": folder, "sharepoint_folder_at": _utc_now()}},
         )
         return res.matched_count > 0
 
@@ -429,6 +439,93 @@ class CRMStore:
                     "created_at": r.get("created_at"),
                 }
         return {email: list(emps.values()) for email, emps in out.items()}
+
+    # --- mail triage (new-mail notifications, human draft-reply loop) -----
+    def find_active_bid_by_contact(self, organization_id: str, sender_email: str) -> dict | None:
+        """The relevance filter: is `sender_email` a KNOWN CONTACT on any ACTIVE Bid in
+        this org? Checked in Python (not a Mongo query) so matching is case-insensitive
+        regardless of how the CRM agent stored the contact's email. Returns the matching
+        opportunity, or None — meaning the mail isn't tied to a deal and should be dropped,
+        not surfaced.
+
+        Runs once per incoming webhook email, scanning every Bid-decision opp's
+        recommended_contacts (no index can serve a case-insensitive match inside an array of
+        subdocuments). Fine at today's scale (a few dozen active Bids); if an org's active-Bid
+        volume grows large enough for this to matter, replace with a dedicated
+        contact_email -> opportunity_id lookup collection kept in sync with recommended_contacts."""
+        sender = (sender_email or "").strip().lower()
+        if not sender:
+            return None
+        cursor = self.opps.find(
+            {"organization_id": organization_id, "bid_decision": "Bid"},
+            {"recommended_contacts": 1, "title": 1, "solicitation_number": 1},
+        )
+        for opp in cursor:
+            for c in opp.get("recommended_contacts") or []:
+                if (c.get("email") or "").strip().lower() == sender:
+                    return _serialize(opp)
+        return None
+
+    def create_mail_triage_card(
+        self, organization_id: str, employee_email: str, opportunity_id: str,
+        message_id: str, sender_email: str, sender_name: str | None, subject: str,
+        snippet: str, received_at: str | None, conversation_id: str | None,
+        web_link: str | None = None,
+    ) -> str | None:
+        """Record one relevant incoming mail as a triage card. Idempotent on
+        (employee_email, message_id) via the unique index — a re-delivered webhook event
+        never duplicates the card. Returns the new card id, or None if already triaged."""
+        try:
+            res = self.mail_triage.insert_one({
+                "organization_id": organization_id,
+                "employee_email": employee_email,
+                "opportunity_id": opportunity_id,
+                "message_id": message_id,
+                "sender_email": sender_email,
+                "sender_name": sender_name,
+                "subject": subject,
+                "snippet": snippet,
+                "received_at": received_at,
+                "conversation_id": conversation_id,
+                "web_link": web_link,     # opens the original mail in Outlook
+                "status": "unread",       # unread | read | dismissed | replied
+                "suggested_reply": None,  # filled in by the draft-reply task
+                "reply_error": None,      # set if reply generation exhausts its retries
+                "created_at": _utc_now(),
+            })
+            return str(res.inserted_id)
+        except DuplicateKeyError:
+            return None  # already triaged this message for this employee
+
+    def list_mail_triage(self, organization_id: str, employee_email: str) -> list[dict]:
+        """This employee's triage cards (their own inbox only), newest first. Excludes
+        dismissed cards so the Dashboard only shows what still needs attention."""
+        cursor = self.mail_triage.find({
+            "organization_id": organization_id,
+            "employee_email": employee_email,
+            "status": {"$ne": "dismissed"},
+        }).sort("created_at", -1)
+        return [_serialize(d) for d in cursor]
+
+    def get_mail_triage_card(self, card_id: str, employee_email: str) -> dict | None:
+        """One card, scoped to the requesting employee (their own inbox only)."""
+        try:
+            doc = self.mail_triage.find_one({"_id": ObjectId(card_id), "employee_email": employee_email})
+        except Exception:  # noqa: BLE001 — malformed id
+            return None
+        return _serialize(doc) if doc else None
+
+    def update_mail_triage_card(self, card_id: str, employee_email: str, **fields) -> bool:
+        """Update a card's mutable fields (status, suggested_reply, ...) — scoped to the
+        owning employee so one person can never touch another's triage queue."""
+        fields["updated_at"] = _utc_now()
+        try:
+            res = self.mail_triage.update_one(
+                {"_id": ObjectId(card_id), "employee_email": employee_email}, {"$set": fields},
+            )
+        except Exception:  # noqa: BLE001 — malformed id
+            return False
+        return res.matched_count > 0
 
     def set_call_status(self, call_id: str, organization_id: str, status: str) -> bool:
         """Update a call's status (Planned / Done / Dismissed). Org-scoped: the call's

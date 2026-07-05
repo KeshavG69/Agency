@@ -28,7 +28,7 @@ from client.graph_store import get_contact_relationship
 from client.llm_client import get_chat_llm_agno
 from utils.doc_parse import document_context
 from client.sharepoint_graph import search_sharepoint
-from models.mail import MailDraft
+from models.mail import MailDraft, ReplyDraft
 from utils.agno_tools import create_reasoning_tool
 from utils.composio_utils import sharepoint_entity
 from utils.sharepoint_tools import load_sharepoint_tools, sharepoint_tool_instructions
@@ -247,3 +247,118 @@ def draft_outreach_batch(
     return asyncio.run(
         adraft_outreach_batch(opp, contacts, proposal, user_id, limit, employee_email)
     )
+
+
+# --- reply drafting (mail triage) -----------------------------------------------------
+# A relevant incoming mail (from a known contact on an active Bid) gets a SUGGESTED
+# reply. Unlike outreach, this fills in one existing thread, not a fresh introduction —
+# no subject/recipient needed (Graph fills those in for a threaded reply). Draft-only:
+# the text is only ever turned into a real Outlook draft on an explicit human click, and
+# even then it's a DRAFT sitting in their mailbox, never sent by us.
+
+
+def _reply_instructions(company: str, profile: str) -> str:
+    return f"""\
+You are the business-development rep for {company}, replying to an inbound email from a
+contact already engaged on one of our active pursuits.
+
+COMPANY PROFILE (who we are):
+{profile}
+
+HOW TO WRITE IT (the house style):
+1. RELATIONSHIP-AWARE — tune tone to the RELATIONSHIP line (how often we've corresponded).
+2. ANSWER WHAT THEY ACTUALLY ASKED. Read the incoming mail's subject + snippet closely; a
+   reply that ignores their question reads as careless. If the snippet doesn't fully show
+   what they need, write a helpful, appropriately brief reply that keeps the conversation
+   moving rather than guessing at unstated specifics.
+3. SHORT — one or two short paragraphs. This is a reply, not a new pitch.
+4. GROUND ANY CAPABILITY CLAIM in real experience — use `search_sharepoint` to find our
+   actual past-performance / capability material if the reply needs to substantiate
+   something. Never invent experience; if you can't substantiate a claim, leave it out.
+5. DRAFT ONLY. Do NOT send anything. Produce the reply text for a human to review.
+6. SENDER — you do NOT know who is sending this. Never invent a sender name, title, or
+   phone. Sign off with bracketed PLACEHOLDERS the user fills in before sending, exactly:
+       Best regards,
+       [Your Name]
+       [Your Title], {company}
+
+{sharepoint_tool_instructions()}
+
+Also available: `search_sharepoint(query)` — searches the company's SharePoint structure
+graph (keyword + semantic) and follows the graph to relevant docs/folders/lists.
+
+Your FINAL message must be ONLY this JSON object — no prose, no markdown fences, no
+<reasoning> tags:
+{{"comment": "<the reply body>", "grounded_on": ["<each real experience/doc the reply draws on>"]}}
+"""
+
+
+def build_reply_agent(
+    user_id: str | None = None, employee_email: str | None = None,
+    organization_id: str | None = None,
+) -> Agent:
+    """Build the reply-drafting agent — same grounding/tools as outreach, reply-tuned
+    instructions and a smaller (comment-only) output shape."""
+
+    def search_sharepoint_tool(query: str) -> str:
+        """Search the company's SharePoint documents/lists for material relevant to `query`.
+        Returns a JSON list of relevant items with paths + links — only documents the
+        acting employee is permitted to read. Returns [] if nothing relevant/accessible."""
+        return search_sharepoint(
+            query, employee_email=employee_email, organization_id=organization_id or ""
+        )
+
+    company, profile = company_context(organization_id or "")
+    return Agent(
+        name="MailReply",
+        model=get_chat_llm_agno(max_tokens=8000),
+        tools=[
+            search_sharepoint_tool,
+            create_reasoning_tool(),
+            *load_sharepoint_tools(sharepoint_entity(organization_id or "")),
+        ],
+        instructions=_reply_instructions(company, profile),
+        debug_mode=True,
+    )
+
+
+def _build_reply_message(
+    opp: dict, incoming: dict, employee_email: str | None,
+) -> str:
+    """The reply prompt: opportunity context + the incoming mail + relationship signal."""
+    opp_lines = [
+        f"- {k}: {v}" for k, v in opp.items()
+        if v not in (None, "", {}) and k in {"title", "agency", "naics", "set_aside", "opp_type"}
+    ]
+    org_id = str(opp.get("organization_id") or "")
+    sender_email = incoming.get("sender_email")
+    relationship = _relationship_signal(sender_email, employee_email, org_id)
+    message = (
+        "OPPORTUNITY (context for this thread):\n" + "\n".join(opp_lines) + "\n\n"
+        "INCOMING EMAIL (the one you're replying to):\n"
+        f"- from: {incoming.get('sender_name') or sender_email} <{sender_email}>\n"
+        f"- subject: {incoming.get('subject') or ''}\n"
+        f"- snippet: {incoming.get('snippet') or ''}\n"
+        f"- relationship: {relationship}\n\n"
+        "Write the reply body as JSON."
+    )
+    return message
+
+
+async def adraft_reply(
+    opp: dict, incoming: dict, user_id: str | None = None, employee_email: str | None = None,
+) -> ReplyDraft:
+    """Draft one suggested reply (async) to an incoming mail-triage message."""
+    agent = build_reply_agent(
+        user_id, employee_email=employee_email,
+        organization_id=str(opp.get("organization_id") or ""),
+    )
+    result = await agent.arun(_build_reply_message(opp, incoming, employee_email))
+    return coerce_output(result.content, ReplyDraft)
+
+
+def draft_reply(
+    opp: dict, incoming: dict, user_id: str | None = None, employee_email: str | None = None,
+) -> ReplyDraft:
+    """Sync entry point (call from a Celery task)."""
+    return asyncio.run(adraft_reply(opp, incoming, user_id, employee_email))

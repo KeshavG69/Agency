@@ -8,7 +8,7 @@ import logging
 
 from celery import group
 
-from agent.capture_agent import generate_capture
+from agent.capture_agent import deliverable_url_key, generate_capture
 from app.worker import celery_app
 from client.crm_store import get_crm_store
 
@@ -21,19 +21,39 @@ def capture_task(self, opp: dict, employee_email: str | None = None) -> dict:
 
     `employee_email` (the approving rep) RBAC-scopes the agent's SharePoint past-performance
     search to documents that employee may read.
+
+    The capture agent's upload tool files each deliverable into the Bid's SharePoint 'Capture
+    Docs' folder in the SAME pass that saves it to iDrive (see generate_capture); it returns
+    `sp_uploads` mapping each iDrive url → {sharepoint_url, sharepoint_item_id}, which we record
+    onto the CRM document here. SharePoint filing is best-effort — a miss just leaves the doc as
+    an iDrive-only 'draft'.
     """
     crm = get_crm_store()
     try:
-        output = generate_capture(opp, employee_email)
+        output, sp_uploads = generate_capture(opp, employee_email)
     except Exception as exc:
         logger.warning("Capture failed for %s: %s", opp.get("id"), exc)
         raise self.retry(exc=exc)
 
+    matched = 0
     for d in output.deliverables:
-        crm.create_document(
+        document_id = crm.create_document(
             opp["id"], agent_id="capture_agent", doc_type=d.doc_type,
             title=d.title, url=d.doc_url,
         )
+        # Match on the stable url PATH (see deliverable_url_key) so signature-param drift in the
+        # model's echoed doc_url doesn't lose the SharePoint linkage.
+        sp = sp_uploads.get(deliverable_url_key(d.doc_url))
+        if sp and sp.get("sharepoint_url"):
+            crm.update_document(document_id, status="filed",
+                                sharepoint_url=sp["sharepoint_url"],
+                                sharepoint_item_id=sp.get("sharepoint_item_id"))
+            matched += 1
+    if sp_uploads and matched < len(sp_uploads):
+        # Files were filed to SharePoint but some couldn't be linked back to a deliverable — make
+        # that visible instead of silently leaving an orphaned SharePoint copy.
+        logger.warning("Capture for %s filed %d SharePoint cop(ies) but linked only %d to "
+                       "deliverables (doc_url echo mismatch?)", opp.get("id"), len(sp_uploads), matched)
     crm.mark_captured(opp["id"])
     return {"id": opp["id"], "deliverables": [d.doc_type for d in output.deliverables]}
 

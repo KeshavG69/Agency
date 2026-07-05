@@ -30,6 +30,28 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    # --- connection resilience -------------------------------------------------
+    # Railway's Redis proxy drops idle TCP sockets after ~15 min, which surfaces as
+    # "Connection reset by peer" tracebacks in the worker. A periodic health-check
+    # ping keeps the idle socket warm (and detects a drop proactively); keepalive +
+    # retry_on_timeout ride out transient blips; retry-on-startup avoids a boot race;
+    # and cancel-long-running-tasks makes an in-flight task safe (re-queued cleanly)
+    # if a drop does happen mid-run — e.g. the ~217 MB SAM.gov bulk download.
+    broker_connection_retry_on_startup=True,
+    broker_transport_options={
+        "socket_keepalive": True,
+        "health_check_interval": 30,
+        "retry_on_timeout": True,
+    },
+    result_backend_transport_options={
+        "socket_keepalive": True,
+        "health_check_interval": 30,
+        "retry_on_timeout": True,
+    },
+    redis_socket_keepalive=True,
+    redis_retry_on_timeout=True,
+    redis_backend_health_check_interval=30,
+    worker_cancel_long_running_tasks_on_connection_loss=True,
 )
 
 # Scheduled jobs (run by `celery -A app.worker beat`). SAM.gov refreshes ~once a
@@ -41,7 +63,7 @@ celery_app.conf.beat_schedule = {
         "task": "sam_radar.daily_scan",
         "schedule": crontab(hour=11, minute=0),
     },
-    # Refresh contacts + SharePoint structure once a day.
+    # Refresh SharePoint structure once a day (contacts are user-refreshed, not auto-synced).
     "daily-resync": {
         "task": "resync.daily",
         "schedule": crontab(hour=8, minute=0),

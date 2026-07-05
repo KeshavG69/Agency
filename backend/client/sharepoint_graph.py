@@ -125,6 +125,34 @@ def stats(organization_id: str) -> dict:
     return {"sites": c("site"), "libraries": c("library"), "folders": c("folder"), "files": c("file")}
 
 
+def find_document_library(organization_id: str) -> dict | None:
+    """The org's target document library (where Bid folders are created) from the crawl.
+
+    Prefers the default library ("Shared Documents"/"Documents"); falls back to the first
+    library with a drive_id. Returns { drive_id, name, site_id, web_url } or None if the
+    structure hasn't been crawled yet.
+    """
+    g = _graph(organization_id)
+    rows = g.ro_query(
+        "MATCH (n:SPNode {type:'library'}) "
+        "RETURN n.drive_id, n.name, n.site_id, n.web_url"
+    ).result_set
+    libs = [
+        {"drive_id": r[0], "name": r[1], "site_id": r[2], "web_url": r[3]}
+        for r in rows
+        if r and r[0]
+    ]
+    if not libs:
+        return None
+    # Deterministic ordering so a multi-library org always resolves to the SAME library
+    # across runs (graph row order is not guaranteed).
+    libs.sort(key=lambda l: ((l["name"] or "").lower(), l["drive_id"] or ""))
+    for lib in libs:
+        if (lib["name"] or "").strip().lower() in ("shared documents", "documents"):
+            return lib
+    return libs[0]
+
+
 def get_structure(organization_id: str, employee_email: str | None = None) -> dict:
     """ONE org's structure as { nodes, edges } for the UI.
 
@@ -219,13 +247,14 @@ def _keyword_nodes(terms: list[str], organization_id: str, limit: int = 12,
         MATCH (n:SPNode)
         WHERE n.type IN ['folder', 'file', 'list', 'library']
           AND (toLower(coalesce(n.name,'')) CONTAINS term OR toLower(coalesce(n.path,'')) CONTAINS term)
-{acl}        RETURN DISTINCT n.id, n.type, n.name, n.path, n.web_url, n.item_count
+{acl}        RETURN DISTINCT n.id, n.type, n.name, n.path, n.web_url, n.item_count, n.drive_id
         LIMIT $limit
         """,
         params={"terms": terms, "limit": limit, "email": (employee_email or "").lower()},
     )
     return [
-        {"id": r[0], "type": r[1], "name": r[2], "path": r[3], "web_url": r[4], "item_count": r[5]}
+        {"id": r[0], "type": r[1], "name": r[2], "path": r[3], "web_url": r[4],
+         "item_count": r[5], "drive_id": r[6]}
         for r in res.result_set
     ]
 
@@ -247,7 +276,7 @@ def semantic_search_structure(query: str, organization_id: str, k: int = 12,
                 WHERE n.embedding IS NOT NULL
                   AND n.type IN ['folder','file','list','library']
                   AND {_ACCESS}
-                RETURN n.id, n.type, n.name, n.path, n.web_url, n.item_count,
+                RETURN n.id, n.type, n.name, n.path, n.web_url, n.item_count, n.drive_id,
                        vec.cosineDistance(n.embedding, vecf32($vec)) AS dist
                 ORDER BY dist ASC
                 LIMIT $k
@@ -259,7 +288,8 @@ def semantic_search_structure(query: str, organization_id: str, k: int = 12,
                 """
                 CALL db.idx.vector.queryNodes('SPNode', 'embedding', $k, vecf32($vec))
                 YIELD node, score
-                RETURN node.id, node.type, node.name, node.path, node.web_url, node.item_count, score
+                RETURN node.id, node.type, node.name, node.path, node.web_url, node.item_count,
+                       node.drive_id, score
                 """,
                 params={"k": k, "vec": vec},
             )
@@ -268,7 +298,7 @@ def semantic_search_structure(query: str, organization_id: str, k: int = 12,
         return []
     return [
         {"id": r[0], "type": r[1], "name": r[2], "path": r[3], "web_url": r[4],
-         "item_count": r[5], "score": r[6]}
+         "item_count": r[5], "drive_id": r[6], "score": r[7]}
         for r in res.result_set
     ]
 
@@ -302,6 +332,8 @@ def search_sharepoint(query: str, employee_email: str | None = None,
         ctx = {
             "type": h["type"], "name": h["name"], "path": h["path"],
             "web_url": h.get("web_url"), "item_count": h.get("item_count"),
+            # ids the agent uses to OPEN a file with the SHAREPOINT_GRAPH_* by-id read tools:
+            "id": h.get("id"), "drive_id": h.get("drive_id"),
         }
         if h["type"] in ("folder", "library", "site", "list"):
             ctx["contents"] = node_contents(
@@ -323,12 +355,13 @@ def node_contents(node_id: str, organization_id: str, depth: int = 2, limit: int
         f"""
         MATCH (n:SPNode {{id: $id}})-[:CONTAINS*1..{depth}]->(d:SPNode)
         WHERE true
-{acl}        RETURN d.type, d.name, d.path, d.web_url, d.item_count
+{acl}        RETURN d.id, d.type, d.name, d.path, d.web_url, d.item_count, d.drive_id
         LIMIT $limit
         """,
         params={"id": node_id, "limit": limit, "email": (employee_email or "").lower()},
     )
     return [
-        {"type": r[0], "name": r[1], "path": r[2], "web_url": r[3], "item_count": r[4]}
+        {"id": r[0], "type": r[1], "name": r[2], "path": r[3], "web_url": r[4],
+         "item_count": r[5], "drive_id": r[6]}
         for r in res.result_set
     ]

@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   getConnStatus,
-  syncOutlookContacts,
+  connectSharePointRest,
   syncSharePointStructure,
 } from "@/lib/data";
 import { useConnectionStore, type Provider } from "@/lib/stores/connectionStore";
@@ -28,30 +28,70 @@ function CallbackInner() {
     (async () => {
       if (params.get("error")) {
         setMsg("Connection was not completed. Returning…");
+        sessionStorage.removeItem("pendingProvider");
+        sessionStorage.removeItem("spStage");
         await sleep(1800);
         if (!cancelled) router.push("/");
         return;
       }
 
+      // SharePoint is TWO Composio connections chained under one click: Graph first
+      // (structure/ACL/write), then REST (exact site-group member emails — the one
+      // thing Graph can't resolve). `spStage` is the literal provider string we just
+      // sent the user to Microsoft for ("sharepoint" | "sharepoint_rest").
+      const spStage =
+        (typeof window !== "undefined" && sessionStorage.getItem("spStage")) || "sharepoint";
+      const pollTarget = provider === "sharepoint" ? spStage : provider;
+
       // Composio stores the tokens server-side; poll until the account is ACTIVE.
       for (let i = 0; i < 20 && !cancelled; i++) {
         try {
-          const s = await getConnStatus(provider);
+          const s = await getConnStatus(pollTarget);
           if (s.connected) {
-            // Cache the connection so the app never has to poll status again.
+            if (provider === "sharepoint" && spStage === "sharepoint") {
+              // Graph stage done — chain straight into the REST stage (no extra click).
+              setMsg("Connected — one more step for exact permissions…");
+              const rest = await getConnStatus("sharepoint_rest");
+              if (!rest.connected) {
+                const { auth_url } = await connectSharePointRest(
+                  `${window.location.origin}/oauth-callback`,
+                );
+                sessionStorage.setItem("spStage", "sharepoint_rest");
+                if (!cancelled) window.location.href = auth_url;
+                return;
+              }
+              // REST was already connected (e.g. reconnecting Graph only) — fall through to finish.
+            }
+
+            // Either the REST stage just finished, or (Graph case above) REST was already
+            // done — SharePoint is now fully connected. Re-read the GRAPH stage's status
+            // specifically for the cached account id — `s` may be the REST stage's status
+            // (whichever stage we were just polling), and the cached id should consistently
+            // be the primary (Graph) connection, not whichever happened to finish last.
+            if (provider === "sharepoint") {
+              const graphStatus = spStage === "sharepoint" ? s : await getConnStatus("sharepoint");
+              useConnectionStore
+                .getState()
+                .setConnection("sharepoint", true, graphStatus.connected_account_id);
+              sessionStorage.removeItem("pendingProvider");
+              sessionStorage.removeItem("spStage");
+              setMsg("Connected — mapping your SharePoint documents…");
+              await syncSharePointStructure();
+              await sleep(800);
+              if (!cancelled) router.push(`/?connected=sharepoint`);
+              return;
+            }
+
+            // Outlook (or any other single-stage provider).
             useConnectionStore
               .getState()
               .setConnection(provider as Provider, true, s.connected_account_id);
-            if (provider === "sharepoint") {
-              setMsg("Connected — mapping your SharePoint documents…");
-              await syncSharePointStructure();
-            } else {
-              setMsg("Connected — downloading your contacts…");
-              await syncOutlookContacts();
-            }
             sessionStorage.removeItem("pendingProvider");
-            await sleep(800);
-            if (!cancelled) router.push(`/?connected=${provider}`);
+            // Outlook: don't auto-ingest — send the user to the review dialog so
+            // they choose which contacts to import.
+            setMsg("Connected — choose which contacts to import…");
+            await sleep(500);
+            if (!cancelled) router.push(`/?review=outlook`);
             return;
           }
         } catch {
@@ -62,6 +102,12 @@ function CallbackInner() {
 
       if (!cancelled) {
         setMsg("Still connecting — you can head back; it’ll finish in the background.");
+        // Clear the pending markers same as the error path — nothing keeps polling once this
+        // page unmounts, and a stale spStage/pendingProvider could confuse a LATER unrelated
+        // redirect back to this page. A future "Connect" click always re-checks real status
+        // per stage regardless, so this is just cleanup, not a functional dependency.
+        sessionStorage.removeItem("pendingProvider");
+        sessionStorage.removeItem("spStage");
         await sleep(2000);
         router.push("/");
       }

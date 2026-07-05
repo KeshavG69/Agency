@@ -19,7 +19,7 @@ _CFG = Path(__file__).resolve().parent.parent / "agent_config"
 @lru_cache(maxsize=1)
 def sharepoint_action_slugs() -> tuple[str, ...]:
     cfg = json.loads((_CFG / "sharepoint_tools.json").read_text())
-    return tuple(cfg["share_point"]["agent"]["actions"])
+    return tuple(cfg["sharepoint_graph"]["agent"]["actions"])
 
 
 @lru_cache(maxsize=1)
