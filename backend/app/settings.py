@@ -61,7 +61,7 @@ class Settings(BaseSettings):
 
     # Composio — managed auth + tools (Outlook mail + calendar for the Relation Agent)
     COMPOSIO_API_KEY: str = ""
-    COMPOSIO_OUTLOOK_AUTH_CONFIG_ID: str = "ac_5LWNOSF-2yRu"
+    COMPOSIO_OUTLOOK_AUTH_CONFIG_ID: str = "ac_PsLAI3OTqliY"
     # SharePoint uses TWO chained connections (one "Connect Library" click, back-to-back
     # Microsoft consent — see routers/composio.py SHAREPOINT_STAGES):
     #  1. Microsoft GRAPH (sharepoint_graph) — structure, per-item permissions, M365/Entra
@@ -69,8 +69,8 @@ class Settings(BaseSettings):
     #     Files.ReadWrite.All) needed to provision Bid folders.
     #  2. SharePoint REST (share_point) — the one thing Graph can't do: list the members of a
     #     native SharePoint site group (Owners/Members/Visitors), for EXACT per-person ACLs.
-    COMPOSIO_SHAREPOINT_AUTH_CONFIG_ID: str = "ac_a66XcRBEkcNU"
-    COMPOSIO_SHAREPOINT_REST_AUTH_CONFIG_ID: str = "ac_yZpaj2ORI7Fx"
+    COMPOSIO_SHAREPOINT_AUTH_CONFIG_ID: str = "ac_0AMz8kC7i7ML"
+    COMPOSIO_SHAREPOINT_REST_AUTH_CONFIG_ID: str = "ac_8-hZJL5A6HFi"
     # Mail triage: verifies POST /api/webhooks/composio (OUTLOOK_MESSAGE_TRIGGER events).
     # From the Composio dashboard: Project Settings -> Webhook, after pointing the webhook
     # URL there at this backend's /api/webhooks/composio. MUST be set for the webhook to

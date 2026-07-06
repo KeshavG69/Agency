@@ -620,8 +620,10 @@ function Console({ user }: { user: User }) {
         pulling={pulling}
         onSignOut={onSignOut}
       />
-      <div className="workspace">
-        <BidSidebar bids={bidOpps} selectedId={selectedId} onOpen={openOpp} />
+      <div className={`workspace ${view === "dashboard" || view === "callplan" ? "" : "no-bidbar"}`}>
+        {(view === "dashboard" || view === "callplan") && (
+          <BidSidebar bids={bidOpps} selectedId={selectedId} onOpen={openOpp} />
+        )}
         <div className="main">
       {view === "dashboard" ? (
         <section className="graph-pane">

@@ -153,7 +153,7 @@ def preview_contacts(current_user: dict = Depends(get_current_user)) -> dict:
     try:
         st = connection_status("outlook", user_id=email)
         if st.get("connected_account_id"):
-            ensure_outlook_message_trigger(st["connected_account_id"])
+            ensure_outlook_message_trigger(email, st["connected_account_id"])
     except Exception as e:  # noqa: BLE001 — mail triage setup must never block contacts
         logger.warning("Mail-triage trigger setup failed for %s: %s", email, e)
     try:

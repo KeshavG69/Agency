@@ -398,11 +398,16 @@ def classify_network(contacts: list[dict]) -> list[dict]:
 MAIL_TRIAGE_TRIGGER_SLUG = "OUTLOOK_MESSAGE_TRIGGER"
 
 
-def ensure_outlook_message_trigger(connected_account_id: str) -> Optional[str]:
+def ensure_outlook_message_trigger(user_id: str, connected_account_id: str) -> Optional[str]:
     """Idempotently ensure an OUTLOOK_MESSAGE_TRIGGER exists for this connected Outlook
     account — a real-time webhook Composio fires on every new inbound message, powering
     mail triage. Best-effort: returns the trigger id, or None if it couldn't be set up.
     NEVER raises — connecting Outlook must never fail just because trigger setup hiccups.
+
+    `user_id` (the employee's email — the Composio entity that owns the connection) is
+    REQUIRED on the create call: with 2FA enabled on the Composio project, trigger
+    create/update rejects a bare `connected_account_id` with "user_id is required"
+    (TriggerInstance_UserIdRequired) — Composio needs both, not just the account id.
 
     This is called on every manual Refresh (not just fresh connect), so it also SELF-HEALS
     duplicates: the list-then-create check isn't atomic (two overlapping calls can both see
@@ -424,10 +429,17 @@ def ensure_outlook_message_trigger(connected_account_id: str) -> Optional[str]:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Failed deleting duplicate trigger %s: %s", dupe.id, exc)
             return keep.id
-        created = client.triggers.create(
+        # The high-level `triggers.create(user_id=...)` does NOT forward user_id into the
+        # real API call — it only uses it client-side to re-derive connected_account_id
+        # (via a most-recently-created lookup that could pick the WRONG account), then
+        # calls the same raw upsert with no user_id field at all. The raw upsert has no
+        # user_id parameter either. So with 2FA on, `user_id` can only reach Composio
+        # through `extra_body` on the raw call — the actual fix, not the high-level one.
+        created = client.client.trigger_instances.upsert(
             slug=MAIL_TRIAGE_TRIGGER_SLUG,
             connected_account_id=connected_account_id,
-            trigger_config={},
+            body_trigger_config_1={},
+            extra_body={"user_id": user_id},
         )
         return created.trigger_id
     except Exception as exc:  # noqa: BLE001

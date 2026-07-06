@@ -126,6 +126,25 @@ function CallbackInner() {
       <div style={{ fontStyle: "normal", fontFamily: "var(--font-sans)", fontSize: 14, color: "var(--muted)" }}>
         {msg}
       </div>
+      {/* Manual escape hatch — the poll loop can take up to ~30s (or longer if a
+          Composio/network hiccup stalls it) before it gives up on its own; let the user
+          leave immediately instead of forcing them to wait it out. The connection still
+          finishes server-side either way. */}
+      <button
+        onClick={() => router.push("/")}
+        style={{
+          fontFamily: "var(--font-sans)",
+          fontSize: 13,
+          color: "var(--accent-2)",
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          textDecoration: "underline",
+          padding: 0,
+        }}
+      >
+        Back to home
+      </button>
     </div>
   );
 }
