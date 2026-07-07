@@ -65,6 +65,28 @@ class GoogleUserProfile(BaseModel):
     email_verified: bool
 
 
+class MicrosoftLoginUrlRequest(BaseModel):
+    # Present only when this OAuth round-trip is for accepting a team invitation rather
+    # than a normal login/signup — carried through the OAuth `state` so the callback knows
+    # which invite to accept once Microsoft confirms the person's identity.
+    invite_token: Optional[str] = None
+
+
+class MicrosoftCallbackRequest(BaseModel):
+    code: str
+    state: str
+
+
+class MicrosoftUserProfile(BaseModel):
+    # Microsoft's stable per-user identifier (the ID token's `oid` claim — Entra object id).
+    oid: str
+    name: str
+    given_name: str
+    family_name: str
+    email: str
+    email_verified: bool = True  # Microsoft-authenticated identities are always pre-verified
+
+
 class RefreshToken(BaseModel):
     """
     Refresh token model for MongoDB storage

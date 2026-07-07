@@ -57,6 +57,14 @@ export const invitationsApi = {
     await apiClient.delete(`/api/invitations/${invitationId}`);
   },
 
+  // Resend a pending invitation (admin only) — fresh token, resets the 7-day expiry.
+  resendInvitation: async (invitationId: string): Promise<{ message: string }> => {
+    const response = await apiClient.post<{ message: string }>(
+      `/api/invitations/${invitationId}/resend`
+    );
+    return response.data;
+  },
+
   // Validate an invitation token (public).
   validateToken: async (token: string): Promise<ValidateTokenResponse> => {
     const response = await apiClient.get<ValidateTokenResponse>(

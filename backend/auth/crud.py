@@ -4,7 +4,7 @@ from bson import ObjectId
 import bcrypt
 import threading
 from .database import get_mongodb_client
-from .models import UserSignup, UserResponse, GoogleUserProfile
+from .models import UserSignup, UserResponse, GoogleUserProfile, MicrosoftUserProfile
 from .utils import hash_password, verify_password, generate_user_id
 
 
@@ -103,8 +103,12 @@ class UserCRUD:
         if not user_doc:
             return None
 
-        # Check if user registered with email/password (not OAuth)
-        if user_doc.get("auth_method") != "email":
+        # Gate on whether a password is actually set, not on `auth_method` — a user who signs
+        # in with Google/Microsoft keeps their original password (create_or_update_*_user
+        # never touches or clears it), so both methods should keep working side by side. Only
+        # a genuinely password-less OAuth-only account (no `password` field at all) is rejected
+        # here, since there'd be nothing to verify against.
+        if not user_doc.get("password"):
             return None
 
         # Verify password
@@ -270,6 +274,98 @@ class UserCRUD:
             else:
                 raise Exception("Failed to create Google user")
 
+    @staticmethod
+    def create_or_update_microsoft_user(microsoft_profile: MicrosoftUserProfile) -> UserResponse:
+        """Create a new Microsoft OAuth user or update an existing one. Mirrors
+        create_or_update_google_user exactly — auth_method='microsoft', no password field,
+        pre-verified, open self-registration (a brand-new email gets its own organization)."""
+        users_collection = get_mongodb_client().get_users_collection()
+
+        existing_user = users_collection.find_one({"email": microsoft_profile.email})
+
+        if existing_user:
+            update_data = {
+                "microsoft_id": microsoft_profile.oid,
+                "microsoft_profile": {
+                    "name": microsoft_profile.name,
+                    "given_name": microsoft_profile.given_name,
+                    "family_name": microsoft_profile.family_name,
+                    "email_verified": microsoft_profile.email_verified,
+                },
+                "auth_method": "microsoft",
+                "email_verified": True,
+                "status": "active",
+                "updatedAt": datetime.utcnow(),
+            }
+            if not existing_user.get("verified_at"):
+                update_data["verified_at"] = datetime.utcnow()
+
+            users_collection.update_one({"_id": existing_user["_id"]}, {"$set": update_data})
+
+            return UserResponse(
+                id=str(existing_user["_id"]),
+                firstName=existing_user.get("firstName", microsoft_profile.given_name),
+                lastName=existing_user.get("lastName", microsoft_profile.family_name),
+                email=microsoft_profile.email,
+                createdAt=existing_user["createdAt"],
+            )
+
+        from utils.organizations import get_organization_crud
+
+        user_id = generate_user_id()
+        now = datetime.utcnow()
+
+        org_crud = get_organization_crud()
+        temp_name = f"{microsoft_profile.given_name}-{microsoft_profile.family_name}-org"
+        organization = org_crud.create_organization(temp_name, user_id)
+        org_id = organization["_id"]
+
+        db = get_mongodb_client().get_database()
+        db.organizations.update_one({"_id": org_id}, {"$set": {"name": organization["slug"]}})
+
+        from auth import config
+
+        user_doc = {
+            "_id": user_id,
+            "firstName": microsoft_profile.given_name,
+            "lastName": microsoft_profile.family_name,
+            "email": microsoft_profile.email,
+            "microsoft_id": microsoft_profile.oid,
+            "microsoft_profile": {
+                "name": microsoft_profile.name,
+                "given_name": microsoft_profile.given_name,
+                "family_name": microsoft_profile.family_name,
+                "email_verified": microsoft_profile.email_verified,
+            },
+            "auth_method": "microsoft",
+            "email_verified": True,
+            "verified_at": now,
+            "status": "active",
+            "current_organization_id": org_id,
+            "organizations": [{
+                "organization_id": org_id,
+                "role": "admin",
+                "status": "active",
+                "joinedAt": now,
+            }],
+            "terms_accepted_version": config.CURRENT_TERMS_VERSION,
+            "terms_accepted_at": now,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+
+        result = users_collection.insert_one(user_doc)
+        if not result.inserted_id:
+            raise Exception("Failed to create Microsoft user")
+
+        return UserResponse(
+            id=user_id,
+            firstName=microsoft_profile.given_name,
+            lastName=microsoft_profile.family_name,
+            email=microsoft_profile.email,
+            createdAt=user_doc["createdAt"],
+        )
+
     def create_user_with_organization(
         self,
         email: str,
@@ -311,6 +407,58 @@ class UserCRUD:
             "terms_accepted_at": now,
             "createdAt": now,
             "updatedAt": now
+        }
+
+        result = self.collection.insert_one(user)
+        user["_id"] = result.inserted_id
+        return user
+
+    def create_microsoft_user_with_organization(
+        self,
+        microsoft_profile: MicrosoftUserProfile,
+        organization_id: ObjectId,
+        role: str = "user",
+    ) -> dict:
+        """Create a user via invite acceptance, authenticated by Microsoft instead of a typed
+        password — mirrors create_user_with_organization exactly, minus the password field.
+        Caller MUST have already verified microsoft_profile.email matches the invited email."""
+        from auth import config
+
+        existing = self.collection.find_one({"email": microsoft_profile.email})
+        if existing:
+            raise ValueError("Email already registered")
+
+        now = datetime.utcnow()
+        user = {
+            "_id": generate_user_id(),
+            "firstName": microsoft_profile.given_name,
+            "lastName": microsoft_profile.family_name,
+            "email": microsoft_profile.email,
+            "microsoft_id": microsoft_profile.oid,
+            "microsoft_profile": {
+                "name": microsoft_profile.name,
+                "given_name": microsoft_profile.given_name,
+                "family_name": microsoft_profile.family_name,
+                "email_verified": microsoft_profile.email_verified,
+            },
+            # Belongs ONLY to the invited org — no personal org — so role can't be
+            # escalated by switching workspaces. Email ownership is proven by Microsoft here,
+            # in place of the invite-flow's usual typed-password proof.
+            "organizations": [{
+                "organization_id": organization_id,
+                "role": role,
+                "status": "active",
+                "joinedAt": now,
+            }],
+            "current_organization_id": organization_id,
+            "auth_method": "microsoft",
+            "email_verified": True,
+            "verified_at": now,
+            "status": "active",
+            "terms_accepted_version": config.CURRENT_TERMS_VERSION,
+            "terms_accepted_at": now,
+            "createdAt": now,
+            "updatedAt": now,
         }
 
         result = self.collection.insert_one(user)

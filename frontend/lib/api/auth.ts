@@ -20,6 +20,20 @@ interface VerifyEmailResponse {
   user: User;
 }
 
+interface MicrosoftLoginUrlResponse {
+  auth_url: string;
+}
+
+// Covers both outcomes of /api/auth/microsoft/callback: a plain login/signup, or accepting a
+// pending invitation (which also includes `message`) — the frontend logs in the same way either way.
+interface MicrosoftCallbackResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type?: string;
+  user: User;
+  message?: string;
+}
+
 export const authApi = {
   // Log in with email + password.
   login: async (credentials: LoginCredentials): Promise<LoginResponse> => {
@@ -80,6 +94,27 @@ export const authApi = {
       token,
       new_password: newPassword,
     });
+    return response.data;
+  },
+
+  // Start "Sign in with Microsoft" — returns the URL to redirect the browser to. Pass
+  // `inviteToken` when this round-trip is for accepting a team invitation rather than a
+  // normal login/signup; the backend threads it through Microsoft's `state` param.
+  getMicrosoftLoginUrl: async (inviteToken?: string): Promise<MicrosoftLoginUrlResponse> => {
+    const response = await apiClient.post<MicrosoftLoginUrlResponse>(
+      '/api/auth/microsoft/login-url',
+      { invite_token: inviteToken || null }
+    );
+    return response.data;
+  },
+
+  // Complete "Sign in with Microsoft" — exchanges the code+state Microsoft redirected back
+  // with for tokens + user (login/signup or invite-accept, whichever the login-url call started).
+  microsoftCallback: async (code: string, state: string): Promise<MicrosoftCallbackResponse> => {
+    const response = await apiClient.post<MicrosoftCallbackResponse>(
+      '/api/auth/microsoft/callback',
+      { code, state }
+    );
     return response.data;
   },
 };

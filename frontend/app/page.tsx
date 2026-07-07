@@ -2356,13 +2356,23 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
                               Invited as {inv.role === "admin" ? "Admin" : "Member"}
                             </div>
                           </div>
-                          <button
-                            className="mini-btn"
-                            disabled={busy === id}
-                            onClick={() => act(id, () => invitationsApi.revokeInvitation(id))}
-                          >
-                            {busy === id ? "…" : "Revoke"}
-                          </button>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button
+                              className="mini-btn"
+                              disabled={busy === id}
+                              onClick={() => act(id, () => invitationsApi.resendInvitation(id))}
+                            >
+                              {busy === id ? "…" : "Resend"}
+                            </button>
+                            <button
+                              className="mini-btn"
+                              disabled={busy === id}
+                              onClick={() => act(id, () => invitationsApi.revokeInvitation(id))}
+                              style={{ color: "var(--nobid)" }}
+                            >
+                              {busy === id ? "…" : "Revoke"}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );

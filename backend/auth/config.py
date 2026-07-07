@@ -42,5 +42,18 @@ SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", FROM_EMAIL)
 # Google OAuth Configuration
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
+# Microsoft OAuth Configuration ("Sign in with Microsoft" — a pure identity check, distinct
+# from the Outlook/SharePoint DATA connections which go through Composio separately). Reuses
+# the same "Collecct" Azure App Registration already set up for SharePoint — just needs an
+# ADDITIONAL Redirect URI added there (MICROSOFT_REDIRECT_URI below), not a new app.
+MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "")
+MICROSOFT_CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET", "")
+# "common" = any Microsoft work/school/personal account (matches the app's multitenant setting).
+MICROSOFT_TENANT = os.getenv("MICROSOFT_TENANT", "common")
+MICROSOFT_AUTHORITY = f"https://login.microsoftonline.com/{MICROSOFT_TENANT}"
+# Must be registered as a Redirect URI (Web platform) on the Azure app — the frontend page that
+# receives Microsoft's redirect-back with ?code=&state=.
+MICROSOFT_REDIRECT_URI = os.getenv("MICROSOFT_REDIRECT_URI", f"{FRONTEND_URL}/auth/microsoft-callback")
+
 # Terms and Conditions Configuration
 CURRENT_TERMS_VERSION = "1.0.0"

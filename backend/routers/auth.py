@@ -9,8 +9,11 @@ from typing import Optional
 from pydantic import BaseModel, EmailStr
 
 # Authentication imports
-from auth.models import UserSignup, UserLogin, UserResponse, LogoutResponse, GoogleLoginRequest, TokenRefreshResponse
-from auth.crud import UserCRUD
+from auth.models import (
+    UserSignup, UserLogin, UserResponse, LogoutResponse, GoogleLoginRequest, TokenRefreshResponse,
+    MicrosoftLoginUrlRequest, MicrosoftCallbackRequest,
+)
+from auth.crud import UserCRUD, get_user_crud
 from auth.utils import create_access_token, verify_token, ACCESS_TOKEN_EXPIRE_MINUTES
 from auth.cookies import (
     set_access_token_cookie,
@@ -26,6 +29,8 @@ from auth.refresh_token import (
     revoke_refresh_token
 )
 from auth.google_auth import GoogleAuthService
+from auth.microsoft_auth import MicrosoftAuthService
+from auth.microsoft_state import create_state, pop_state
 from auth.dependencies import get_current_user as get_current_user_from_deps
 from utils.email_verification import get_email_verification_crud
 from utils.password_reset import get_password_reset_crud
@@ -359,6 +364,226 @@ async def google_login(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Google login failed: {str(e)}"
         )
+
+
+@router.post("/microsoft/login-url")
+async def microsoft_login_url(body: MicrosoftLoginUrlRequest):
+    """
+    Start "Sign in with Microsoft" — returns the URL to redirect the browser to.
+
+    `invite_token`, if given, marks this round-trip as an invitation acceptance rather than
+    a normal login/signup; it's carried through Microsoft's `state` param (looked back up in
+    /microsoft/callback) since login-url and callback are two separate HTTP requests.
+    """
+    try:
+        ms_auth = MicrosoftAuthService()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    state = create_state(body.invite_token)
+    return {"auth_url": ms_auth.get_authorization_url(state)}
+
+
+@router.post("/microsoft/callback")
+async def microsoft_callback(body: MicrosoftCallbackRequest, request: Request):
+    """
+    Complete "Sign in with Microsoft" — exchanges the authorization code for a VERIFIED
+    identity (via MSAL; Microsoft's tokens are discarded immediately after), then either:
+      - accepts a pending invitation (if the login-url call carried an invite_token), or
+      - logs in / open-self-registers (mirrors /google/login exactly), otherwise.
+    """
+    ok, invite_token = pop_state(body.state)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your sign-in session expired or was already used — please try again.",
+        )
+
+    try:
+        ms_auth = MicrosoftAuthService()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    profile, error = ms_auth.acquire_token(body.code)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=error or "Microsoft sign-in failed")
+
+    if invite_token:
+        return await _accept_invitation_via_microsoft(profile, invite_token, request)
+    return await _login_or_signup_via_microsoft(profile, request)
+
+
+async def _login_or_signup_via_microsoft(profile, request: Request) -> dict:
+    """Normal login/signup path — mirrors google_login's body exactly (auth_method differs)."""
+    user = UserCRUD.create_or_update_microsoft_user(profile)
+
+    from auth.database import get_mongodb_client
+    users_collection = get_mongodb_client().get_users_collection()
+    user_doc = users_collection.find_one({"email": user.email})
+
+    current_org_id = user_doc.get("current_organization_id")
+    organizations = user_doc.get("organizations", [])
+    if organizations and current_org_id:
+        current_org = next(
+            (org for org in organizations if org["organization_id"] == current_org_id), None
+        )
+        if current_org:
+            user.organization_id = str(current_org["organization_id"])
+            user.role = current_org["role"]
+            user.status = current_org["status"]
+
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    refresh_token = await create_refresh_token(
+        user_email=user.email,
+        device_info=request.headers.get("User-Agent", "Unknown"),
+        ip_address=request.client.host if request.client else "Unknown",
+    )
+
+    from auth import config
+    user_version = user_doc.get("terms_accepted_version")
+    needs_terms_acceptance = user_version != config.CURRENT_TERMS_VERSION
+    user.terms_accepted_version = user_version
+    user.terms_accepted_at = user_doc.get("terms_accepted_at")
+    user.needs_terms_acceptance = needs_terms_acceptance
+
+    onboarding_progress = None
+    if user.organization_id and user.role:
+        onboarding_crud = get_onboarding_crud()
+        progress = onboarding_crud.get_or_create_progress(
+            user_id=str(user_doc["_id"]), organization_id=str(user.organization_id), role=user.role
+        )
+        if progress:
+            onboarding_progress = serialize_doc(progress)
+
+    user_dict = {
+        "id": str(user_doc["_id"]),
+        "email": user.email,
+        "firstName": user.firstName,
+        "lastName": user.lastName,
+        "organization_id": user.organization_id,
+        "role": user.role,
+        "status": user.status,
+        "created_at": user_doc["createdAt"].isoformat() if user_doc.get("createdAt") else None,
+        "terms_accepted_version": user.terms_accepted_version,
+        "terms_accepted_at": user.terms_accepted_at.isoformat() if user.terms_accepted_at else None,
+        "needs_terms_acceptance": user.needs_terms_acceptance,
+        "onboarding_progress": onboarding_progress,
+    }
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "user": user_dict,
+    }
+
+
+async def _accept_invitation_via_microsoft(profile, invite_token: str, request: Request) -> dict:
+    """Invite-acceptance path — mirrors POST /api/invitations/accept's body, but the person's
+    identity is proven by Microsoft instead of a typed password. Mirrors that endpoint's
+    existing-user org-merge logic verbatim (kept separate rather than refactored into a shared
+    helper, so this addition can't disturb the already-working plain-password accept path)."""
+    from utils.invitations import get_invitation_crud
+
+    invitation_crud = get_invitation_crud()
+    try:
+        invitation = invitation_crud.validate_token(invite_token)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    # The security-critical check this whole flow hinges on: the invite proves someone chose
+    # to invite THIS email; Microsoft here must vouch for that SAME email, or a Microsoft
+    # sign-in as anyone else must never be allowed to redeem someone else's invitation.
+    if profile.email.lower() != invitation["email"].lower():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"This invitation was sent to {invitation['email']}. "
+                f"You signed in as {profile.email} — please use the matching Microsoft account."
+            ),
+        )
+
+    user_crud = get_user_crud()
+    existing_user = user_crud.collection.find_one({"email": invitation["email"]})
+
+    if existing_user:
+        organizations = existing_user.get("organizations", [])
+        existing_org_entry = next(
+            (org for org in organizations if org["organization_id"] == invitation["organization_id"]),
+            None,
+        )
+        if existing_org_entry:
+            if existing_org_entry.get("status") != "removed":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="You are already a member of this organization",
+                )
+            user_crud.collection.update_one(
+                {"_id": existing_user["_id"], "organizations.organization_id": invitation["organization_id"]},
+                {"$set": {
+                    "organizations.$.status": "active",
+                    "organizations.$.role": invitation["role"],
+                    "organizations.$.joinedAt": datetime.utcnow(),
+                    "current_organization_id": invitation["organization_id"],
+                    "updatedAt": datetime.utcnow(),
+                }},
+            )
+        else:
+            user_crud.collection.update_one(
+                {"_id": existing_user["_id"]},
+                {
+                    "$push": {"organizations": {
+                        "organization_id": invitation["organization_id"],
+                        "role": invitation["role"],
+                        "status": "active",
+                        "joinedAt": datetime.utcnow(),
+                    }},
+                    "$set": {
+                        "current_organization_id": invitation["organization_id"],
+                        "updatedAt": datetime.utcnow(),
+                    },
+                },
+            )
+        user = user_crud.collection.find_one({"_id": existing_user["_id"]})
+        user_id = existing_user["_id"]
+    else:
+        user = user_crud.create_microsoft_user_with_organization(
+            microsoft_profile=profile,
+            organization_id=invitation["organization_id"],
+            role=invitation["role"],
+        )
+        user_id = user["_id"]
+
+    invitation_crud.accept_invitation(invite_token, user_id)
+
+    if invitation.get("proposal_ids"):
+        from bson import ObjectId
+        from auth.database import get_mongodb_client
+        proposals_collection = get_mongodb_client().get_database()["proposals"]
+        for proposal_id in invitation["proposal_ids"]:
+            try:
+                proposals_collection.update_one(
+                    {"_id": ObjectId(proposal_id), "organization_id": invitation["organization_id"]},
+                    {"$addToSet": {"shared_with": str(user_id)}},
+                )
+            except Exception as e:  # noqa: BLE001 — best-effort, matches the password-accept path
+                print(f"Warning: Could not grant access to proposal {proposal_id}: {e}")
+
+    access_token = create_access_token(data={"sub": user["email"]}, expires_delta=timedelta(minutes=30))
+    refresh_token = await create_refresh_token(
+        user_email=user["email"], device_info="Invitation acceptance (Microsoft)", ip_address="Unknown"
+    )
+
+    user_response = serialize_doc(user)
+    user_response.pop("password", None)
+    return {
+        "message": "Invitation accepted successfully",
+        "user": user_response,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+    }
 
 
 @router.get("/me")

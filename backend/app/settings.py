@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     
     ANALYST_MODEL: str = "openai/gpt-5.4-mini"
 
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

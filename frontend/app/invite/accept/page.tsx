@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { invitationsApi, AcceptInvitationRequest } from '@/lib/api/invitations';
 import { useAuthStore } from '@/lib/stores/authStore';
+import { authApi } from '@/lib/api/auth';
 import { ValidateTokenResponse } from '@/lib/types';
 
 type ValidationStatus = 'loading' | 'valid' | 'invalid' | 'expired';
@@ -25,6 +26,8 @@ function AcceptInvitationContent() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [msBusy, setMsBusy] = useState(false);
+  const [msError, setMsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (ran.current) return;
@@ -103,6 +106,24 @@ function AcceptInvitationContent() {
       setError(err.response?.data?.detail || 'Failed to accept invitation.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Alternative to the form above: prove identity via Microsoft instead of typing a name +
+  // password (new user) or just clicking Accept (existing user). The invite token rides
+  // through Microsoft's `state` param, so whoever comes back is routed to
+  // /auth/microsoft-callback, not back here — that page finishes the login the same way for
+  // either flow.
+  const handleMicrosoftAccept = async () => {
+    if (!token) return;
+    setMsError(null);
+    setMsBusy(true);
+    try {
+      const { auth_url } = await authApi.getMicrosoftLoginUrl(token);
+      window.location.href = auth_url;
+    } catch (err: any) {
+      setMsError(err.response?.data?.detail || "Couldn't start Microsoft sign-in.");
+      setMsBusy(false);
     }
   };
 
@@ -315,6 +336,24 @@ function AcceptInvitationContent() {
             </button>
           </form>
 
+          <div style={styles.divider}>
+            <span style={styles.dividerLine} />
+            <span style={styles.dividerText}>or</span>
+            <span style={styles.dividerLine} />
+          </div>
+
+          {msError && <div style={styles.errorBox}>{msError}</div>}
+          <button
+            type="button"
+            className="btn ghost"
+            style={styles.submit}
+            onClick={handleMicrosoftAccept}
+            disabled={msBusy}
+          >
+            {msBusy && <span className="spin" />}
+            {msBusy ? 'Redirecting…' : 'Continue with Microsoft'}
+          </button>
+
           <div style={styles.footer}>
             Already have an account?{' '}
             <Link href="/auth/login" style={styles.linkStrong}>
@@ -460,6 +499,14 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
     marginTop: 4,
   },
+  divider: {
+    marginTop: 18,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+  },
+  dividerLine: { flex: 1, height: 1, background: 'var(--line)' },
+  dividerText: { fontSize: 11.5, color: 'var(--faint)', letterSpacing: '0.03em' },
   muted: { fontSize: 11.5, color: 'var(--faint)', lineHeight: 1.5 },
   footer: { marginTop: 20, textAlign: 'center', fontSize: 13, color: 'var(--muted)' },
   linkStrong: { color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 },

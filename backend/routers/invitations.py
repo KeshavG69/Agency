@@ -257,6 +257,45 @@ async def revoke_invitation(
     }
 
 
+@router.post("/{invitation_id}/resend")
+async def resend_invitation(
+    invitation_id: str,
+    current_user: dict = Depends(require_admin)
+):
+    """
+    Resend a pending invitation (admin only) — mints a fresh token, resets the 7-day
+    expiry, and re-sends the email. Lets an admin retry a stuck, near-expiry, or
+    lost/never-received invite without revoking it and creating a new one from scratch.
+
+    Args:
+        invitation_id: Invitation's ObjectId as string
+
+    Returns:
+        The updated invitation document (without the token hash)
+
+    Raises:
+        HTTPException 400: If invalid invitation ID
+        HTTPException 404: If invitation not found or no longer pending
+    """
+    try:
+        inv_oid = ObjectId(invitation_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid invitation ID format"
+        )
+
+    invitation_crud = get_invitation_crud()
+    try:
+        invitation = invitation_crud.resend_invitation(inv_oid, current_user["organization_id"])
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    invitation_response = serialize_doc(invitation)
+    invitation_response.pop("token_hash", None)
+    return {"message": "Invitation resent successfully", "invitation": invitation_response}
+
+
 @router.get("/validate/{token}")
 async def validate_invitation_token(token: str):
     """

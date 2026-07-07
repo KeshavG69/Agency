@@ -164,6 +164,42 @@ class InvitationCRUD:
 
         return list(cursor)
 
+    def resend_invitation(self, invitation_id: ObjectId, org_id: ObjectId) -> dict:
+        """Resend a pending invitation: mint a NEW token, reset the 7-day expiry, and
+        re-send the email. Lets an admin retry a stuck/expired-soon/lost invite without
+        having to revoke it and start over from scratch."""
+        invitation = self.collection.find_one({
+            "_id": invitation_id,
+            "organization_id": org_id,
+            "status": "pending",
+        })
+        if not invitation:
+            raise ValueError("No pending invitation found to resend")
+
+        token = secrets.token_urlsafe(48)
+        token_hash = self._hash_token(token)
+        expires_at = datetime.utcnow() + timedelta(days=7)
+        self.collection.update_one(
+            {"_id": invitation_id},
+            {"$set": {"token_hash": token_hash, "expires_at": expires_at}},
+        )
+        invitation["token_hash"] = token_hash
+        invitation["expires_at"] = expires_at
+
+        try:
+            self.email_service.send_invitation_email(
+                to_email=invitation["email"],
+                token=token,  # plain token, only visible here (same as create_invitation)
+                organization_name=invitation["organization_name"],
+                invited_by_name=invitation["invited_by_name"],
+            )
+        except Exception as e:
+            print(f"Failed to resend invitation email: {e}")
+            # Don't fail the resend if the email itself fails — the new token is live
+            # either way; an admin can just try Resend again.
+
+        return invitation
+
     def revoke_invitation(self, invitation_id: ObjectId, org_id: ObjectId) -> bool:
         """Revoke/cancel invitation (sync)"""
         

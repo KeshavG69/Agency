@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/lib/stores/authStore';
+import { authApi } from '@/lib/api/auth';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,6 +12,8 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [msBusy, setMsBusy] = useState(false);
+  const [msError, setMsError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,6 +24,18 @@ export default function LoginPage() {
     } catch (err) {
       // Error surfaced via the store's `error`.
       console.error('Login failed:', err);
+    }
+  };
+
+  const handleMicrosoftSignIn = async () => {
+    setMsError(null);
+    setMsBusy(true);
+    try {
+      const { auth_url } = await authApi.getMicrosoftLoginUrl();
+      window.location.href = auth_url;
+    } catch (err: any) {
+      setMsError(err.response?.data?.detail || "Couldn't start Microsoft sign-in.");
+      setMsBusy(false);
     }
   };
 
@@ -89,6 +104,24 @@ export default function LoginPage() {
               {isLoading ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
+
+          <div style={styles.divider}>
+            <span style={styles.dividerLine} />
+            <span style={styles.dividerText}>or</span>
+            <span style={styles.dividerLine} />
+          </div>
+
+          {msError && <div style={styles.errorBox}>{msError}</div>}
+          <button
+            type="button"
+            className="btn ghost"
+            style={styles.submit}
+            onClick={handleMicrosoftSignIn}
+            disabled={msBusy}
+          >
+            {msBusy && <span className="spin" />}
+            {msBusy ? 'Redirecting…' : 'Sign in with Microsoft'}
+          </button>
 
           <div style={styles.footer}>
             Don&apos;t have an account?{' '}
@@ -171,6 +204,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     color: '#b4453a',
   },
+  divider: {
+    marginTop: 20,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+  },
+  dividerLine: { flex: 1, height: 1, background: 'var(--line)' },
+  dividerText: { fontSize: 11.5, color: 'var(--faint)', letterSpacing: '0.03em' },
   submit: {
     width: '100%',
     display: 'flex',
