@@ -275,15 +275,20 @@ def _is_human(email: str) -> bool:
 
 
 def fetch_outlook_correspondents(user_id: str, per_folder: int = 200) -> list[dict]:
-    """Derive the real network from EMAIL HISTORY (not the address book).
+    """Derive the real network from the ENTIRE MAILBOX's email history — not just
+    inbox/sent, and not the address book. BD mailboxes commonly file correspondence
+    into deep per-project/per-opportunity folder trees (this one has 37+ top-level
+    folders, some with 40+ sub-folders); scoping to inbox+sent alone misses most of
+    that. `OUTLOOK_QUERY_EMAILS` with no `folder` hits Graph's mailbox-wide
+    `/me/messages`, which spans every folder in one paginated sweep.
 
     Aggregates inbound senders + outbound recipients into people, with how often
     (count = relationship strength) and how recently (last_seen). This is the node
     + edge-weight feed for the graph. Returns dicts: { name, email, count, last_seen }.
     """
-    uid = user_id
+    own_email = user_id.strip().lower()
+    own_domain = own_email.split("@", 1)[1] if "@" in own_email else ""
     agg: dict[str, dict] = {}
-    own_domains: set[str] = set()  # the user's own domain(s) — auto-detected from sent mail
 
     def bump(email: Optional[str], name: Optional[str], when: Optional[str]) -> None:
         if not email:
@@ -296,40 +301,32 @@ def fetch_outlook_correspondents(user_id: str, per_folder: int = 200) -> list[di
         if when and (e["last_seen"] is None or when > e["last_seen"]):
             e["last_seen"] = when
 
-    # Inbound — who emailed you (paginated — a single page silently undercounts on
-    # any mailbox with more than `per_folder` messages in the folder)
-    inbound = _paginate(
+    messages = _paginate(
         "OUTLOOK_QUERY_EMAILS",
-        {"user_id": "me", "folder": "inbox", "select": ["from", "receivedDateTime"]},
-        uid, page_size=per_folder,
+        {"user_id": "me", "select": ["from", "toRecipients", "sentDateTime", "receivedDateTime"]},
+        own_email, page_size=per_folder,
     )
-    for m in inbound:
-        addr, name = _addr(m.get("from"))
-        bump(addr, name, m.get("receivedDateTime"))
+    for m in messages:
+        from_addr, from_name = _addr(m.get("from"))
+        when = m.get("sentDateTime") or m.get("receivedDateTime")
+        if from_addr and from_addr.lower() == own_email:
+            # A message you authored (wherever it now lives) — the real correspondents
+            # are the people you sent it to, not yourself.
+            for rec in m.get("toRecipients", []) or []:
+                addr, name = _addr(rec)
+                bump(addr, name, when)
+        else:
+            bump(from_addr, from_name, when)
 
-    # Outbound — who you emailed (also grab your own `from` to learn the org domain)
-    sent = _paginate(
-        "OUTLOOK_LIST_SENT_ITEMS_MESSAGES",
-        {"user_id": "me", "select": ["from", "toRecipients", "sentDateTime"]},
-        uid, page_size=per_folder,
-    )
-    for m in sent:
-        own_addr, _ = _addr(m.get("from"))
-        if own_addr and "@" in own_addr:
-            own_domains.add(own_addr.split("@", 1)[1].lower())
-        for rec in m.get("toRecipients", []) or []:
-            addr, name = _addr(rec)
-            bump(addr, name, m.get("sentDateTime"))
-
-    # Internal = our own domain(s), auto-detected from the mailbox's sent `from`.
-    # We store EXTERNAL contacts only — colleagues aren't part of the BD network.
+    # Internal = our own domain — colleagues aren't part of the BD network, we store
+    # EXTERNAL contacts only.
     out = []
     for e in agg.values():
         email = e["email"]
         if not _is_human(email):
             continue  # drop no-reply / notification / role inboxes
         domain = email.split("@", 1)[1] if "@" in email else ""
-        if domain in own_domains:
+        if own_domain and domain == own_domain:
             continue  # skip internal colleagues
         e["domain"] = domain
         e["external"] = True
@@ -339,14 +336,75 @@ def fetch_outlook_correspondents(user_id: str, per_folder: int = 200) -> list[di
     return out
 
 
+_GRAPH = "https://graph.microsoft.com/v1.0"
+
+# personType.subclass values that are ACTUAL external people (Person/PersonalContact for
+# saved-but-unlabeled personal contacts, Person/ImplicitContact for mail/calendar-derived
+# people with no saved contact card). Deliberately excludes "OrganizationUser" (internal
+# colleagues) and the "Group" class (distribution lists / Teams groups) — the People Hub
+# is dominated by both (see the genaiprotos.com test: 73 OrganizationUser + 19 Group vs.
+# only 5 real external people out of 97 total), and neither belongs in the BD network.
+_PEOPLE_HUB_EXTERNAL_SUBCLASSES = {"PersonalContact", "ImplicitContact"}
+
+
+def fetch_outlook_people_hub(user_id: str, page_size: int = 500) -> list[dict]:
+    """Pull Microsoft's "Relevant People" (`/me/people`) — a third signal beyond mail
+    history and the address book: it also draws on calendar invites, Teams, and org-chart
+    relevance that pure mail-history scanning misses. Requires the `People.Read` scope
+    (added to the Outlook auth config) — accounts connected before that change need to
+    reconnect, or this returns nothing (logged, not raised).
+
+    No dedicated Composio action exists for this endpoint, so it goes through the generic
+    Composio proxy (`tools.proxy`) directly against Graph, keyed by connected_account_id
+    (not user_id) — same transport SharePoint's ACL crawl uses for REST calls Composio
+    doesn't wrap. Returns normalized external-only dicts: { name, email }.
+    """
+    status = connection_status("outlook", user_id)
+    account_id = status.get("connected_account_id") if status.get("connected") else None
+    if not account_id:
+        logger.warning("fetch_outlook_people_hub: no ACTIVE outlook connection for %s", user_id)
+        return []
+
+    client = get_composio_client()
+    out: list[dict] = []
+    skip = 0
+    while True:
+        url = f"{_GRAPH}/me/people?$top={page_size}&$skip={skip}"
+        pr = client.tools.proxy(endpoint=url, method="GET", connected_account_id=account_id)
+        d = pr if isinstance(pr, dict) else pr.model_dump()
+        status_code = d.get("status")
+        if isinstance(status_code, (int, float)) and not (200 <= status_code < 300):
+            logger.warning(
+                "fetch_outlook_people_hub: HTTP %s for %s (scope missing? reconnect needed)",
+                int(status_code), user_id,
+            )
+            break
+        page = (d.get("data") or {}).get("value") or []
+        for p in page:
+            person_type = p.get("personType") or {}
+            if person_type.get("subclass") not in _PEOPLE_HUB_EXTERNAL_SUBCLASSES:
+                continue  # drop internal colleagues + groups
+            emails = p.get("scoredEmailAddresses") or []
+            email = (emails[0].get("address") if emails else None) or ""
+            if not email:
+                continue
+            out.append({"name": p.get("displayName"), "email": email})
+        if len(page) < page_size:
+            break
+        skip += page_size
+    return out
+
+
 def fetch_outlook_network(user_id: str, per_folder: int = 200) -> list[dict]:
-    """The full network = email-history correspondents MERGED with the Outlook address book.
+    """The full network = email-history correspondents MERGED with the Outlook address
+    book MERGED with Microsoft's own "relevant people" (People Hub, external-only).
 
     Correspondents give relationship strength (count / last_seen); the address book adds
-    company + title and people you've saved but not yet emailed. Deduped by email. Same
-    external-only + human filters as correspondents — colleagues (own domain) and
-    role/no-reply inboxes are dropped. Returns dicts: { email, name, count, last_seen,
-    domain, external, company?, title? }.
+    company + title and people you've saved but not yet emailed; the People Hub adds
+    calendar/Teams-derived people that pure mail-history scanning misses. Deduped by
+    email. Same external-only + human filters as correspondents — colleagues (own
+    domain) and role/no-reply inboxes are dropped. Returns dicts: { email, name, count,
+    last_seen, domain, external, company?, title? }.
     """
     by_email: dict[str, dict] = {c["email"]: dict(c) for c in fetch_outlook_correspondents(user_id, per_folder)}
 
@@ -381,11 +439,36 @@ def fetch_outlook_network(user_id: str, per_folder: int = 200) -> list[dict]:
             }
             added += 1
 
+    people_added = 0
+    try:
+        people = fetch_outlook_people_hub(user_id)
+    except Exception as exc:  # noqa: BLE001 — People Hub optional; keep the rest
+        logger.warning("Outlook People Hub fetch failed for %s: %s", user_id, exc)
+        people = []
+
+    for p in people:
+        email = (p.get("email") or "").strip().lower()
+        if not email or "@" not in email or not _is_human(email):
+            continue
+        domain = email.split("@", 1)[1]
+        if own_domain and domain == own_domain:
+            continue  # internal colleague (shouldn't occur post-filter, but stay consistent)
+        if email in by_email:
+            e = by_email[email]
+            if not e.get("name") and p.get("name"):
+                e["name"] = p["name"]
+        else:
+            by_email[email] = {
+                "email": email, "name": p.get("name"),
+                "count": 0, "last_seen": None, "domain": domain, "external": True,
+            }
+            people_added += 1
+
     merged = list(by_email.values())
     merged.sort(key=lambda x: x.get("count", 0), reverse=True)
     logger.info(
-        "Outlook network for %s: %d correspondents + %d address-book-only = %d total",
-        user_id, len(by_email) - added, added, len(merged),
+        "Outlook network for %s: %d correspondents + %d address-book-only + %d people-hub-only = %d total",
+        user_id, len(by_email) - added - people_added, added, people_added, len(merged),
     )
     return merged
 
