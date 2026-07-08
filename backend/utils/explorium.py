@@ -34,7 +34,11 @@ def _chunks(seq: list, n: int):
 
 
 def match_by_email(emails: list[str]) -> dict[str, str]:
-    """Map each email -> prospect_id (omits emails Explorium can't match)."""
+    """Map each email -> prospect_id (omits emails Explorium can't match).
+
+    Enrichment is best-effort — a bad batch (quota, rate limit, transient outage)
+    is logged and skipped rather than losing every contact in the ingest.
+    """
     if not emails:
         return {}
     out: dict[str, str] = {}
@@ -42,8 +46,12 @@ def match_by_email(emails: list[str]) -> dict[str, str]:
     with httpx.Client(timeout=60) as client:
         for batch in _chunks(emails, _MATCH_BATCH):
             body = {"request_context": {}, "prospects_to_match": [{"email": e} for e in batch]}
-            r = client.post(url, headers=_headers(), json=body)
-            r.raise_for_status()
+            try:
+                r = client.post(url, headers=_headers(), json=body)
+                r.raise_for_status()
+            except httpx.HTTPError as exc:
+                logger.warning("Explorium match_by_email batch failed (%d emails): %s", len(batch), exc)
+                continue
             for m in r.json().get("matched_prospects", []):
                 email = (m.get("input") or {}).get("email")
                 pid = m.get("prospect_id")
@@ -64,7 +72,11 @@ _PROSPECT_FIELDS = (
 
 
 def fetch_prospects(prospect_ids: list[str]) -> dict[str, dict]:
-    """Map prospect_id -> the full profile (every field in _PROSPECT_FIELDS)."""
+    """Map prospect_id -> the full profile (every field in _PROSPECT_FIELDS).
+
+    Enrichment is best-effort — a bad batch (quota, rate limit, transient outage)
+    is logged and skipped rather than losing every contact in the ingest.
+    """
     if not prospect_ids:
         return {}
     out: dict[str, dict] = {}
@@ -77,8 +89,12 @@ def fetch_prospects(prospect_ids: list[str]) -> dict[str, dict]:
                 "page": 1,
                 "filters": {"prospect_id": {"values": batch}},
             }
-            r = client.post(url, headers=_headers(), json=body)
-            r.raise_for_status()
+            try:
+                r = client.post(url, headers=_headers(), json=body)
+                r.raise_for_status()
+            except httpx.HTTPError as exc:
+                logger.warning("Explorium fetch_prospects batch failed (%d ids): %s", len(batch), exc)
+                continue
             payload = r.json()
             rows = payload.get("data") or payload.get("prospects") or payload.get("results") or []
             for row in rows:
