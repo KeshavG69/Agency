@@ -192,25 +192,47 @@ def send_outlook_email(args: dict, user_id: str) -> dict:
     return {"successful": ok, "error": err, "data": _resp_data(resp)}
 
 
+def _paginate(tool_slug: str, params: dict, user_id: str, page_size: int) -> list[dict]:
+    """Follow Microsoft Graph's `@odata.nextLink` (via `skip`) until fully exhausted.
+
+    Composio's Outlook actions cap each response at `top` and surface the next page
+    via `@odata.nextLink`, but don't paginate for you — callers that assume one page
+    is the whole result silently undercount on any mailbox bigger than `top`. No
+    artificial page cap: keeps going until Graph itself reports no more pages.
+    """
+    client = get_composio_client()
+    out: list[dict] = []
+    skip = 0
+    while True:
+        resp = client.tools.execute(
+            tool_slug,
+            {**params, "top": page_size, "skip": skip},
+            user_id=user_id,
+            dangerously_skip_version_check=True,
+        )
+        data = _resp_data(resp)
+        page = data.get("value") or data.get("contacts") or data.get("items") or []
+        out.extend(page)
+        if not data.get("@odata.nextLink") or len(page) < page_size:
+            break
+        skip += page_size
+    return out
+
+
 def fetch_outlook_contacts(user_id: str, top: int = 999) -> list[dict]:
     """Pull the user's Outlook contacts via Composio (Microsoft Graph under the hood).
 
-    Returns normalized dicts: { name, email, company, title }. This is the raw
-    node feed for the knowledge graph (enrichment via Explorium happens next).
+    Paginates through the full address book — a single page silently undercounts on
+    any mailbox with more than `top` contacts. Returns normalized dicts:
+    { name, email, company, title }. This is the raw node feed for the knowledge
+    graph (enrichment via Explorium happens next).
     """
-    client = get_composio_client()
-    resp = client.tools.execute(
+    raw = _paginate(
         "OUTLOOK_LIST_USER_CONTACTS",
-        {
-            "user_id": "me",
-            "top": top,
-            "select": ["displayName", "emailAddresses", "companyName", "jobTitle"],
-        },
-        user_id=user_id,
-        dangerously_skip_version_check=True,
+        {"user_id": "me", "select": ["displayName", "emailAddresses", "companyName", "jobTitle"]},
+        user_id,
+        page_size=top,
     )
-    data = _resp_data(resp)
-    raw = data.get("value") or data.get("contacts") or data.get("items") or []
     out: list[dict] = []
     for c in raw:
         emails = c.get("emailAddresses") or []
@@ -259,7 +281,6 @@ def fetch_outlook_correspondents(user_id: str, per_folder: int = 200) -> list[di
     (count = relationship strength) and how recently (last_seen). This is the node
     + edge-weight feed for the graph. Returns dicts: { name, email, count, last_seen }.
     """
-    client = get_composio_client()
     uid = user_id
     agg: dict[str, dict] = {}
     own_domains: set[str] = set()  # the user's own domain(s) — auto-detected from sent mail
@@ -275,24 +296,24 @@ def fetch_outlook_correspondents(user_id: str, per_folder: int = 200) -> list[di
         if when and (e["last_seen"] is None or when > e["last_seen"]):
             e["last_seen"] = when
 
-    # Inbound — who emailed you
-    inbound = client.tools.execute(
+    # Inbound — who emailed you (paginated — a single page silently undercounts on
+    # any mailbox with more than `per_folder` messages in the folder)
+    inbound = _paginate(
         "OUTLOOK_QUERY_EMAILS",
-        {"user_id": "me", "folder": "inbox", "top": per_folder,
-         "select": ["from", "receivedDateTime"]},
-        user_id=uid, dangerously_skip_version_check=True,
+        {"user_id": "me", "folder": "inbox", "select": ["from", "receivedDateTime"]},
+        uid, page_size=per_folder,
     )
-    for m in _resp_data(inbound).get("value", []) or []:
+    for m in inbound:
         addr, name = _addr(m.get("from"))
         bump(addr, name, m.get("receivedDateTime"))
 
     # Outbound — who you emailed (also grab your own `from` to learn the org domain)
-    sent = client.tools.execute(
+    sent = _paginate(
         "OUTLOOK_LIST_SENT_ITEMS_MESSAGES",
-        {"user_id": "me", "top": per_folder, "select": ["from", "toRecipients", "sentDateTime"]},
-        user_id=uid, dangerously_skip_version_check=True,
+        {"user_id": "me", "select": ["from", "toRecipients", "sentDateTime"]},
+        uid, page_size=per_folder,
     )
-    for m in _resp_data(sent).get("value", []) or []:
+    for m in sent:
         own_addr, _ = _addr(m.get("from"))
         if own_addr and "@" in own_addr:
             own_domains.add(own_addr.split("@", 1)[1].lower())
