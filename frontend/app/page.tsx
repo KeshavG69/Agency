@@ -160,6 +160,10 @@ function Console({ user }: { user: User }) {
   // landing) so the Library graph knows to start polling for the background crawl's
   // result — the user shouldn't have to reload the page to see it appear.
   const [spGraphRefresh, setSpGraphRefresh] = useState(0);
+  // Same idea for the Contacts graph — bumped after an ingest completes (background task)
+  // or Outlook is disconnected (which purges the graph server-side), so the graph
+  // re-fetches instead of showing stale data until a manual reload.
+  const [contactsGraphRefresh, setContactsGraphRefresh] = useState(0);
   // Outlook contact-review dialog (pick which contacts to ingest).
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(false);
@@ -287,6 +291,7 @@ function Console({ user }: { user: User }) {
       // real backend status per stage, so this never causes a stage to be skipped. But if a
       // stage's delete call itself errored, tell the admin rather than implying full success.
       setConnection("sharepoint", false, null);
+      setSpGraphRefresh((n) => n + 1); // disconnect purges the graph server-side — re-fetch to reflect it
       if (result.failed.length > 0) {
         setError(
           `SharePoint disconnect was incomplete (${result.failed.join(", ")} still connected) — try again.`,
@@ -306,6 +311,7 @@ function Console({ user }: { user: User }) {
     try {
       await disconnectOutlook(outlookAccount);
       setConnection("outlook", false, null);
+      setContactsGraphRefresh((n) => n + 1); // disconnect purges the graph server-side — re-fetch to reflect it
     } catch {
       setError("Couldn't disconnect Outlook.");
     } finally {
@@ -341,6 +347,7 @@ function Console({ user }: { user: User }) {
     try {
       await ingestOutlookContacts(selected);
       setError(`Importing ${selected.length} contact${selected.length === 1 ? "" : "s"} — this runs in the background.`);
+      setContactsGraphRefresh((n) => n + 1);
     } catch {
       setError("Couldn't import the selected contacts.");
     } finally {
@@ -646,7 +653,7 @@ function Console({ user }: { user: User }) {
             onDisconnect={onDisconnectOutlook}
             onResync={onResyncContacts}
           />
-          <ContactsGraph />
+          <ContactsGraph refreshSignal={contactsGraphRefresh} />
         </section>
       ) : view === "documents" ? (
         <section className="graph-pane">

@@ -38,15 +38,46 @@ const card = (n: GraphNode) =>
     </>
   );
 
-export default function ContactsGraph() {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export default function ContactsGraph({ refreshSignal }: { refreshSignal?: number } = {}) {
   const [data, setData] = useState<ContactGraph | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  // Contact ingestion (and disconnect's purge) runs/completes in the background — rather
+  // than making the user manually reload the page to see it land, poll for a while and
+  // pick it up automatically. Re-fetches on mount and every time `refreshSignal` changes
+  // (bumped by the parent on ingest / disconnect). Mirrors SharePointGraph's polling.
   useEffect(() => {
-    fetchContactGraph()
-      .then(setData)
-      .catch(() => setErr("Couldn't load the graph — is the backend + FalkorDB up?"));
-  }, []);
+    let cancelled = false;
+    let attempt = 0;
+    const maxAttempts = 60; // ~5 min at 5s intervals
+
+    const tick = async () => {
+      try {
+        const fresh = await fetchContactGraph();
+        if (cancelled) return;
+        setErr(null);
+        setData((prev) =>
+          prev && prev.nodes.length === fresh.nodes.length && prev.edges.length === fresh.edges.length
+            ? prev
+            : fresh,
+        );
+      } catch {
+        if (!cancelled) setErr("Couldn't load the graph — is the backend + FalkorDB up?");
+      }
+      attempt++;
+      if (!cancelled && attempt < maxAttempts) {
+        await sleep(5000);
+        if (!cancelled) tick();
+      }
+    };
+
+    tick();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshSignal]);
 
   if (err) return <div className="graph-empty">{err}</div>;
   if (!data) return <div className="graph-empty">Loading network…</div>;
