@@ -199,6 +199,11 @@ def _paginate(tool_slug: str, params: dict, user_id: str, page_size: int) -> lis
     via `@odata.nextLink`, but don't paginate for you — callers that assume one page
     is the whole result silently undercount on any mailbox bigger than `top`. No
     artificial page cap: keeps going until Graph itself reports no more pages.
+
+    Termination trusts `@odata.nextLink` alone — NOT "page shorter than `top`". Graph
+    legitimately returns a short page (e.g. 499 of a requested 500) while `nextLink`
+    still points to more; stopping on a short page silently truncates the result (this
+    is exactly how an earlier version undercounted a 4176-contact mailbox as 997).
     """
     client = get_composio_client()
     out: list[dict] = []
@@ -213,9 +218,12 @@ def _paginate(tool_slug: str, params: dict, user_id: str, page_size: int) -> lis
         data = _resp_data(resp)
         page = data.get("value") or data.get("contacts") or data.get("items") or []
         out.extend(page)
-        if not data.get("@odata.nextLink") or len(page) < page_size:
+        has_next = bool(data.get("@odata.nextLink"))
+        if not page:
+            break  # empty page — nothing left regardless of nextLink
+        if not has_next:
             break
-        skip += page_size
+        skip += len(page)  # advance by what was actually returned, not the requested top
     return out
 
 
@@ -255,32 +263,13 @@ def _addr(obj: dict) -> tuple[Optional[str], Optional[str]]:
     return ea.get("address"), ea.get("name")
 
 
-# Local-parts that are machines/role inboxes, not people.
-_ROLE_LOCALPARTS = {
-    "no-reply", "noreply", "no_reply", "donotreply", "do-not-reply", "notifications",
-    "notification", "notify", "mailer", "mailer-daemon", "postmaster", "bounce", "bounces",
-    "alert", "alerts", "info", "support", "team", "hello", "contact", "news", "newsletter",
-    "updates", "update", "marketing", "sales", "billing", "help", "admin", "automated",
-}
-
-
-def _is_human(email: str) -> bool:
-    """Heuristic: keep real people, drop no-reply / notification / role inboxes."""
-    local = email.split("@", 1)[0].lower()
-    if any(tok in local for tok in ("no-reply", "noreply", "no_reply", "donotreply", "do-not-reply")):
-        return False
-    if local in _ROLE_LOCALPARTS:
-        return False
-    return True
-
-
 def fetch_outlook_network(user_id: str) -> list[dict]:
-    """The network = the Outlook address book, external-only.
-
-    Colleagues (own domain) and role/no-reply inboxes are dropped. Returns dicts:
-    { email, name, count, last_seen, domain, external, company?, title? } — `count`/
-    `last_seen` are always 0/None here (no mail-history signal), kept for shape
-    compatibility with the graph upsert and review-dialog consumers.
+    """The network = the ENTIRE Outlook address book, unfiltered — no internal-colleague
+    drop, no role/no-reply drop. The review dialog is the filter now: the user sees and
+    picks from everything. Returns dicts: { email, name, count, last_seen, domain,
+    external, company?, title? } — `count`/`last_seen` are always 0/None here (no mail-
+    history signal), `external` reflects whether the domain differs from the owner's own,
+    kept for shape compatibility with the graph upsert and review-dialog consumers.
     """
     own_domain = user_id.split("@", 1)[1].lower() if "@" in user_id else ""
     book = fetch_outlook_contacts(user_id)
@@ -288,19 +277,18 @@ def fetch_outlook_network(user_id: str) -> list[dict]:
     by_email: dict[str, dict] = {}
     for c in book:
         email = (c.get("email") or "").strip().lower()
-        if not email or "@" not in email or not _is_human(email):
+        if not email or "@" not in email:
             continue
         domain = email.split("@", 1)[1]
-        if own_domain and domain == own_domain:
-            continue  # internal colleague
         by_email[email] = {
             "email": email, "name": c.get("name"),
             "company": c.get("company"), "title": c.get("title"),
-            "count": 0, "last_seen": None, "domain": domain, "external": True,
+            "count": 0, "last_seen": None, "domain": domain,
+            "external": not (own_domain and domain == own_domain),
         }
 
     merged = list(by_email.values())
-    logger.info("Outlook network for %s: %d address-book contacts", user_id, len(merged))
+    logger.info("Outlook network for %s: %d address-book contacts (unfiltered)", user_id, len(merged))
     return merged
 
 

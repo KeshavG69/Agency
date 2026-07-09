@@ -145,13 +145,28 @@ function Console({ user }: { user: User }) {
   const [capturing, setCapturing] = useState(false);
   const [outreachBusy, setOutreachBusy] = useState<string | null>(null);
   const [outreachOne, setOutreachOne] = useState<string | null>(null);
-  // Connection state is cached (set on the OAuth redirect), not fetched on every load.
+  // Connection state is cached (set on the OAuth redirect) so most loads don't need a
+  // round trip. But the cache is per-browser localStorage — if the user connected on a
+  // different device/browser, hit a stale attempt before a later one actually succeeded,
+  // or cleared storage, the cache can say "not connected" while the backend disagrees.
+  // Reconcile from the real backend status once on mount so the UI is never permanently
+  // wrong just because the redirect-time cache write didn't happen on THIS browser.
   const outlook = useConnectionStore((s) => s.outlook);
   const sharepoint = useConnectionStore((s) => s.sharepoint);
   const setConnection = useConnectionStore((s) => s.setConnection);
   const outlookConnected = outlook.connected;
   const outlookAccount = outlook.accountId;
   const spConnected = sharepoint.connected;
+
+  useEffect(() => {
+    getConnStatus("outlook")
+      .then((s) => setConnection("outlook", s.connected, s.connected_account_id ?? null))
+      .catch(() => {}); // offline/unauthenticated — keep whatever the cache already says
+    getConnStatus("sharepoint")
+      .then((s) => setConnection("sharepoint", s.connected, s.connected_account_id ?? null))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [connecting, setConnecting] = useState(false);
   const [spConnecting, setSpConnecting] = useState(false);
   const [resyncing, setResyncing] = useState(false);
