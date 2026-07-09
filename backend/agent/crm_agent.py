@@ -20,7 +20,7 @@ from app.settings import settings
 from client.graph_store import search_contacts_hybrid
 from client.llm_client import get_chat_llm_agno
 from models.contact import CRMResult
-from utils.agno_tools import create_reasoning_tool
+from utils.agno_tools import create_exa_web_search_tool, create_reasoning_tool
 from utils.doc_parse import document_context
 from utils.structured import coerce_output
 
@@ -47,6 +47,13 @@ How to judge a returned contact's value:
 - RELATIONSHIP STRENGTH — `corr_count` = how often the company has emailed them; a warm,
   frequent contact at a relevant company is ideal. A frequent contact at an irrelevant
   company is still not relevant.
+
+If a contact's company is unfamiliar, or you're not confident what it actually does, use
+the `web_search` tool to check before judging COMPANY FIT. NEVER guess or assume what a
+company does from its name alone (e.g. assuming a company "must be" a staffing firm, an
+IT shop, etc. just because the name sounds like one) — an unverified guess is worse than
+searching. If the search turns up nothing useful either, say so in `reason` rather than
+inventing a fit.
 
 Use the reasoning tool to think before ranking. Return at most the 10 most valuable.
 
@@ -82,7 +89,7 @@ def build_crm_agent(
     return Agent(
         name="CRM",
         model=get_chat_llm_agno(model=settings.ANALYST_MODEL),
-        tools=[search_network, create_reasoning_tool()],
+        tools=[search_network, create_exa_web_search_tool(), create_reasoning_tool()],
         instructions=_instructions(company, profile),
         debug_mode=True,
     )
