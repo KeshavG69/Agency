@@ -67,80 +67,51 @@ export default function ForceGraph<N extends FGNode>({
   const heavySet = useMemo(() => new Set(heavyTypes), [heavyKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    simRef.current = nodes.map((n, i) => {
+    // Run layout synchronously to completion — no animation, no rAF loop.
+    const ns: Sim<N>[] = nodes.map((n, i) => {
       const ang = (i / Math.max(nodes.length, 1)) * Math.PI * 2;
       const rr = heavySet.has(n.type ?? "") ? 80 : 240;
       return { ...n, x: W / 2 + Math.cos(ang) * rr, y: H / 2 + Math.sin(ang) * rr, vx: 0, vy: 0 };
     });
+    simRef.current = ns;
     viewRef.current = { tx: 0, ty: 0, k: 1 };
-    const byId = new Map(simRef.current.map((n) => [n.id, n]));
-    let raf = 0;
-    const tick = () => {
-      const ns = simRef.current;
-      const drag = dragRef.current;
+    const byId = new Map(ns.map((n) => [n.id, n]));
+    const ITERS = 200;
+    for (let iter = 0; iter < ITERS; iter++) {
+      const alpha = 1 - iter / ITERS;
       for (let i = 0; i < ns.length; i++) {
         for (let j = i + 1; j < ns.length; j++) {
-          const a = ns[i];
-          const b = ns[j];
-          let dx = a.x - b.x;
-          let dy = a.y - b.y;
+          const a = ns[i], b = ns[j];
+          const dx = a.x - b.x, dy = a.y - b.y;
           const d2 = dx * dx + dy * dy || 0.01;
           const d = Math.sqrt(d2);
-          const rep = charge / d2;
-          const fx = (dx / d) * rep;
-          const fy = (dy / d) * rep;
-          if (drag.id !== a.id) {
-            a.vx += fx;
-            a.vy += fy;
-          }
-          if (drag.id !== b.id) {
-            b.vx -= fx;
-            b.vy -= fy;
-          }
+          const f = (charge / d2) * alpha;
+          const fx = (dx / d) * f, fy = (dy / d) * f;
+          a.vx += fx; a.vy += fy;
+          b.vx -= fx; b.vy -= fy;
         }
       }
       for (const e of edges) {
-        const a = byId.get(e.source);
-        const b = byId.get(e.target);
+        const a = byId.get(e.source), b = byId.get(e.target);
         if (!a || !b) continue;
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
+        const dx = b.x - a.x, dy = b.y - a.y;
         const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        const k = 0.02 * (d - linkDist);
-        const fx = (dx / d) * k;
-        const fy = (dy / d) * k;
-        if (drag.id !== a.id) {
-          a.vx += fx;
-          a.vy += fy;
-        }
-        if (drag.id !== b.id) {
-          b.vx -= fx;
-          b.vy -= fy;
-        }
+        const f = 0.02 * (d - linkDist) * alpha;
+        const fx = (dx / d) * f, fy = (dy / d) * f;
+        a.vx += fx; a.vy += fy;
+        b.vx -= fx; b.vy -= fy;
       }
-      let moved = 0;
       for (const n of ns) {
-        if (drag.id === n.id) {
-          n.vx = 0;
-          n.vy = 0;
-          continue;
-        }
-        n.vx += (W / 2 - n.x) * 0.008;
-        n.vy += (H / 2 - n.y) * 0.008;
-        const damp = heavySet.has(n.type ?? "") ? 0.8 : 0.87;
-        n.vx *= damp;
-        n.vy *= damp;
-        n.x += n.vx;
-        n.y += n.vy;
-        moved += Math.abs(n.vx) + Math.abs(n.vy);
+        n.vx += (W / 2 - n.x) * 0.003 * alpha;
+        n.vy += (H / 2 - n.y) * 0.003 * alpha;
+        const damp = heavySet.has(n.type ?? "") ? 0.75 : 0.85;
+        n.vx *= damp; n.vy *= damp;
+        n.x += n.vx; n.y += n.vy;
       }
-      // Only re-render when something actually changed (saves idle CPU).
-      if (moved > 0.4 || drag.id || drag.panning) force((f) => f + 1);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [nodes, edges, charge, linkDist, reset, heavySet]);
+    }
+    // Single render after layout is done
+    force((f) => f + 1);
+  }, [nodes, edges, charge, linkDist, reset, heavySet]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const neighbors = useMemo(() => {
     const set = new Set<string>();
