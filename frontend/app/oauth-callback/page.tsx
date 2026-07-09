@@ -16,16 +16,24 @@ const LABEL: Record<string, string> = { outlook: "Outlook", sharepoint: "SharePo
 function CallbackInner() {
   const router = useRouter();
   const params = useSearchParams();
-  // Which provider this OAuth round-trip was for (set before redirect). Default outlook.
-  const provider =
-    (typeof window !== "undefined" && sessionStorage.getItem("pendingProvider")) || "outlook";
-  const name = LABEL[provider] ?? provider;
-  const [msg, setMsg] = useState(`Finishing the ${name} connection…`);
+  const [msg, setMsg] = useState("Finishing the connection…");
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
+      // Resolve provider entirely inside the effect — sessionStorage is only available
+      // client-side after mount, so reading it at component-body level can return stale
+      // or undefined values during SSR/hydration. `spStage` is the reliable secondary
+      // signal: it is only ever written for SharePoint flows (never Outlook), so if
+      // `pendingProvider` is missing but `spStage` is present this is a SharePoint callback.
+      const pendingProvider = sessionStorage.getItem("pendingProvider");
+      const spStage = sessionStorage.getItem("spStage");
+      const provider = pendingProvider || (spStage ? "sharepoint" : "outlook");
+      const name = LABEL[provider] ?? provider;
+
+      setMsg(`Finishing the ${name} connection…`);
+
       if (params.get("error")) {
         setMsg("Connection was not completed. Returning…");
         sessionStorage.removeItem("pendingProvider");
@@ -39,16 +47,15 @@ function CallbackInner() {
       // (structure/ACL/write), then REST (exact site-group member emails — the one
       // thing Graph can't resolve). `spStage` is the literal provider string we just
       // sent the user to Microsoft for ("sharepoint" | "sharepoint_rest").
-      const spStage =
-        (typeof window !== "undefined" && sessionStorage.getItem("spStage")) || "sharepoint";
-      const pollTarget = provider === "sharepoint" ? spStage : provider;
+      const resolvedSpStage = spStage || "sharepoint";
+      const pollTarget = provider === "sharepoint" ? resolvedSpStage : provider;
 
       // Composio stores the tokens server-side; poll until the account is ACTIVE.
       for (let i = 0; i < 20 && !cancelled; i++) {
         try {
           const s = await getConnStatus(pollTarget);
           if (s.connected) {
-            if (provider === "sharepoint" && spStage === "sharepoint") {
+            if (provider === "sharepoint" && resolvedSpStage === "sharepoint") {
               // Graph stage done — chain straight into the REST stage (no extra click).
               setMsg("Connected — one more step for exact permissions…");
               const rest = await getConnStatus("sharepoint_rest");
@@ -69,7 +76,7 @@ function CallbackInner() {
             // (whichever stage we were just polling), and the cached id should consistently
             // be the primary (Graph) connection, not whichever happened to finish last.
             if (provider === "sharepoint") {
-              const graphStatus = spStage === "sharepoint" ? s : await getConnStatus("sharepoint");
+              const graphStatus = resolvedSpStage === "sharepoint" ? s : await getConnStatus("sharepoint");
               useConnectionStore
                 .getState()
                 .setConnection("sharepoint", true, graphStatus.connected_account_id);
@@ -116,7 +123,7 @@ function CallbackInner() {
     return () => {
       cancelled = true;
     };
-  }, [router, params, provider]);
+  }, [router, params]);
 
   return (
     <div className="loading-full" style={{ flexDirection: "column", gap: 14 }}>

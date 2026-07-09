@@ -8,9 +8,12 @@ mirrors current SharePoint.
 """
 import logging
 
+from bson import ObjectId
+
 from app.worker import celery_app
 from client.sharepoint_graph import clear_structure, upsert_structure
 from utils.composio_utils import sharepoint_entity
+from utils.organizations import get_organization_crud
 from utils.sharepoint_graph_client import crawl_all_sites_graph, graph_account, sp_rest_account
 
 logger = logging.getLogger(__name__)
@@ -38,8 +41,13 @@ def sync_sharepoint_structure_task(self, organization_id: str, with_acl: bool = 
         logger.warning("No SharePoint REST connection for org %s — site-group grants will "
                        "degrade to org-wide (company-internal) instead of exact emails.", org)
 
+    excluded_paths = set(get_organization_crud().get_sharepoint_excluded_paths(ObjectId(org)))
+    if excluded_paths:
+        logger.info("Org %s excludes %d SharePoint path(s) from ingestion", org, len(excluded_paths))
+
     try:
-        nodes = crawl_all_sites_graph(with_acl=with_acl, account_id=g_account, sp_account=sp_account)
+        nodes = crawl_all_sites_graph(with_acl=with_acl, account_id=g_account, sp_account=sp_account,
+                                       excluded_paths=excluded_paths)
     except Exception as exc:  # transient Graph / Composio errors -> retry
         logger.warning("SharePoint crawl failed: %s", exc)
         raise self.retry(exc=exc)

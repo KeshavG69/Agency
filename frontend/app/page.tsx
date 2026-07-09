@@ -43,6 +43,7 @@ import CalendarStrip, { toLocalIso } from "./CalendarStrip";
 import FilePreview from "./FilePreview";
 import AssignModal from "./AssignModal";
 import ContactReviewModal from "./ContactReviewModal";
+import SharePointFolderPicker from "./SharePointFolderPicker";
 import TopBar, { type ViewKey } from "./TopBar";
 import BidSidebar from "./BidSidebar";
 import FilterBar, { type Facets, EMPTY_FACETS, activeFacetCount } from "./FilterBar";
@@ -179,6 +180,7 @@ function Console({ user }: { user: User }) {
   // or Outlook is disconnected (which purges the graph server-side), so the graph
   // re-fetches instead of showing stale data until a manual reload.
   const [contactsGraphRefresh, setContactsGraphRefresh] = useState(0);
+  const [spPickerOpen, setSpPickerOpen] = useState(false);
   // Outlook contact-review dialog (pick which contacts to ingest).
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(false);
@@ -382,7 +384,9 @@ function Console({ user }: { user: User }) {
       openContactReview();
     }
     if (p.get("connected") === "sharepoint") {
+      setView("documents");         // land on Library tab
       setSpGraphRefresh((n) => n + 1);
+      setSpPickerOpen(true);        // open folder picker immediately
     }
     if (p.has("review") || p.has("connected")) {
       p.delete("review");
@@ -683,6 +687,7 @@ function Console({ user }: { user: User }) {
               onConnect={onConnectSharePoint}
               onDisconnect={onDisconnectSharePoint}
               onResync={onResyncSharePoint}
+              extraAction={{ label: "Select folders", onClick: () => setSpPickerOpen(true) }}
             />
           )}
           <SharePointGraph refreshSignal={spGraphRefresh} />
@@ -861,6 +866,16 @@ function Console({ user }: { user: User }) {
         />
       )}
 
+      {spPickerOpen && (
+        <SharePointFolderPicker
+          onClose={() => setSpPickerOpen(false)}
+          onSaved={() => {
+            setSpPickerOpen(false);
+            onResyncSharePoint(); // apply the new selection immediately
+          }}
+        />
+      )}
+
       {error && <div className="toast">{error}</div>}
     </main>
   );
@@ -878,6 +893,7 @@ function ConnectBar({
   onConnect,
   onDisconnect,
   onResync,
+  extraAction,
 }: {
   connected: boolean;
   connectedLabel: string;
@@ -888,6 +904,7 @@ function ConnectBar({
   onConnect: () => void;
   onDisconnect: () => void;
   onResync: () => void;
+  extraAction?: { label: string; onClick: () => void };
 }) {
   return (
     <div className={`connect-bar ${connected ? "on" : ""}`}>
@@ -898,6 +915,11 @@ function ConnectBar({
       </div>
       {connected ? (
         <div className="cb-actions">
+          {extraAction && (
+            <button className="mini-btn" onClick={extraAction.onClick}>
+              {extraAction.label}
+            </button>
+          )}
           <button className="mini-btn" onClick={onResync} disabled={resyncing}>
             {resyncing ? "Refreshing…" : "Refresh"}
           </button>

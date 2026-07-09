@@ -125,8 +125,8 @@ export default function ForceGraph<N extends FGNode>({
           n.vy = 0;
           continue;
         }
-        n.vx += (W / 2 - n.x) * 0.0015;
-        n.vy += (H / 2 - n.y) * 0.0015;
+        n.vx += (W / 2 - n.x) * 0.008;
+        n.vy += (H / 2 - n.y) * 0.008;
         const damp = heavySet.has(n.type ?? "") ? 0.8 : 0.87;
         n.vx *= damp;
         n.vy *= damp;

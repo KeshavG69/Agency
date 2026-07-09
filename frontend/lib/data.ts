@@ -370,6 +370,31 @@ export async function syncSharePointStructure(): Promise<void> {
   await apiClient.post("/api/composio/sharepoint/sync-structure");
 }
 
+// ---- SharePoint folder picker (which folders to actually ingest) ----
+// Ingestion is opt-OUT: `excluded_paths` is the org's saved exclusion list — everything
+// NOT in it is ingested. A cheap shallow browse (sites -> libraries -> top-level folders,
+// no ACL) powers the checkbox tree; the real crawl (syncSharePointStructure) applies it.
+export interface SPBrowseNode {
+  id: string;
+  type: "site" | "library" | "folder" | "file";
+  name: string;
+  path: string;
+  parent_id: string | null;
+}
+export interface SPBrowseResponse {
+  nodes: SPBrowseNode[];
+  excluded_paths: string[];
+}
+
+export async function browseSharePointFolders(): Promise<SPBrowseResponse> {
+  const { data } = await apiClient.get("/api/composio/sharepoint/browse-folders");
+  return data;
+}
+
+export async function saveSharePointExcludedFolders(excludedPaths: string[]): Promise<void> {
+  await apiClient.post("/api/composio/sharepoint/excluded-folders", { excluded_paths: excludedPaths });
+}
+
 export async function runAnalyst(): Promise<void> {
   await apiClient.post("/api/opportunities/analyze/run");
 }

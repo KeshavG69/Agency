@@ -209,13 +209,30 @@ def list_graph_sites(account_id: str | None = None) -> list[dict]:
     ]
 
 
+def _is_excluded(path: str, excluded_paths: set[str] | None) -> bool:
+    """True if `path` is excluded — either an exact match or under an excluded ancestor
+    (excluding a folder excludes its whole subtree)."""
+    if not excluded_paths:
+        return False
+    if path in excluded_paths:
+        return True
+    return any(path.startswith(f"{p}/") for p in excluded_paths)
+
+
 def crawl_all_sites_graph(with_acl: bool = True, account_id: str | None = None,
-                          sp_account: str | None = None) -> list[dict]:
+                          sp_account: str | None = None, excluded_paths: set[str] | None = None,
+                          max_depth: int | None = None) -> list[dict]:
     """Crawl EVERY team site (/sites/<scope>) in the tenant via Graph → flat nodes + ACL.
 
     `account_id` (Graph) is required. `sp_account` (SharePoint REST) is OPTIONAL — when
     given, site-group grants resolve to exact member emails; without it they degrade to
     org-wide. If not passed explicitly, resolved automatically from the caller's org entity.
+
+    `excluded_paths` — folder/library paths (and everything under them) the org opted OUT of
+    ingesting; skipped entirely (not added to the graph, not recursed into). Default (None/
+    empty) crawls everything, matching prior behavior — ingestion is opt-OUT, not opt-in.
+    `max_depth` caps recursion depth (site=0, library=0, top-level folder=1, ...) — used for
+    the cheap "browse folders to pick from" preview; leave None for a real full crawl.
     """
     account_id = account_id or graph_account()
     if not account_id:
@@ -230,7 +247,8 @@ def crawl_all_sites_graph(with_acl: bool = True, account_id: str | None = None,
         try:
             nodes.extend(
                 crawl_site_graph(s["id"], s["name"] or web.split("/sites/")[1].split("/")[0], web,
-                                 with_acl=with_acl, account_id=account_id, sp_account=sp_account)
+                                 with_acl=with_acl, account_id=account_id, sp_account=sp_account,
+                                 excluded_paths=excluded_paths, max_depth=max_depth)
             )
         except Exception as exc:  # noqa: BLE001 — one bad site must not sink the whole crawl
             logger.warning("crawl of site %s failed: %s", s.get("name"), exc)
@@ -260,7 +278,8 @@ def _drive_unique_map(drive_id: str, site_base: str, sp_account: str, account_id
 
 def crawl_site_graph(site_id: str, site_name: str, site_web_url: str | None = None,
                      with_acl: bool = True, account_id: str | None = None,
-                     sp_account: str | None = None, max_items: int = 8000) -> list[dict]:
+                     sp_account: str | None = None, max_items: int = 8000,
+                     excluded_paths: set[str] | None = None, max_depth: int | None = None) -> list[dict]:
     """Crawl one site's libraries/folders/files via Graph → flat nodes (+ ACL roster).
 
     OPTIMIZED when `sp_account` (REST) is available: a bulk HasUniqueRoleAssignments map per
@@ -290,6 +309,9 @@ def crawl_site_graph(site_id: str, site_name: str, site_web_url: str | None = No
     drives = graph_get(f"sites/{site_id}/drives?$select=id,name,webUrl", account_id) or {}
     for dr in drives.get("value", []) or []:
         drive_id = dr["id"]
+        lib_path = f"{site_name}/{dr.get('name')}"
+        if _is_excluded(lib_path, excluded_paths):
+            continue  # whole library opted out — skip entirely, don't even list it
         unique_map = _drive_unique_map(drive_id, site_base, sp_account, account_id) if can_bulk_check else {}
         # library base roster = the drive root's effective permissions
         lib_roster = EMPTY
@@ -299,19 +321,21 @@ def crawl_site_graph(site_id: str, site_name: str, site_web_url: str | None = No
                 lib_roster = _roster(drive_id, root["id"], unique=False)
         lib_id = f"{site_id}|{drive_id}"
         nodes.append({"id": lib_id, "type": "library", "name": dr.get("name"),
-                      "path": f"{site_name}/{dr.get('name')}", "web_url": dr.get("webUrl"),
+                      "path": lib_path, "web_url": dr.get("webUrl"),
                       "parent_id": site_id, "site_id": site_id, "drive_id": drive_id, **lib_roster})
 
         select = "$select=id,name,size,folder,file,webUrl,sharepointIds"
-        stack = [("root", lib_id, f"{site_name}/{dr.get('name')}", lib_roster)]
+        stack = [("root", lib_id, lib_path, lib_roster, 0)]
         while stack and len(nodes) < max_items:
-            folder_ref, parent_id, parent_path, parent_roster = stack.pop()
+            folder_ref, parent_id, parent_path, parent_roster, depth = stack.pop()
             ref = "root/children" if folder_ref == "root" else f"items/{folder_ref}/children"
             kids = graph_get(f"drives/{drive_id}/{ref}?{select}", account_id) or {}
             for it in kids.get("value", []) or []:
                 is_folder = "folder" in it
                 name = it.get("name", "")
                 path = f"{parent_path}/{name}"
+                if _is_excluded(path, excluded_paths):
+                    continue  # opted out — skip this item and (if a folder) its whole subtree
                 if not can_acl:
                     roster = EMPTY
                 elif can_bulk_check and str((it.get("sharepointIds") or {}).get("listItemId")) in unique_map:
@@ -332,6 +356,6 @@ def crawl_site_graph(site_id: str, site_name: str, site_web_url: str | None = No
                     "ext": (name.rsplit(".", 1)[-1].lower() if not is_folder and "." in name else None),
                     **roster,
                 })
-                if is_folder:
-                    stack.append((it["id"], it["id"], path, roster))
+                if is_folder and (max_depth is None or depth < max_depth):
+                    stack.append((it["id"], it["id"], path, roster, depth + 1))
     return nodes

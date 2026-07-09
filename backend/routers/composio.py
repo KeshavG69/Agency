@@ -196,6 +196,56 @@ def sync_structure(current_user: dict = Depends(get_current_user)) -> dict:
     return {"sync_started": True, "task_id": task.id}
 
 
+@router.get("/sharepoint/browse-folders")
+def browse_sharepoint_folders(current_user: dict = Depends(get_current_user)) -> dict:
+    """A CHEAP, shallow preview (sites → libraries → top-level folders only, no ACL) for the
+    folder-picker — NOT the real crawl. Admin-only, same as sync-structure. Returns the tree
+    plus the org's currently saved `excluded_paths` so the picker can pre-check accordingly
+    (ingestion is opt-OUT: nothing excluded = everything selected)."""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can browse SharePoint folders.")
+    if not settings.COMPOSIO_API_KEY:
+        raise HTTPException(status_code=500, detail="COMPOSIO_API_KEY is not configured.")
+    from bson import ObjectId
+
+    from utils.organizations import get_organization_crud
+    from utils.sharepoint_graph_client import crawl_all_sites_graph, graph_account
+
+    org = str(current_user.get("organization_id") or "")
+    entity = sharepoint_entity(org)
+    g_account = graph_account(entity)
+    if not g_account:
+        raise HTTPException(status_code=400, detail="SharePoint (Graph) isn't connected yet.")
+    try:
+        nodes = crawl_all_sites_graph(with_acl=False, account_id=g_account)
+    except Exception as e:  # noqa: BLE001
+        logger.error("SharePoint folder browse failed for org %s: %s", org, e, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Couldn't read the SharePoint structure: {e}")
+    excluded = get_organization_crud().get_sharepoint_excluded_paths(ObjectId(org))
+    return {"nodes": nodes, "excluded_paths": excluded}
+
+
+class ExcludedFoldersRequest(BaseModel):
+    excluded_paths: list[str]
+
+
+@router.post("/sharepoint/excluded-folders")
+def set_sharepoint_excluded_folders(
+    req: ExcludedFoldersRequest, current_user: dict = Depends(get_current_user)
+) -> dict:
+    """Save which SharePoint folders/libraries this org opts OUT of ingesting (admin-only).
+    Takes effect on the next structure sync — this endpoint only saves the selection."""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can manage SharePoint folder selection.")
+    from bson import ObjectId
+
+    from utils.organizations import get_organization_crud
+
+    org = str(current_user.get("organization_id") or "")
+    get_organization_crud().set_sharepoint_excluded_paths(ObjectId(org), req.excluded_paths)
+    return {"saved": True, "excluded_paths": req.excluded_paths}
+
+
 @router.post("/sharepoint/disconnect")
 def disconnect_sharepoint(current_user: dict = Depends(get_current_user)) -> dict:
     """Disconnect BOTH SharePoint connections (Graph + REST) in one action, admin-only.

@@ -91,6 +91,19 @@ class OrganizationCRUD:
         )
         return self.get_by_id(org_id)
 
+    def get_sharepoint_excluded_paths(self, org_id: ObjectId) -> list[str]:
+        """Folder/library paths this org opted OUT of ingesting (ingestion is opt-OUT —
+        empty/missing means "crawl everything", matching the pre-existing default)."""
+        org = self.collection.find_one({"_id": org_id}, {"sharepoint_excluded_paths": 1})
+        return (org or {}).get("sharepoint_excluded_paths") or []
+
+    def set_sharepoint_excluded_paths(self, org_id: ObjectId, paths: list[str]) -> None:
+        """Replace the full excluded-paths list (the picker sends the complete set each save)."""
+        self.collection.update_one(
+            {"_id": org_id},
+            {"$set": {"sharepoint_excluded_paths": paths, "updated_at": datetime.utcnow()}},
+        )
+
     def get_members(self, org_id: ObjectId, role: str = None) -> list:
         """Get all users in organization (async) - queries organizations array"""
 

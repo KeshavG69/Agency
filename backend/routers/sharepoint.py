@@ -17,8 +17,11 @@ def sharepoint_graph(files: int = 0, current_user: dict = Depends(get_current_us
     employee may read. Files are excluded by default (there are hundreds — too dense
     for the graph view); pass ?files=1 to include them."""
     org_id = str(current_user["organization_id"])
+    # Admins see the full structure — they connected the library and own the ACL config.
+    # RBAC filtering only applies to non-admin employees who may not have access to all folders.
+    is_admin = current_user.get("role") == "admin"
     try:
-        g = get_structure(org_id, employee_email=current_user["email"].lower())
+        g = get_structure(org_id, employee_email=None if is_admin else current_user["email"].lower())
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to read SharePoint graph: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"SharePoint graph unavailable: {e}")
