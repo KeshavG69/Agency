@@ -14,8 +14,10 @@ PORT="${PORT:-8000}"
 CONCURRENCY="${CELERY_CONCURRENCY:-15}"
 
 WEB="uvicorn app.server:app --host 0.0.0.0 --port ${PORT}"
-WORKER="celery -A app.worker worker --pool=threads --concurrency=${CONCURRENCY} --loglevel=info"
-BEAT="celery -A app.worker beat --loglevel=info"
+WORKER="celery -A app.worker.celery_app worker --pool=threads --concurrency=${CONCURRENCY} --loglevel=info"
+BEAT="celery -A app.worker.celery_app beat --loglevel=info"
+
+
 
 echo "Starting Collecct backend with SERVICE_ROLE=${ROLE}"
 
