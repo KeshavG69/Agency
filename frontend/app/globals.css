@@ -1665,6 +1665,187 @@ button {
   user-select: none;
 }
 
+/* view mode switcher (graph / list / by-company) */
+.view-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 3px;
+}
+.view-tab {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 5px 12px;
+  border-radius: 7px;
+  transition: background 0.16s var(--ease-out), color 0.16s var(--ease-out);
+}
+.view-tab:hover {
+  color: var(--ink);
+}
+.view-tab.on {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(24, 21, 17, 0.1);
+}
+
+/* list / by-company views */
+.view-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+}
+.view-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 32px;
+  border-bottom: 1px solid var(--line);
+}
+.view-search {
+  flex: 1;
+  max-width: 380px;
+  font-size: 13px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.view-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.view-count {
+  font-size: 12px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.view-table-wrap {
+  flex: 1;
+  overflow: auto;
+  padding: 0 32px 24px;
+}
+.view-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.view-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--faint);
+  padding: 10px 10px;
+  border-bottom: 1px solid var(--line-strong);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.view-table thead th:hover {
+  color: var(--ink);
+}
+.view-table tbody td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  vertical-align: middle;
+}
+.view-table tbody tr:hover {
+  background: var(--surface-2);
+}
+.view-table .vt-name {
+  color: var(--ink);
+  font-weight: 500;
+}
+.view-table td.mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.view-empty-row {
+  text-align: center;
+  color: var(--faint);
+  padding: 40px 0;
+}
+.view-companies {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.company-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.company-card summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: 15px;
+}
+.company-card summary::-webkit-details-marker {
+  display: none;
+}
+.company-card .cc-name {
+  color: var(--ink);
+}
+.company-card .cc-count {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--faint);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.cc-members {
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.cc-members li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.cc-members li:last-child {
+  border-bottom: none;
+}
+.cc-members .vt-name {
+  color: var(--ink);
+  font-weight: 500;
+  min-width: 140px;
+}
+.cc-title {
+  flex: 1;
+}
+.cc-email {
+  font-size: 11px;
+  color: var(--faint);
+}
+
 /* ===== outreach: section action + mail artifacts ===== */
 .sec-title.sec-row { justify-content: space-between; }
 .sec-title.sec-row::after { display: none; }
