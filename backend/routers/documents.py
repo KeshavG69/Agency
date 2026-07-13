@@ -48,7 +48,9 @@ def fresh_document_url(
     opp = crm.get_opportunity(doc.get("opportunity_id", ""), str(current_user["organization_id"]))
     if opp is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    key = _object_key_from_url(doc.get("url") or "")
+    # Prefer the explicitly-stored object key (robust); fall back to parsing it out
+    # of the stored URL for legacy documents that predate the stored key.
+    key = doc.get("object_key") or _object_key_from_url(doc.get("url") or "")
     if not key:
         raise HTTPException(status_code=404, detail="Document has no storage reference")
     try:

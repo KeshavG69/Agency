@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     
     ANALYST_MODEL: str = "openai/gpt-5.4-mini"
 
+    # Manual opportunity upload — the small/fast model that digests big solicitation
+    # packages. If the whole package fits (<= STUFF_MAX) it's kept verbatim with no
+    # model call; otherwise each document is summarized in ONE call (natural boundaries),
+    # then the per-document digests are merged.
+    DOC_DIGEST_MODEL: str = "openai/gpt-5.6-luna"
+    # ~500k tokens @ ~4 chars/token. <= this total => keep verbatim, no LLM call.
+    DOC_DIGEST_STUFF_MAX_CHARS: int = 2000000
+
 
     class Config:
         env_file = ".env"

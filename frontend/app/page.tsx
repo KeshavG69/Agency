@@ -41,6 +41,7 @@ import SharePointGraph from "./SharePointGraph";
 import MailTriagePanel from "./MailTriage";
 import CalendarStrip, { toLocalIso } from "./CalendarStrip";
 import FilePreview from "./FilePreview";
+import AddOpportunityModal from "./AddOpportunityModal";
 import AssignModal from "./AssignModal";
 import ContactReviewModal from "./ContactReviewModal";
 import SharePointFolderPicker from "./SharePointFolderPicker";
@@ -66,6 +67,19 @@ const money = (n?: number | null) =>
 const badgeClass = (d?: BidDecision) =>
   d === "Bid" ? "bid" : d === "No-Bid" ? "nobid" : d === "Watch" ? "watch" : "none";
 
+// In-flight / failed state shown as a row chip, independent of the bid verdict.
+// Ingesting: the upload -> parse -> digest -> Analyst pipeline is still running.
+// Processing: a Capture run (agent + contact search) is in flight for a Bid.
+const isIngesting = (o: Opportunity) => !!o.ingesting;
+const isProcessing = (o: Opportunity) => !!o.capture_approved && !o.captured_at;
+const activityChip = (o: Opportunity): { label: string; cls: string } | null => {
+  if (o.ingest_error) return { label: "Ingest failed", cls: "failed" };
+  if (isIngesting(o)) return { label: "Ingesting", cls: "ingesting" };
+  if (o.capture_error) return { label: "Capture failed", cls: "failed" };
+  if (isProcessing(o)) return { label: "Processing", cls: "processing" };
+  return null;
+};
+
 const priColor = (p?: number) =>
   p == null
     ? "var(--line-strong)"
@@ -86,11 +100,14 @@ const fmtDate = (s?: string | null) => {
 // Pipeline stages shown as the portfolio nav. "All" first.
 const FILTERS: { key: string; label: string; match: (o: Opportunity) => boolean }[] = [
   { key: "all", label: "All opportunities", match: () => true },
+  { key: "ingesting", label: "Ingesting", match: (o) => isIngesting(o) },
+  { key: "processing", label: "Processing", match: (o) => isProcessing(o) },
   { key: "Bid", label: "Bid — pursue", match: (o) => o.bid_decision === "Bid" },
   { key: "Watch", label: "Watch — revisit", match: (o) => o.bid_decision === "Watch" },
   { key: "No-Bid", label: "No-bid", match: (o) => o.bid_decision === "No-Bid" },
   { key: "captured", label: "Capture complete", match: (o) => !!o.captured_at },
-  { key: "new", label: "Awaiting analysis", match: (o) => !o.bid_decision },
+  // Awaiting analysis = no verdict yet AND not still ingesting (those live in Ingesting).
+  { key: "new", label: "Awaiting analysis", match: (o) => !o.bid_decision && !isIngesting(o) },
 ];
 
 type TabKey = "info" | "contacts" | "documents" | "activity";
@@ -181,6 +198,7 @@ function Console({ user }: { user: User }) {
   // re-fetches instead of showing stale data until a manual reload.
   const [contactsGraphRefresh, setContactsGraphRefresh] = useState(0);
   const [spPickerOpen, setSpPickerOpen] = useState(false);
+  const [addOppOpen, setAddOppOpen] = useState(false);
   // Outlook contact-review dialog (pick which contacts to ingest).
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(false);
@@ -205,6 +223,20 @@ function Console({ user }: { user: User }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // While any opportunity is mid-flight (ingesting, or a capture run in progress), poll so
+  // the Ingesting/Processing sections self-empty as workers finish — even in a tab that
+  // didn't start the work, and after a reload (reads persisted fields, not local state).
+  // Disarms once nothing is in flight, so it never polls a fully-idle pipeline.
+  const hasInFlight = useMemo(
+    () => opps.some((o) => isIngesting(o) || isProcessing(o)),
+    [opps],
+  );
+  useEffect(() => {
+    if (!hasInFlight) return;
+    const t = setInterval(() => load(), 5000);
+    return () => clearInterval(t);
+  }, [hasInFlight, load]);
 
   // Restore this user's saved filters (decision + facets) once on mount.
   const filtersKey = `collecct:filters:${user.email}`;
@@ -613,6 +645,7 @@ function Console({ user }: { user: User }) {
       .filter((o) => facets.agencies.length === 0 || (!!o.agency && facets.agencies.includes(o.agency)))
       .filter((o) => facets.naics.length === 0 || (!!o.naics && facets.naics.includes(o.naics)))
       .filter((o) => facets.setAsides.length === 0 || (!!o.set_aside && facets.setAsides.includes(o.set_aside)))
+      .filter((o) => facets.source === "any" || o.source === facets.source)
       .filter((o) => inValue(o.estimated_value))
       .filter((o) => inDue(o.response_deadline))
       .filter(
@@ -712,10 +745,15 @@ function Console({ user }: { user: User }) {
       {/* ---------------- master list ---------------- */}
       <section className="list">
         <div className="list-head">
-          <h2>
-            Opportunities
-            <span className="c">{visible.length}</span>
-          </h2>
+          <div className="list-head-row">
+            <h2>
+              Opportunities
+              <span className="c">{visible.length}</span>
+            </h2>
+            <button className="mini-btn" onClick={() => setAddOppOpen(true)}>
+              + Add opportunity
+            </button>
+          </div>
           <input
             className="search"
             placeholder="Search title, agency, solicitation #…"
@@ -790,7 +828,7 @@ function Console({ user }: { user: User }) {
               }}
             >
               <div className="row-top">
-                {!o.bid_decision && (
+                {!o.bid_decision && !isIngesting(o) && (
                   <span
                     className={`chk ${picked.has(o.id) ? "on" : ""}`}
                     role="checkbox"
@@ -805,9 +843,16 @@ function Console({ user }: { user: User }) {
                   <div className="row-title">{o.title}</div>
                   {o.agency && <div className="row-agency">{o.agency}</div>}
                 </div>
-                <span className={`badge ${badgeClass(o.bid_decision)}`}>
-                  {o.bid_decision ?? "New"}
-                </span>
+                {(() => {
+                  const chip = activityChip(o);
+                  return chip ? (
+                    <span className={`badge ${chip.cls}`}>{chip.label}</span>
+                  ) : (
+                    <span className={`badge ${badgeClass(o.bid_decision)}`}>
+                      {o.bid_decision ?? "New"}
+                    </span>
+                  );
+                })()}
               </div>
               <div className="row-meta">
                 <span className="pri-dot" style={{ background: priColor(o.priority_score) }} />
@@ -819,6 +864,7 @@ function Console({ user }: { user: User }) {
                 {o.solicitation_number && <span className="sol">{o.solicitation_number}</span>}
                 <span className="val">{money(o.estimated_value)}</span>
                 {o.source === "sam.gov" && <span className="src-tag">SAM.gov</span>}
+                {o.source === "manual" && <span className="src-tag manual">Manual</span>}
               </div>
             </button>
           ))}
@@ -872,6 +918,17 @@ function Console({ user }: { user: User }) {
           onSaved={() => {
             setSpPickerOpen(false);
             onResyncSharePoint(); // apply the new selection immediately
+          }}
+        />
+      )}
+
+      {addOppOpen && (
+        <AddOpportunityModal
+          onClose={() => setAddOppOpen(false)}
+          onCreated={(r) => {
+            setAddOppOpen(false);
+            load(); // refetch so the new opp shows (docs + Analyst verdict land shortly after)
+            setSelectedId(r.opportunity_id);
           }}
         />
       )}
@@ -1501,7 +1558,8 @@ function Detail({
         )}
         {captured ? (
           <span className="foot-note">
-            <b>{(opp.documents ?? []).length} documents</b> generated · {fmtDate(opp.captured_at)}
+            <b>{(opp.documents ?? []).filter((d) => d.agent_id !== "manual_upload").length} documents</b>{" "}
+            generated · {fmtDate(opp.captured_at)}
           </span>
         ) : !canCapture ? (
           <span className="foot-note">Only “Bid” opportunities advance to capture.</span>
@@ -1525,7 +1583,7 @@ function InfoTab({ opp }: { opp: Opportunity }) {
     ["Response due", fmtDate(opp.response_deadline)],
     ["Place of performance", opp.place_of_performance ?? "—"],
     ["Posted", fmtDate(opp.posted_date)],
-    ["Source", opp.source === "sam.gov" ? "SAM.gov" : opp.source ?? "—"],
+    ["Source", opp.source === "sam.gov" ? "SAM.gov" : opp.source === "manual" ? "Manual" : opp.source ?? "—"],
   ];
   return (
     <>
@@ -1841,8 +1899,52 @@ const fileSize = (n?: number) =>
 
 function DocumentsTab({ opp }: { opp: Opportunity }) {
   const docs = opp.documents ?? [];
+  // Split user-uploaded source docs (manual ingestion) from agent-generated deliverables.
+  const sourceDocs = docs.filter((d) => d.agent_id === "manual_upload");
+  const generatedDocs = docs.filter((d) => d.agent_id !== "manual_upload");
   const sp = opp.sharepoint_folder ?? null;
   const [preview, setPreview] = useState<DocItem | null>(null);
+
+  const renderDocList = (list: DocItem[]) => (
+    <div className="card-list">
+      {list.map((d, i) => (
+        <button className="rec rec-doc" key={d.id ?? i} onClick={() => setPreview(d)} title="Preview">
+          <div className="rec-top">
+            <div>
+              <span className="doc-type">{d.type.replace(/_/g, " ")}</span>
+              <div className="rec-name" style={{ marginTop: 4 }}>
+                {d.title}
+              </div>
+            </div>
+            <div className="doc-actions">
+              <span className="doc-preview-link">Preview</span>
+              <a
+                href="#"
+                title={d.sharepoint_url ? "Open in SharePoint" : "Open the file"}
+                onClick={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  try {
+                    // Prefer the SharePoint copy when the file has been filed there; otherwise
+                    // fall back to a freshly-minted iDrive link.
+                    if (d.sharepoint_url) {
+                      window.open(d.sharepoint_url, "_blank", "noopener");
+                      return;
+                    }
+                    window.open(await getDocUrl(d.id), "_blank", "noopener");
+                  } catch {
+                    /* ignore — preview still works */
+                  }
+                }}
+              >
+                {d.sharepoint_url ? "Open in SharePoint ↗" : "Open ↗"}
+              </a>
+            </div>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
 
   // The read half of two-way sync: pull the Bid folder's LIVE contents so a file a human
   // dropped into SharePoint appears here without any re-upload. Refetched per opportunity.
@@ -1957,43 +2059,22 @@ function DocumentsTab({ opp }: { opp: Opportunity }) {
         )
       ) : (
         <>
-          <div className={`sec-title ${spCard ? "" : "first"}`}>Generated documents · preview</div>
-          <div className="card-list">
-            {docs.map((d, i) => (
-              <button
-                className="rec rec-doc"
-                key={i}
-                onClick={() => setPreview(d)}
-                title="Preview"
-              >
-                <div className="rec-top">
-                  <div>
-                    <span className="doc-type">{d.type.replace(/_/g, " ")}</span>
-                    <div className="rec-name" style={{ marginTop: 4 }}>
-                      {d.title}
-                    </div>
-                  </div>
-                  <div className="doc-actions">
-                    <span className="doc-preview-link">Preview</span>
-                    <a
-                      href="#"
-                      onClick={async (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        try {
-                          window.open(await getDocUrl(d.id), "_blank", "noopener");
-                        } catch {
-                          /* ignore — preview still works */
-                        }
-                      }}
-                    >
-                      Open ↗
-                    </a>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
+          {/* Documents the user uploaded (manual ingestion) are SOURCE material, not agent
+              output — keep them in their own section so they aren't mislabeled "Generated". */}
+          {sourceDocs.length > 0 && (
+            <>
+              <div className={`sec-title ${spCard ? "" : "first"}`}>Uploaded documents · preview</div>
+              {renderDocList(sourceDocs)}
+            </>
+          )}
+          {generatedDocs.length > 0 && (
+            <>
+              <div className={`sec-title ${spCard || sourceDocs.length > 0 ? "" : "first"}`}>
+                Generated documents · preview
+              </div>
+              {renderDocList(generatedDocs)}
+            </>
+          )}
         </>
       )}
       {preview && (

@@ -29,6 +29,13 @@ def analyze_opportunity_task(self, opp: dict) -> dict:
         verdict = analyze_opportunity(opp)
     except Exception as exc:  # transient LLM / network errors -> retry
         logger.warning("Analyst failed for %s: %s", opp.get("id"), exc)
+        if self.request.retries >= self.max_retries:
+            # apply_verdict (which clears the ingest flag) will never run — clear it here so a
+            # manual opp whose analysis permanently failed exits "Ingesting". No-op for the rest
+            # of the batch (only the manual opp has ingesting=true).
+            if opp.get("id") and opp.get("organization_id"):
+                crm.set_ingesting(opp["id"], opp["organization_id"], False, error=str(exc))
+            raise
         raise self.retry(exc=exc)
 
     crm.apply_verdict(opp["id"], verdict)

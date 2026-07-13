@@ -8,6 +8,7 @@ export interface Facets {
   agencies: string[];
   naics: string[];
   setAsides: string[];
+  source: "any" | "manual" | "sam.gov" | "excel";
   value: "any" | "lt1m" | "1to10m" | "gt10m";
   due: "any" | "7" | "30" | "90";
 }
@@ -16,6 +17,7 @@ export const EMPTY_FACETS: Facets = {
   agencies: [],
   naics: [],
   setAsides: [],
+  source: "any",
   value: "any",
   due: "any",
 };
@@ -25,6 +27,7 @@ export function activeFacetCount(f: Facets): number {
   if (f.agencies.length) n++;
   if (f.naics.length) n++;
   if (f.setAsides.length) n++;
+  if (f.source !== "any") n++;
   if (f.value !== "any") n++;
   if (f.due !== "any") n++;
   return n;
@@ -169,6 +172,16 @@ export default function FilterBar({
           selected={facets.setAsides}
           onChange={(v) => set({ setAsides: v })}
         />
+        <select
+          className="fb-select"
+          value={facets.source}
+          onChange={(e) => set({ source: e.target.value as Facets["source"] })}
+        >
+          <option value="any">Any source</option>
+          <option value="manual">Manual</option>
+          <option value="sam.gov">SAM.gov</option>
+          <option value="excel">Excel</option>
+        </select>
         <select
           className="fb-select"
           value={facets.value}

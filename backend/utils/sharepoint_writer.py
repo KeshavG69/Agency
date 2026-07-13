@@ -289,6 +289,23 @@ def list_bid_documents(organization_id: str, folder: dict) -> list[dict]:
     return out
 
 
+def file_to_bid_subfolder(organization_id: str, folder: dict | None, subfolder: str,
+                          filename: str, content: bytes) -> dict | None:
+    """Put `content` (bytes) into `subfolder` (e.g. 'Solicitation', 'Capture Docs') of a Bid
+    folder and return {sharepoint_url, sharepoint_item_id}. Returns None (no raise) when
+    SharePoint isn't connected or that subfolder pointer is missing; RAISES on an actual upload
+    failure so the caller can log."""
+    sub = ((folder or {}).get("subfolders") or {}).get(subfolder) if folder else None
+    if not folder or not folder.get("drive_id") or not sub or not sub.get("id"):
+        return None
+    account_id = graph_account(sharepoint_entity(organization_id))
+    if not account_id:
+        return None
+    item = upload_file_to_folder(folder["drive_id"], sub["id"], _sanitize_filename(filename),
+                                 content, account_id)
+    return {"sharepoint_url": item.get("webUrl"), "sharepoint_item_id": item.get("id")}
+
+
 def file_to_capture_docs(organization_id: str, opp: dict, filename: str, content: bytes) -> dict | None:
     """Put `content` (bytes) straight into the opp's 'Capture Docs' Bid subfolder and return
     {sharepoint_url, sharepoint_item_id}. Returns None (no raise) when SharePoint isn't connected
@@ -297,16 +314,9 @@ def file_to_capture_docs(organization_id: str, opp: dict, filename: str, content
     Used by the capture agent's upload tool to file a freshly-generated deliverable in the SAME
     pass that saved it to iDrive — no download-then-reupload. The Bid folder already exists (it's
     created the moment the opp is marked Bid), so no provisioning happens here."""
-    folder = (opp or {}).get("sharepoint_folder")
-    cap = ((folder or {}).get("subfolders") or {}).get("Capture Docs") if folder else None
-    if not folder or not folder.get("drive_id") or not cap or not cap.get("id"):
-        return None
-    account_id = graph_account(sharepoint_entity(organization_id))
-    if not account_id:
-        return None
-    item = upload_file_to_folder(folder["drive_id"], cap["id"], _sanitize_filename(filename),
-                                 content, account_id)
-    return {"sharepoint_url": item.get("webUrl"), "sharepoint_item_id": item.get("id")}
+    return file_to_bid_subfolder(
+        organization_id, (opp or {}).get("sharepoint_folder"), "Capture Docs", filename, content
+    )
 
 
 def provision_bid_folders(organization_id: str, opp: dict) -> dict:

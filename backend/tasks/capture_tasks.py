@@ -8,7 +8,7 @@ import logging
 
 from celery import group
 
-from agent.capture_agent import deliverable_url_key, generate_capture
+from agent.capture_agent import generate_capture
 from app.worker import celery_app
 from client.crm_store import get_crm_store
 
@@ -24,38 +24,53 @@ def capture_task(self, opp: dict, employee_email: str | None = None) -> dict:
 
     The capture agent's upload tool files each deliverable into the Bid's SharePoint 'Capture
     Docs' folder in the SAME pass that saves it to iDrive (see generate_capture); it returns
-    `sp_uploads` mapping each iDrive url → {sharepoint_url, sharepoint_item_id}, which we record
-    onto the CRM document here. SharePoint filing is best-effort — a miss just leaves the doc as
-    an iDrive-only 'draft'.
+    `real_uploads` mapping each uploaded filename → {url, object_key, sharepoint_url,
+    sharepoint_item_id}. We resolve each deliverable's real download link from there by filename
+    (never from a URL the model self-reports) and drop any deliverable that was never uploaded.
+    SharePoint filing is best-effort — a miss just leaves the doc as an iDrive-only 'draft'.
     """
     crm = get_crm_store()
     try:
-        output, sp_uploads = generate_capture(opp, employee_email)
+        output, real_uploads = generate_capture(opp, employee_email)
     except Exception as exc:
         logger.warning("Capture failed for %s: %s", opp.get("id"), exc)
+        if self.request.retries >= self.max_retries:
+            # Terminal failure — stamp captured_at so the opp leaves the UI's "Processing"
+            # window (capture_approved && !captured_at) instead of sitting there forever.
+            crm.mark_capture_failed(opp["id"], str(exc))
+            raise
         raise self.retry(exc=exc)
 
-    matched = 0
+    # Persist ONLY deliverables backed by a real upload. The download link comes from the tool
+    # (real_uploads), never from the model — so a deliverable the model listed but never actually
+    # uploaded is dropped instead of stored with a fabricated URL (e.g. "https://example.com").
+    remaining = dict(real_uploads)  # filename -> {url, object_key, sharepoint_url, sharepoint_item_id}
+    created = 0
     for d in output.deliverables:
+        up = remaining.pop(d.filename, None)
+        if up is None and remaining:
+            # Filename drift tolerance: the model reported a name that doesn't exactly match what
+            # it uploaded, but a real upload is still unclaimed — pair them in order.
+            _, up = remaining.popitem()
+        if up is None:
+            logger.warning("Capture for %s: deliverable '%s' (%s) has no real upload — dropping "
+                           "(model did not upload it).", opp.get("id"), d.title, d.doc_type)
+            continue
         document_id = crm.create_document(
             opp["id"], agent_id="capture_agent", doc_type=d.doc_type,
-            title=d.title, url=d.doc_url,
+            title=d.title, url=up["url"], object_key=up.get("object_key"),
         )
-        # Match on the stable url PATH (see deliverable_url_key) so signature-param drift in the
-        # model's echoed doc_url doesn't lose the SharePoint linkage.
-        sp = sp_uploads.get(deliverable_url_key(d.doc_url))
-        if sp and sp.get("sharepoint_url"):
+        if up.get("sharepoint_url"):
             crm.update_document(document_id, status="filed",
-                                sharepoint_url=sp["sharepoint_url"],
-                                sharepoint_item_id=sp.get("sharepoint_item_id"))
-            matched += 1
-    if sp_uploads and matched < len(sp_uploads):
-        # Files were filed to SharePoint but some couldn't be linked back to a deliverable — make
-        # that visible instead of silently leaving an orphaned SharePoint copy.
-        logger.warning("Capture for %s filed %d SharePoint cop(ies) but linked only %d to "
-                       "deliverables (doc_url echo mismatch?)", opp.get("id"), len(sp_uploads), matched)
+                                sharepoint_url=up["sharepoint_url"],
+                                sharepoint_item_id=up.get("sharepoint_item_id"))
+        created += 1
+
+    if output.deliverables and created == 0:
+        logger.warning("Capture for %s produced %d deliverable(s) but NONE were backed by a real "
+                       "upload — nothing persisted.", opp.get("id"), len(output.deliverables))
     crm.mark_captured(opp["id"])
-    return {"id": opp["id"], "deliverables": [d.doc_type for d in output.deliverables]}
+    return {"id": opp["id"], "deliverables": [d.doc_type for d in output.deliverables], "created": created}
 
 
 @celery_app.task

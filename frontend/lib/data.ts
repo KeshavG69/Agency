@@ -22,6 +22,8 @@ export interface DocItem {
   url: string;
   status: string;
   created_at?: string;
+  agent_id?: string; // "manual_upload" = user-uploaded source doc; "capture_agent" = generated
+  sharepoint_url?: string | null; // set once the file is filed into the Bid's SharePoint folder
 }
 export interface CallItem {
   name: string;
@@ -73,6 +75,9 @@ export interface Opportunity {
   poc_name?: string;
   capture_approved?: boolean;
   captured_at?: string | null; // set when the Capture agent finishes its deliverables
+  capture_error?: string | null; // set when a capture run terminally failed
+  ingesting?: boolean; // manual upload -> parse -> digest -> Analyst pipeline still running
+  ingest_error?: string | null; // set when the ingest pipeline terminally failed
   // raw opportunity fields surfaced in the detail view
   source?: string; // "sam.gov" | "excel" — where this opportunity was ingested from
   solicitation_number?: string;
@@ -208,6 +213,34 @@ export async function uploadExcel(file: File): Promise<void> {
     body: form,
   });
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+}
+
+export interface ManualOpportunityResult {
+  opportunity_id: string;
+  created: boolean;
+  files: number;
+  processing: boolean;
+}
+
+// Manually add an opportunity: title + solicitation number + description + files.
+// Multipart (files) → raw fetch + auth header, like uploadExcel. The backend uploads
+// the files, parses + digests them (small model), and runs the Analyst in the background.
+export async function createManualOpportunity(
+  fields: { title: string; number?: string; description?: string },
+  files: File[],
+): Promise<ManualOpportunityResult> {
+  const form = new FormData();
+  form.append("title", fields.title);
+  if (fields.number) form.append("number", fields.number);
+  if (fields.description) form.append("description", fields.description);
+  for (const f of files) form.append("files", f); // repeated key → FastAPI list[UploadFile]
+  const res = await fetch(`${API_BASE}/api/opportunities/manual`, {
+    method: "POST",
+    headers: authHeader(),
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Add opportunity failed: ${res.status}`);
+  return res.json();
 }
 
 // ---- Contact knowledge graph ----

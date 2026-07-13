@@ -1,12 +1,18 @@
 """Opportunity actions — the human approval gate + kicking off capture."""
+import asyncio
 import logging
+import os
+import tempfile
+import uuid
 
 from celery import group
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from auth.dependencies import get_current_user
 from client.crm_store import get_crm_store
+from client.idrive_storage import get_idrive_storage
+from models.opportunity import Opportunity
 from tasks.analyst_tasks import analyze_opportunity_task, run_analyst_batch
 from tasks.capture_tasks import capture_task, run_capture_batch
 from tasks.crm_tasks import recommend_contacts_task
@@ -15,6 +21,97 @@ from tasks.mail_tasks import draft_one_outreach_task, draft_outreach_task
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/opportunities", tags=["opportunities"])
+
+
+_MAX_MANUAL_FILES = 20
+
+
+def _upload_one(file_path: str, org: str, opp_id: str, filename: str) -> tuple[str, str]:
+    """Blocking iDrive upload of a single file — run in a worker thread."""
+    safe = os.path.basename(filename or "document").strip() or "document"
+    key_name = f"{uuid.uuid4().hex[:12]}_{safe}"
+    return get_idrive_storage().upload_document(
+        file_path=file_path, user_id=org, proposal_id=opp_id, filename=key_name
+    )
+
+
+@router.post("/manual")
+async def create_manual_opportunity(
+    title: str = Form(...),
+    number: str | None = Form(None),
+    description: str | None = Form(None),
+    files: list[UploadFile] = File(default=[]),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Manually add an opportunity: title + solicitation number + description + files.
+
+    Creates the opportunity row, uploads each file to iDrive e2 (recording a document
+    pointer with its object key), then hands off to a background task that parses the
+    files (LiteParse), digests them into document_text (stuff-if-small / map-reduce
+    with the small model), and kicks the Analyst. Returns immediately.
+    """
+    title = (title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required")
+    if files and len(files) > _MAX_MANUAL_FILES:
+        raise HTTPException(status_code=400, detail=f"Too many files (max {_MAX_MANUAL_FILES})")
+
+    organization_id = str(current_user["organization_id"])
+    crm = get_crm_store()
+
+    opp = Opportunity(
+        title=title,
+        solicitation_number=(number or "").strip() or None,
+        description=(description or "").strip() or None,
+        source="manual",
+    )
+    opportunity_id = crm.insert_opportunity(opp, organization_id)
+    # Mark it "ingesting" so the UI shows it in the Ingesting section until the
+    # background pipeline (parse -> digest -> Analyst verdict) completes. Cleared by
+    # apply_verdict on success, or by the tasks below on terminal failure.
+    crm.set_ingesting(opportunity_id, organization_id, True)
+
+    # Upload each file to iDrive (shared storage) here so the bytes are durable and
+    # reachable by the worker container. The upload is blocking (boto3) -> offload to
+    # a thread so it doesn't block the event loop. A per-file failure is skipped, not fatal.
+    uploaded = 0
+    for f in files:
+        data = await f.read()
+        if not data:
+            continue
+        with tempfile.NamedTemporaryFile(delete=True) as tmp:
+            tmp.write(data)
+            tmp.flush()
+            try:
+                url, key = await asyncio.to_thread(
+                    _upload_one, tmp.name, organization_id, opportunity_id, f.filename or "document"
+                )
+            except Exception as exc:  # noqa: BLE001 — don't fail the whole add on one bad upload
+                logger.warning("Manual upload: iDrive upload failed for %s: %s", f.filename, exc)
+                continue
+        crm.create_document(
+            opportunity_id,
+            agent_id="manual_upload",
+            doc_type="solicitation",
+            title=os.path.basename(f.filename or "document"),
+            url=url,
+            object_key=key,
+        )
+        uploaded += 1
+
+    # Parse + digest + analyze off the request path. Lazy import: app.worker imports
+    # manual_upload_tasks, so a top-level import here re-enters this module mid-load
+    # (empty router at include time). Matches the notify_tasks/sharepoint_tasks pattern below.
+    from tasks.manual_upload_tasks import process_manual_upload_task
+
+    process_manual_upload_task.delay(opportunity_id, organization_id)
+
+    return {
+        "opportunity_id": opportunity_id,
+        "created": True,
+        "files": uploaded,
+        "processing": True,
+    }
 
 
 @router.get("")

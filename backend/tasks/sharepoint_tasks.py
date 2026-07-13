@@ -87,13 +87,59 @@ def sync_sharepoint_structure_task(self, organization_id: str, with_acl: bool = 
     return {"crawled": len(nodes), "graphed": written, "organization_id": org}
 
 
+def _file_solicitation_docs(org: str, opportunity_id: str, pointer: dict, crm) -> int:
+    """Copy the opp's user-uploaded (manual_upload) documents from iDrive into the Bid's
+    'Solicitation' subfolder, and record the SharePoint link on each CRM document.
+
+    Idempotent — skips docs already filed (they carry a sharepoint_url). Best-effort per doc:
+    a single failure is logged and never blocks the rest or the provisioning result."""
+    import os
+    import tempfile
+
+    from client.idrive_storage import get_idrive_storage
+    from utils.sharepoint_writer import file_to_bid_subfolder
+
+    docs = [d for d in crm.list_documents(opportunity_id) if d.get("agent_id") == "manual_upload"]
+    storage = get_idrive_storage()
+    filed = 0
+    for d in docs:
+        if d.get("sharepoint_url"):
+            continue  # already in SharePoint
+        key = d.get("object_key")
+        if not key:
+            logger.warning("Solicitation doc %s has no object_key — can't file to SharePoint", d.get("id"))
+            continue
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp()
+            os.close(fd)
+            storage.download_document(key, tmp_path)
+            with open(tmp_path, "rb") as fh:
+                content = fh.read()
+            sp = file_to_bid_subfolder(org, pointer, "Solicitation", d.get("title") or "document", content)
+            if sp and sp.get("sharepoint_url"):
+                crm.update_document(d["id"], status="filed",
+                                    sharepoint_url=sp["sharepoint_url"],
+                                    sharepoint_item_id=sp.get("sharepoint_item_id"))
+                filed += 1
+        except Exception as exc:  # noqa: BLE001 — one bad doc must not fail the whole provisioning
+            logger.warning("Filing solicitation doc %s to SharePoint failed: %s", d.get("id"), exc)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+    if filed:
+        logger.info("Filed %d solicitation doc(s) into the Solicitation folder for opp %s", filed, opportunity_id)
+    return filed
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=30, name="sharepoint.provision_bid")
 def provision_bid_folders_task(self, organization_id: str, opportunity_id: str) -> dict:
-    """Create the SharePoint Bid folder tree for one opportunity and store the pointer.
+    """Create the SharePoint Bid folder tree for one opportunity, store the pointer, and file the
+    opp's uploaded documents into its 'Solicitation' subfolder.
 
-    Fired when an opportunity is flipped to Bid. Idempotent — skips if the opp already has
-    a folder. RuntimeError (SharePoint not connected / not crawled) is treated as a graceful
-    skip (no retry); transient Graph/network errors retry.
+    Fired when an opportunity is flipped to Bid. Idempotent — reuses an existing folder and skips
+    already-filed docs. RuntimeError (SharePoint not connected / not crawled) is treated as a
+    graceful skip (no retry); transient Graph/network errors retry.
     """
     org = (organization_id or "").strip()
     from client.crm_store import get_crm_store
@@ -102,26 +148,29 @@ def provision_bid_folders_task(self, organization_id: str, opportunity_id: str) 
     opp = crm.get_opportunity(opportunity_id, org)
     if not opp:
         return {"skipped": "opportunity not found", "opportunity_id": opportunity_id}
-    if opp.get("sharepoint_folder"):
-        return {"skipped": "already provisioned", "opportunity_id": opportunity_id}
 
     from utils.sharepoint_writer import (
         SharePointWriteError,
         provision_bid_folders,
     )
 
-    try:
-        pointer = provision_bid_folders(org, opp)
-    except RuntimeError as exc:  # precondition: not connected / not crawled — expected, skip
-        logger.warning("Bid folder provisioning skipped for %s: %s", opportunity_id, exc)
-        return {"skipped": str(exc), "opportunity_id": opportunity_id}
-    except SharePointWriteError as exc:  # deterministic (bad name / 403 no scope) — surface, no retry
-        logger.error("Bid folder provisioning error for %s: %s", opportunity_id, exc)
-        return {"error": str(exc), "opportunity_id": opportunity_id}
-    except Exception as exc:  # transient (SharePointTransientError / network) -> retry
-        logger.warning("Bid folder provisioning failed (transient) for %s: %s", opportunity_id, exc)
-        raise self.retry(exc=exc)
+    pointer = opp.get("sharepoint_folder")
+    if not pointer:
+        try:
+            pointer = provision_bid_folders(org, opp)
+        except RuntimeError as exc:  # precondition: not connected / not crawled — expected, skip
+            logger.warning("Bid folder provisioning skipped for %s: %s", opportunity_id, exc)
+            return {"skipped": str(exc), "opportunity_id": opportunity_id}
+        except SharePointWriteError as exc:  # deterministic (bad name / 403 no scope) — surface, no retry
+            logger.error("Bid folder provisioning error for %s: %s", opportunity_id, exc)
+            return {"error": str(exc), "opportunity_id": opportunity_id}
+        except Exception as exc:  # transient (SharePointTransientError / network) -> retry
+            logger.warning("Bid folder provisioning failed (transient) for %s: %s", opportunity_id, exc)
+            raise self.retry(exc=exc)
+        crm.set_sharepoint_folder(opportunity_id, org, pointer)
+        logger.info("Stored SharePoint folder pointer for opportunity %s", opportunity_id)
 
-    crm.set_sharepoint_folder(opportunity_id, org, pointer)
-    logger.info("Stored SharePoint folder pointer for opportunity %s", opportunity_id)
-    return {"opportunity_id": opportunity_id, "folder": pointer.get("web_url")}
+    # File the opp's uploaded solicitation docs into the Solicitation subfolder (idempotent, so it
+    # also catches up an opp whose folder already existed before this behavior). Best-effort.
+    filed = _file_solicitation_docs(org, opportunity_id, pointer, crm)
+    return {"opportunity_id": opportunity_id, "folder": pointer.get("web_url"), "solicitation_docs_filed": filed}

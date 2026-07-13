@@ -10,9 +10,9 @@ agents, which shared every tool and ran back-to-back.
 from __future__ import annotations
 
 import asyncio
+import logging
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 from agno.agent import Agent
 from agno.skills import LocalSkills, Skills
@@ -29,6 +29,8 @@ from utils.s3_upload_tool import build_s3_upload_tool
 from utils.sharepoint_tools import load_sharepoint_tools, sharepoint_tool_instructions
 from utils.sharepoint_writer import file_to_capture_docs
 from utils.structured import coerce_output
+
+logger = logging.getLogger(__name__)
 
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
@@ -85,14 +87,35 @@ WHITE-PAPER METHOD (when you produce a "white_paper"):
       specific and credible — a discriminator, not a generic capabilities brochure.
    Cite source URLs inline for the external tech claims; ground capability claims in SharePoint.
 
-3. For EACH deliverable you produce: write it in the right tone (customer-facing for the
-   external ones, internal/strategic for the capture plan), grounded in the strategy + real
-   past performance. Generate it with the right skill + python_repl_tool (pptx for a briefing,
-   docx otherwise; simple filename, no path), then upload with s3_upload_tool(filename="...")
-   and take the returned url.
+3. Write EACH deliverable in the right tone (customer-facing for the external ones,
+   internal/strategic for the capture plan), grounded in the strategy + real past performance.
 
-Return `deliverables` — a list, one entry per document produced, each with doc_type, title,
-doc_url, and a 2-3 sentence summary.
+MANDATORY PER-DELIVERABLE PROCEDURE — you MUST complete ALL of these steps, in order, for
+every single deliverable. There are NO exceptions and NO shortcuts:
+   (a) GENERATE the file in `python_repl_tool` with the right skill (pptx for a briefing, docx
+       otherwise). Use a simple filename with NO path (e.g. "capability_briefing.pptx").
+   (b) UPLOAD it by CALLING the `s3_upload_tool(filename="<that exact filename>")` tool. This is
+       a REAL tool call you must actually make — not something you describe or write in prose.
+   (c) CHECK the tool's result. It must return `success: true`. If it returns `success: false`
+       (e.g. "file not found"), the file name is wrong or the file wasn't written — fix it in
+       `python_repl_tool` and CALL `s3_upload_tool` AGAIN. Repeat until you get `success: true`.
+   (d) Only a deliverable that reached `success: true` may appear in your final JSON.
+
+ABSOLUTE RULES:
+   - The download link is taken ONLY from the actual `s3_upload_tool` result — NEVER from
+     anything you type. Do NOT invent, guess, copy, or write any URL (no "https://example.com",
+     no placeholder, no made-up link). There is no `doc_url` field for you to fill.
+   - You may NOT list a deliverable you did not successfully upload with `s3_upload_tool`. A
+     deliverable without a matching successful upload is DISCARDED and the work is wasted.
+   - If you find yourself about to write the final JSON without having called `s3_upload_tool`
+     for a document, STOP and call the tool first.
+
+BEFORE you emit the final JSON, self-check: for every deliverable you are about to list, did you
+actually call `s3_upload_tool` and see `success: true`? If not, go back and upload it now.
+
+Return `deliverables` — a list, one entry per document you generated AND successfully uploaded,
+each with doc_type, title, the EXACT `filename` you passed to `s3_upload_tool`, and a 2-3
+sentence summary.
 
 Ground everything in your research, our SharePoint past performance, and the opportunity data.
 Be honest about unknowns — never fabricate facts about the customer, competitors, or our past
@@ -102,30 +125,23 @@ performance.
 
 After generating + uploading the document(s), your FINAL message must be ONLY this JSON —
 no prose, no markdown fences, no <reasoning> tags:
-{{"deliverables": [{{"doc_type": "rfi_response" | "white_paper" | "capability_briefing" | "capture_plan", "title": "<title>", "doc_url": "<url>", "summary": "<2-3 sentences>"}}]}}
+{{"deliverables": [{{"doc_type": "rfi_response" | "white_paper" | "capability_briefing" | "capture_plan", "title": "<title>", "filename": "<exact filename you uploaded>", "summary": "<2-3 sentences>"}}]}}
 """
-
-
-def deliverable_url_key(url: str) -> str:
-    """A stable join key for a deliverable's iDrive URL — the DECODED path only, without the
-    volatile presigned query string (X-Amz-Signature / X-Amz-Date / X-Amz-Expires …). The path
-    carries the unique per-upload artifact id + filename, so it uniquely identifies the file; the
-    signed query is what a model is most likely to reorder or re-encode when echoing the URL. Used
-    on both sides of the sp_uploads join so the SharePoint copy links to its deliverable robustly."""
-    return unquote(urlsplit(url or "").path)
 
 
 def build_capture_agent(
     organization_id: str | None = None, employee_email: str | None = None,
-    opp: dict | None = None, sp_uploads: dict | None = None,
+    opp: dict | None = None, real_uploads: dict | None = None,
 ) -> Agent:
     """Build the Capture agent — grounded in the org's company profile (from its UEI) AND its
     SharePoint past-performance material (RBAC-filtered to the acting employee).
 
-    When `opp` (a Bid with a provisioned SharePoint folder) and `sp_uploads` are given, the
-    upload tool ALSO files each generated deliverable into the opp's 'Capture Docs' folder in
-    the SAME pass — no download-then-reupload — and records {idrive_url: {sharepoint_url,
-    sharepoint_item_id}} into `sp_uploads` for the caller to persist onto the CRM document."""
+    Every real s3_upload_tool upload is recorded into `real_uploads`, keyed by filename:
+    {filename: {url, object_key, sharepoint_url, sharepoint_item_id}}. This is the AUTHORITATIVE
+    source of a deliverable's download link — the caller resolves it by filename instead of
+    trusting a URL the model self-reports (which it may fabricate for a file it never uploaded).
+    When `opp` is a Bid with a provisioned SharePoint folder, the same bytes are ALSO filed into
+    its 'Capture Docs' folder in the same pass (no download-then-reupload)."""
     company, profile = company_context(organization_id or "")
 
     def search_sharepoint_tool(query: str) -> str:
@@ -137,21 +153,29 @@ def build_capture_agent(
             query, employee_email=employee_email, organization_id=organization_id or ""
         )
 
-    def _also_file_to_sharepoint(url: str, local_path: str, filename: str) -> None:
-        """Post-upload hook: put the same local bytes into the opp's 'Capture Docs' subfolder.
-        Best-effort — the upload tool swallows any raise, so iDrive stays the durable copy."""
-        with open(local_path, "rb") as fh:
-            content = fh.read()
-        sp = file_to_capture_docs(str(organization_id or ""), opp or {}, filename, content)
-        if sp and sp_uploads is not None:
-            # Key on the STABLE url path (not the volatile signed query string) so capture_task
-            # can still link this SharePoint copy to the deliverable even if the model re-encodes
-            # the presigned URL when echoing it into its JSON.
-            sp_uploads[deliverable_url_key(url)] = sp
+    def _record_upload(url: str, object_key: str, local_path: str, filename: str) -> None:
+        """Post-upload hook: record the REAL upload (iDrive url + object key) so the deliverable's
+        link comes from the tool, not the model. Then best-effort file the same bytes into the
+        opp's 'Capture Docs' folder. iDrive is recorded FIRST so a SharePoint hiccup never loses
+        the durable link."""
+        if real_uploads is None:
+            return
+        real_uploads[filename] = {
+            "url": url, "object_key": object_key,
+            "sharepoint_url": None, "sharepoint_item_id": None,
+        }
+        if opp:
+            try:
+                with open(local_path, "rb") as fh:
+                    content = fh.read()
+                sp = file_to_capture_docs(str(organization_id or ""), opp, filename, content)
+                if sp:
+                    real_uploads[filename]["sharepoint_url"] = sp.get("sharepoint_url")
+                    real_uploads[filename]["sharepoint_item_id"] = sp.get("sharepoint_item_id")
+            except Exception as exc:  # noqa: BLE001 — iDrive is the durable copy; SP filing is a bonus
+                logger.warning("Capture Docs filing failed for %s: %s", filename, exc)
 
-    upload_tool = build_s3_upload_tool(
-        on_uploaded=_also_file_to_sharepoint if (opp and sp_uploads is not None) else None
-    )
+    upload_tool = build_s3_upload_tool(on_uploaded=_record_upload if real_uploads is not None else None)
 
     return Agent(
         name="Capture",
@@ -173,18 +197,20 @@ def build_capture_agent(
 
 
 def generate_capture(opp: dict, employee_email: str | None = None) -> tuple[CaptureOutput, dict]:
-    """Run the Capture agent on one opportunity → (strategy + deliverable(s), sp_uploads).
+    """Run the Capture agent on one opportunity → (strategy + deliverable(s), real_uploads).
 
-    `sp_uploads` maps each deliverable's iDrive url → {sharepoint_url, sharepoint_item_id} for the
-    copies the upload tool filed into 'Capture Docs' (empty if SharePoint isn't set up)."""
+    `real_uploads` maps each uploaded filename → {url, object_key, sharepoint_url,
+    sharepoint_item_id}. The caller resolves each deliverable's real download link from here (by
+    filename), so a deliverable the model listed but never actually uploaded has no entry and is
+    dropped instead of persisted with a fabricated URL."""
     set_session_id(f"capture-{opp.get('id', 'default')}")
-    sp_uploads: dict = {}
+    real_uploads: dict = {}
     agent = build_capture_agent(
-        str(opp.get("organization_id") or ""), employee_email, opp=opp, sp_uploads=sp_uploads
+        str(opp.get("organization_id") or ""), employee_email, opp=opp, real_uploads=real_uploads
     )
     _skip = {"extra", "document_text"}  # document_text is appended cleanly below
     lines = [f"- {k}: {v}" for k, v in opp.items() if v not in (None, "", {}) and k not in _skip]
     message = "OPPORTUNITY:\n" + "\n".join(lines) + document_context(opp)
     # arun(): the doc-gen tools (python_repl_tool, upload tool) are async.
     result = asyncio.run(agent.arun(message))
-    return coerce_output(result.content, CaptureOutput), sp_uploads
+    return coerce_output(result.content, CaptureOutput), real_uploads

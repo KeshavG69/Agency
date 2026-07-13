@@ -92,6 +92,66 @@ class CRMStore:
         res = self.opps.insert_one(doc)
         return "created", str(res.inserted_id)
 
+    def insert_opportunity(self, opp: Opportunity, organization_id: str) -> str:
+        """Always insert a NEW opportunity (no dedup) — used for manual creation.
+
+        Unlike upsert_opportunity, this never matches/updates an existing row on a
+        colliding solicitation_number (which would clobber that row's fields), so a
+        manual add is always a fresh, analyzable opportunity. Returns the new id.
+        """
+        doc = opp.model_dump()
+        doc.setdefault("stage", "Discover")
+        doc["organization_id"] = organization_id
+        res = self.opps.insert_one(doc)
+        return str(res.inserted_id)
+
+    def set_document_text(
+        self,
+        opportunity_id: str,
+        organization_id: str,
+        document_text: str,
+        document_url: str | None = None,
+    ) -> bool:
+        """Store the (digested) solicitation text on an opp. Org-scoped.
+
+        Leaves analyzed_at untouched, so a freshly-created manual opp is still picked
+        up by list_unanalyzed_opportunities for the Analyst.
+        """
+        update: dict = {"document_text": document_text, "updated_at": _utc_now()}
+        if document_url:
+            update["document_url"] = document_url
+        try:
+            res = self.opps.update_one(
+                {"_id": ObjectId(opportunity_id), "organization_id": organization_id},
+                {"$set": update},
+            )
+        except Exception:  # noqa: BLE001 — malformed id
+            return False
+        return res.matched_count > 0
+
+    def set_ingesting(
+        self, opportunity_id: str, organization_id: str, value: bool, error: str | None = None
+    ) -> bool:
+        """Mark/clear an opportunity's ingest pipeline (parse -> digest -> Analyst) as in-flight.
+
+        Set True at manual creation so the opp shows in the UI's "Ingesting" section. Cleared
+        on success by apply_verdict (atomically with analyzed_at), or here with an `error` on a
+        task's terminal failure — so a failed ingest never sits "Ingesting" forever. Org-scoped.
+        """
+        update: dict = {"ingesting": value}
+        if error:
+            update["ingest_error"] = error
+        elif not value:
+            update["ingest_error"] = None
+        try:
+            res = self.opps.update_one(
+                {"_id": ObjectId(opportunity_id), "organization_id": organization_id},
+                {"$set": update},
+            )
+        except Exception:  # noqa: BLE001 — malformed id
+            return False
+        return res.matched_count > 0
+
     def count(self, organization_id: str | None = None) -> int:
         return self.opps.count_documents(
             {"organization_id": organization_id} if organization_id else {}
@@ -135,6 +195,15 @@ class CRMStore:
         """Mark capture done so the opportunity isn't re-processed."""
         self.opps.update_one(
             {"_id": ObjectId(opportunity_id)}, {"$set": {"captured_at": _utc_now()}}
+        )
+
+    def mark_capture_failed(self, opportunity_id: str, error: str) -> None:
+        """Terminal capture failure — stamp captured_at (so the opp leaves the UI's
+        'Processing' window, which is capture_approved && !captured_at) plus a capture_error,
+        instead of sitting capture_approved forever after retries exhaust."""
+        self.opps.update_one(
+            {"_id": ObjectId(opportunity_id)},
+            {"$set": {"captured_at": _utc_now(), "capture_error": error}},
         )
 
     def set_recommended_contacts(self, opportunity_id: str, contacts: list[dict]) -> None:
@@ -193,6 +262,10 @@ class CRMStore:
                 "analyst_rationale": verdict.rationale,
                 "stage": verdict.recommended_stage,
                 "analyzed_at": _utc_now(),
+                # Analyst-done is the single choke point where a manual opp leaves the
+                # "Ingesting" section: it gains a verdict and the flag clears in one write.
+                "ingesting": False,
+                "ingest_error": None,
             }},
         )
 
@@ -253,10 +326,16 @@ class CRMStore:
     def create_document(
         self, opportunity_id: str, agent_id: str, doc_type: str, title: str,
         url: str, status: str = "draft", version: int = 1,
+        object_key: str | None = None,
     ) -> str:
-        """Record a generated document (a pointer — the file lives in iDrive/SharePoint)."""
+        """Record a generated document (a pointer — the file lives in iDrive/SharePoint).
+
+        `object_key` (the iDrive object key) is stored when known so fresh presigned
+        URLs can be re-minted directly from it, instead of parsing the (possibly stale
+        or placeholder) stored URL — see routers.documents.fresh_document_url.
+        """
         now = _utc_now()
-        res = self.documents.insert_one({
+        doc = {
             "opportunity_id": opportunity_id,
             "agent_id": agent_id,
             "type": doc_type,
@@ -266,7 +345,10 @@ class CRMStore:
             "version": version,
             "created_at": now,
             "updated_at": now,
-        })
+        }
+        if object_key:
+            doc["object_key"] = object_key
+        res = self.documents.insert_one(doc)
         return str(res.inserted_id)
 
     def list_documents(self, opportunity_id: str, doc_type: str | None = None) -> list[dict]:

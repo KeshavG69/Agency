@@ -23,9 +23,11 @@ from utils.python_repl_tool import get_session_id, _session_temp_dirs
 
 logger = logging.getLogger(__name__)
 
-# A post-upload hook: (presigned_url, local_path, filename) -> None. Runs after a successful
-# iDrive upload and BEFORE the local file is deleted. Best-effort — a raise is swallowed.
-OnUploaded = Callable[[str, str, str], None]
+# A post-upload hook: (presigned_url, object_key, local_path, filename) -> None. Runs after a
+# successful iDrive upload and BEFORE the local file is deleted. Best-effort — a raise is
+# swallowed. The object_key lets the caller record the durable storage reference (not just the
+# expiring presigned URL) so download links can be re-minted later.
+OnUploaded = Callable[[str, str, str, str], None]
 
 
 def build_s3_upload_tool(on_uploaded: Optional[OnUploaded] = None):
@@ -119,7 +121,7 @@ def build_s3_upload_tool(on_uploaded: Optional[OnUploaded] = None):
             # Second destination (e.g. SharePoint) — from the SAME local bytes, before cleanup.
             if on_uploaded is not None:
                 try:
-                    on_uploaded(url, local_path, filename)
+                    on_uploaded(url, object_key, local_path, filename)
                 except Exception as hook_err:  # noqa: BLE001 — never fail the upload over a side-copy
                     logger.warning(f"[s3_upload_tool] on_uploaded hook failed: {hook_err}")
 

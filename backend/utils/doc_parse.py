@@ -58,7 +58,7 @@ def parse_document(src: str, *, max_chars: int | None = None, timeout: float = 6
     return text
 
 
-def document_context(opp: dict, max_chars: int = 60000) -> str:
+def document_context(opp: dict, max_chars: int = 2000000) -> str:  # ~500k tokens @ ~4 chars/token
     """A prompt block carrying the opportunity's parsed solicitation text.
 
     Returns "" when there's no document, so callers can append it unconditionally.
