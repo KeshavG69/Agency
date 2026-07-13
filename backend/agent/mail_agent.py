@@ -176,7 +176,7 @@ def _build_message(opp: dict, contact: dict, proposal: str | None, employee_emai
     )
     if proposal:
         message += f"\n\nPROPOSAL CONTEXT:\n{proposal}"
-    message += document_context(opp, max_chars=30000)
+    message += document_context(opp)  # full solicitation (inherits default cap)
     message += "\n\nFind our relevant experience in SharePoint, then draft the outreach email as JSON."
     return message
 

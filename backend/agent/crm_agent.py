@@ -115,7 +115,7 @@ def recommend_contacts(
     message = "OPPORTUNITY:\n" + "\n".join(opp_lines)
     if proposal:
         message += f"\n\nPROPOSAL CONTEXT:\n{proposal}"
-    message += document_context(opp, max_chars=30000)
+    message += document_context(opp)  # full solicitation (inherits default cap)
     message += "\n\nSearch the network and return the relevant contacts as JSON."
     result = agent.run(message)
     return coerce_output(result.content, CRMResult)

@@ -17,6 +17,7 @@ import tasks.capture_tasks  # noqa: E402,F401
 import tasks.contacts_tasks  # noqa: E402,F401
 import tasks.crm_tasks  # noqa: E402,F401
 import tasks.mail_tasks  # noqa: E402,F401
+import tasks.manual_upload_tasks  # noqa: E402,F401
 import tasks.notify_tasks  # noqa: E402,F401
 import tasks.resync_tasks  # noqa: E402,F401
 import tasks.sam_radar_tasks  # noqa: E402,F401

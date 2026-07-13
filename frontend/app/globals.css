@@ -319,6 +319,11 @@ button {
   padding: 1px 6px;
   white-space: nowrap;
 }
+/* Manually-added opportunities — neutral, distinct from the accent SAM.gov tag. */
+.src-tag.manual {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
 
 /* "View on SAM.gov" link in the detail info tab */
 .sam-link {
@@ -343,6 +348,12 @@ button {
 .list-head {
   padding: 18px 18px 14px;
   border-bottom: 1px solid var(--line);
+}
+.list-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 .list-head h2 {
   font-family: var(--font-display);
@@ -1005,6 +1016,25 @@ button {
 .badge.none {
   background: var(--nobid-soft);
   color: var(--faint);
+}
+/* in-flight activity chips (pulse to signal "working") */
+.badge.ingesting {
+  background: var(--watch-soft);
+  color: var(--watch);
+  animation: badgePulse 1.6s var(--ease-out) infinite;
+}
+.badge.processing {
+  background: var(--accent-soft);
+  color: var(--accent);
+  animation: badgePulse 1.6s var(--ease-out) infinite;
+}
+.badge.failed {
+  background: var(--nobid-soft);
+  color: var(--nobid);
+}
+@keyframes badgePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 .pscore {
@@ -2314,6 +2344,77 @@ button {
 }
 .crm-total { font-size: 12.5px; color: var(--muted); }
 .crm-actions { display: flex; align-items: center; gap: 14px; }
+
+/* ---------------- Add-opportunity modal form ---------------- */
+.aof-field {
+  display: block;
+  padding: 10px 8px;
+}
+.aof-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--faint);
+  margin-bottom: 6px;
+}
+.aof-input {
+  width: 100%;
+  font-size: 13.5px;
+  font-family: var(--font-sans);
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.aof-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.aof-textarea {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.5;
+}
+.aof-files {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.aof-files li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+.aof-fname {
+  flex: 1;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aof-fsize {
+  color: var(--faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.aof-fx {
+  font-size: 17px;
+  line-height: 1;
+  color: var(--faint);
+  padding: 0 4px;
+  border-radius: 6px;
+  transition: color 0.15s;
+}
+.aof-fx:hover:not(:disabled) { color: #d98b8b; }
 
 /* ---------------- Dashboard month calendar ---------------- */
 .dash-cal2 {
