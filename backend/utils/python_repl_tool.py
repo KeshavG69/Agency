@@ -41,6 +41,19 @@ def set_session_id(session_id: str):
     _current_session_id.set(session_id)
 
 
+def ensure_session_dir() -> str:
+    """Return the current session's REPL working directory, creating it if it doesn't exist yet.
+
+    Lets OTHER tools (e.g. a SharePoint image fetcher) drop files into the same workspace the
+    python REPL reads from, even before the first python_repl_tool call in this session."""
+    sid = get_session_id()
+    if sid not in _session_temp_dirs:
+        _session_temp_dirs[sid] = tempfile.TemporaryDirectory(prefix=f"priceiq_repl_{sid}_")
+        logger.info("[python_repl] pre-created temp dir for session=%s: %s",
+                    sid, _session_temp_dirs[sid].name)
+    return _session_temp_dirs[sid].name
+
+
 class SafePythonREPL:
     """Session-scoped wrapper around LangChain's PythonREPL."""
 

@@ -17,6 +17,8 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import base64
 
+import httpx
+
 from client.sharepoint_graph import find_document_library
 from utils.composio_utils import get_composio_client, sharepoint_entity
 from utils.sharepoint_graph_client import _GRAPH, graph_account, graph_get
@@ -205,6 +207,27 @@ def upload_file_to_folder(drive_id: str, parent_folder_id: str, filename: str,
     if isinstance(status, int) and status in _RETRYABLE:
         raise SharePointTransientError(f"SharePoint upload of '{safe}' -> {status}: {_err(data)}")
     raise SharePointWriteError(f"SharePoint upload of '{safe}' failed (status={status}): {_err(data)}")
+
+
+def download_drive_item(organization_id: str, drive_id: str, item_id: str) -> bytes:
+    """Download a SharePoint drive item's raw bytes BY ID — used to pull an image (or any file)
+    into the doc-generation workspace so a generated document can embed it.
+
+    Fetches the item's short-lived, pre-authenticated `@microsoft.graph.downloadUrl` via the
+    Composio Graph proxy, then GETs the bytes from that URL directly. Raises on failure."""
+    account_id = graph_account(sharepoint_entity(organization_id))
+    if not account_id:
+        raise RuntimeError("SharePoint is not connected for this organization.")
+    if not drive_id or not item_id:
+        raise SharePointWriteError("download_drive_item needs both drive_id and item_id.")
+    _status, data = _graph_request("GET", f"drives/{drive_id}/items/{item_id}", account_id)
+    dl = data.get("@microsoft.graph.downloadUrl") if isinstance(data, dict) else None
+    if not dl:
+        raise SharePointWriteError(f"No download URL for SharePoint item {item_id} (status={_status}).")
+    with httpx.Client(timeout=60, follow_redirects=True) as client:
+        resp = client.get(dl)
+        resp.raise_for_status()
+        return resp.content
 
 
 def edit_url(web_url: str | None) -> str | None:
