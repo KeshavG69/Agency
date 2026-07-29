@@ -15,7 +15,9 @@ from functools import lru_cache
 from pathlib import Path
 
 from agno.agent import Agent
+from agno.media import Image as AgnoImage
 from agno.skills import LocalSkills, Skills
+from agno.tools.function import ToolResult
 
 from agent.company_profile import company_context
 from client.llm_client import get_chat_llm_agno
@@ -33,6 +35,12 @@ from utils.structured import coerce_output
 logger = logging.getLogger(__name__)
 
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+
+# Extension -> Agno/OpenAI image format. Only these are shown to the model as a vision block.
+_IMAGE_FORMATS = {
+    "png": "png", "jpg": "jpeg", "jpeg": "jpeg", "gif": "gif",
+    "webp": "webp", "bmp": "bmp", "tif": "tiff", "tiff": "tiff",
+}
 
 
 @lru_cache(maxsize=1)
@@ -89,6 +97,24 @@ WHITE-PAPER METHOD (when you produce a "white_paper"):
 
 3. Write EACH deliverable in the right tone (customer-facing for the external ones,
    internal/strategic for the capture plan), grounded in the strategy + real past performance.
+
+USE RELEVANT VISUALS FROM SHAREPOINT — a strong deliverable often carries a real graphic (the
+company logo, a capability or architecture diagram, a past-performance photo, an org chart, a
+certification/accreditation badge). For each deliverable:
+   - Search SharePoint with `search_sharepoint` for candidate images (e.g. "logo", "architecture
+     diagram", "capability graphic", "certification badge"). Image files come back with an `id`
+     and a `drive_id`.
+   - Call `fetch_sharepoint_image(drive_id, item_id, filename)` — it SHOWS you the image and
+     stages it in the workspace. LOOK at the image: embed it ONLY if it genuinely strengthens the
+     document. Never embed decorative filler, never an image you didn't fetch and actually see.
+   - Embed accepted images in python_repl_tool via the right skill (docx `add_picture`, pptx
+     `add_picture`), sized and placed sensibly, with a short caption where it helps.
+   - If SharePoint has NO suitable image and the document would benefit from an illustrative or
+     conceptual visual (a solution-concept diagram, a process/architecture concept, a cover
+     graphic), you may GENERATE one with `generate_image(description, filename)` — it shows you the
+     result to review, then embed it the same way. NEVER generate anything meant to look like
+     factual evidence (past-performance photos, screenshots, real logos, charts of invented data);
+     real proof must come from SharePoint.
 
 MANDATORY PER-DELIVERABLE PROCEDURE — you MUST complete ALL of these steps, in order, for
 every single deliverable. There are NO exceptions and NO shortcuts:
@@ -153,6 +179,86 @@ def build_capture_agent(
             query, employee_email=employee_email, organization_id=organization_id or ""
         )
 
+    def fetch_sharepoint_image(drive_id: str, item_id: str, filename: str) -> ToolResult:
+        """Download an IMAGE from SharePoint BY ID, SHOW it to you visually for review, and stage
+        it in the document workspace so you can EMBED it with python_repl_tool (docx `add_picture`,
+        pptx `add_picture`).
+
+        HOW: first find the image with `search_sharepoint` — it returns each file's `id` and
+        `drive_id`. Pass those here plus a simple local `filename` KEEPING the real extension
+        (e.g. "capability_diagram.png"). The image is returned to you as a picture you can SEE —
+        look at it and embed it ONLY if it's genuinely relevant. After success, use `filename` as
+        the LOCAL path inside python_repl_tool."""
+        import os
+
+        from utils.python_repl_tool import ensure_session_dir
+        from utils.sharepoint_writer import download_drive_item
+
+        try:
+            content = download_drive_item(str(organization_id or ""), drive_id, item_id)
+        except Exception as exc:  # noqa: BLE001 — report to the model, never crash the run
+            return ToolResult(content=f"Could not fetch SharePoint file {item_id}: {exc}")
+
+        safe = os.path.basename((filename or "image").strip()) or "image"
+        with open(os.path.join(ensure_session_dir(), safe), "wb") as fh:
+            fh.write(content)
+
+        note = (f"Fetched '{safe}' ({len(content):,} bytes) into the document workspace. To embed "
+                f"it, use the LOCAL filename '{safe}' in python_repl_tool (docx add_picture / pptx "
+                f"add_picture).")
+        fmt = _IMAGE_FORMATS.get(os.path.splitext(safe)[1].lower().lstrip("."))
+        if not fmt:
+            # Not a viewable image (e.g. a docx/pdf) — staged, but nothing to show visually.
+            return ToolResult(content=note + " (Not a viewable image format — no visual preview.)")
+        # The image ride-alongs as a vision block: Agno appends it as a follow-up user message so
+        # the (vision-capable) model actually SEES the picture and can judge relevance/placement.
+        return ToolResult(
+            content=note + " The image is shown below — LOOK at it and embed it only if it "
+                           "genuinely strengthens this deliverable (no decorative filler).",
+            images=[AgnoImage(content=content, format=fmt)],
+        )
+
+    def generate_image(description: str, filename: str) -> ToolResult:
+        """Generate an ORIGINAL image from a text `description` (GPT-image via OpenRouter), SHOW it
+        to you, and stage it in the document workspace so you can EMBED it with python_repl_tool
+        (docx `add_picture` / pptx `add_picture`).
+
+        USE THIS for illustrative / conceptual visuals a document benefits from — a solution-concept
+        diagram, a process/architecture concept, an abstract section or cover graphic — when there
+        is no suitable REAL image in SharePoint.
+
+        DO NOT use it to fabricate anything that would be read as factual evidence: no fake
+        past-performance photos, no invented screenshots, no real company/agency logos, no charts of
+        made-up data. Real capability proof must come from SharePoint (search_sharepoint /
+        fetch_sharepoint_image).
+
+        `description`: a specific prompt for the image. `filename`: a simple local name ending in
+        .png (e.g. "solution_concept.png"). The image is returned to you visually — LOOK at it and
+        embed it only if it's good."""
+        import os
+
+        from utils.image_gen import generate_image as _gen
+        from utils.python_repl_tool import ensure_session_dir
+
+        try:
+            content, ext = _gen(description)
+        except Exception as exc:  # noqa: BLE001 — report to the model, never crash the run
+            return ToolResult(content=f"Image generation failed: {exc}")
+
+        base = os.path.basename((filename or "generated").strip()) or "generated"
+        if not os.path.splitext(base)[1]:
+            base = f"{base}.{ext}"
+        with open(os.path.join(ensure_session_dir(), base), "wb") as fh:
+            fh.write(content)
+        fmt = _IMAGE_FORMATS.get(os.path.splitext(base)[1].lower().lstrip("."), "png")
+        return ToolResult(
+            content=(f"Generated '{base}' ({len(content):,} bytes) from your description and staged "
+                     f"it in the workspace. Embed it with the LOCAL filename '{base}' in "
+                     f"python_repl_tool. The image is shown below — LOOK at it and embed it only if "
+                     f"it's good and relevant."),
+            images=[AgnoImage(content=content, format=fmt)],
+        )
+
     def _record_upload(url: str, object_key: str, local_path: str, filename: str) -> None:
         """Post-upload hook: record the REAL upload (iDrive url + object key) so the deliverable's
         link comes from the tool, not the model. Then best-effort file the same bytes into the
@@ -186,6 +292,8 @@ def build_capture_agent(
             create_exa_web_search_tool(),
             create_reasoning_tool(),
             search_sharepoint_tool,
+            fetch_sharepoint_image,
+            generate_image,
             *load_sharepoint_tools(sharepoint_entity(organization_id or "")),
             python_repl_tool,
             upload_tool,

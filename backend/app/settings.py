@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     # ~500k tokens @ ~4 chars/token. <= this total => keep verbatim, no LLM call.
     DOC_DIGEST_STUFF_MAX_CHARS: int = 2000000
 
+    # Capture agent — text-to-image generation via OpenRouter's Image API (POST /images).
+    IMAGE_GEN_MODEL: str = "openai/gpt-image-2"
+    IMAGE_GEN_SIZE: str = "1024x1024"
+
 
     class Config:
         env_file = ".env"
