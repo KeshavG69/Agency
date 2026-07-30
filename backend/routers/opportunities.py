@@ -161,7 +161,7 @@ def _org_scope(current_user: dict) -> tuple[str, str, bool]:
 @router.get("/page")
 def list_opportunities_page(
     offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=1000),  # list pages use 50; the Bid set fetch asks for up to 500
     filters: dict = Depends(_list_filters),
     current_user: dict = Depends(get_current_user),
 ) -> dict:

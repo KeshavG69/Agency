@@ -542,7 +542,7 @@ class CRMStore:
             self.opps.find(q, SLIM_PROJECTION)
             .sort([("priority_score", -1), ("_id", -1)])
             .skip(max(0, int(offset)))
-            .limit(max(1, min(int(limit), 200)))
+            .limit(max(1, min(int(limit), 1000)))
         )
         return [_serialize(d) for d in cursor], total
 
