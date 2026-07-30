@@ -13,3 +13,4 @@ crm
 .vscode/*
 .DS_Store
 script.py
+scripts/*

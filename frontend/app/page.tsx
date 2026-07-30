@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  fetchOpportunities,
+  fetchOpportunityPage,
+  fetchOpportunityCounts,
+  fetchFacets,
+  fetchPostedDates,
+  fetchOpportunity,
+  fetchBids,
   pullFromSam,
   analyzeSelected,
   setDecision,
@@ -206,37 +211,146 @@ function Console({ user }: { user: User }) {
   const [reviewContacts, setReviewContacts] = useState<ContactCandidate[]>([]);
   const [view, setView] = useState<ViewKey>("dashboard");
 
-  const load = useCallback(async () => {
+  // --- server-side pagination state (replaces "load every opp") ---
+  const PAGE = 50;
+  const [total, setTotal] = useState(0); // total opps matching the current filter (server)
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [counts, setCounts] = useState<Record<string, number>>({}); // filter-pill counts (server)
+  const [inFlight, setInFlight] = useState(0); // ingesting+processing (arms the poll)
+  const [facetOptions, setFacetOptions] = useState<{ agencies: string[]; naics: string[]; setAsides: string[] }>(
+    { agencies: [], naics: [], setAsides: [] },
+  );
+  const [availableDates, setAvailableDates] = useState<string[]>([]); // calendar dots (server)
+  const [bidOpps, setBidOpps] = useState<Opportunity[]>([]); // Bid set for sidebar + dashboard
+  const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null); // enriched, lazy-loaded
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [debouncedQuery, setDebouncedQuery] = useState(""); // search, debounced ~300ms
+
+  // Debounce the search box so we don't fire a server query per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  // All active filters/search/calendar folded into the server query params.
+  const params = useMemo(
+    () => ({
+      status: filter,
+      agencies: facets.agencies,
+      naics: facets.naics,
+      setAsides: facets.setAsides,
+      source: facets.source !== "any" ? facets.source : undefined,
+      value: facets.value,
+      due: facets.due,
+      q: debouncedQuery,
+      postedDate: viewingDate,
+    }),
+    [filter, facets, debouncedQuery, viewingDate],
+  );
+
+  // Load page 1 for the current filters (REPLACES the list). Used on mount and on any
+  // filter/search/status/calendar change.
+  const loadPage = useCallback(async () => {
     try {
-      const data = await fetchOpportunities();
-      setOpps(data);
+      const page = await fetchOpportunityPage({ ...params, offset: 0, limit: PAGE });
+      setOpps(page.items);
+      setTotal(page.total);
       setError(null);
-      return data;
     } catch {
       setError("Can't reach the backend — start it on :8000.");
-      return [];
     } finally {
       setLoading(false);
     }
+  }, [params]);
+
+  // Append the next page (the "Load more" button). Uses the count already loaded as the offset.
+  const loadMore = useCallback(async () => {
+    setLoadingMore(true);
+    try {
+      const page = await fetchOpportunityPage({ ...params, offset: opps.length, limit: PAGE });
+      setOpps((prev) => [...prev, ...page.items]);
+      setTotal(page.total);
+    } catch {
+      /* keep what we have */
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [params, opps.length]);
+
+  // Per-status pill counts + in-flight total (for the poll) — recomputed when filters change.
+  const loadCounts = useCallback(async () => {
+    try {
+      const { counts: c, in_flight } = await fetchOpportunityCounts(params);
+      setCounts(c);
+      setInFlight(in_flight);
+    } catch {
+      /* leave last counts */
+    }
+  }, [params]);
+
+  // Calendar dots — distinct posted dates across the active filter (correct across all pages).
+  const loadDates = useCallback(async () => {
+    try {
+      setAvailableDates(await fetchPostedDates(params));
+    } catch {
+      /* leave last dates */
+    }
+  }, [params]);
+
+  // The Bid set for the sidebar + dashboard — loaded separately from the paged list.
+  const loadBids = useCallback(async () => {
+    try {
+      setBidOpps(await fetchBids());
+    } catch {
+      /* leave last bids */
+    }
   }, []);
 
+  // On any filter/search/status/calendar change: reset to page 1 + refresh counts + dots.
   useEffect(() => {
-    load();
-  }, [load]);
+    setLoading(true);
+    loadPage();
+    loadCounts();
+    loadDates();
+  }, [loadPage, loadCounts, loadDates]);
 
-  // While any opportunity is mid-flight (ingesting, or a capture run in progress), poll so
-  // the Ingesting/Processing sections self-empty as workers finish — even in a tab that
-  // didn't start the work, and after a reload (reads persisted fields, not local state).
-  // Disarms once nothing is in flight, so it never polls a fully-idle pipeline.
-  const hasInFlight = useMemo(
-    () => opps.some((o) => isIngesting(o) || isProcessing(o)),
-    [opps],
-  );
+  // Facet dropdown options + the Bid set load once on mount (bids also refresh after decisions).
   useEffect(() => {
-    if (!hasInFlight) return;
-    const t = setInterval(() => load(), 5000);
+    fetchFacets()
+      .then((f) => setFacetOptions({ agencies: f.agencies, naics: f.naics, setAsides: f.set_asides }))
+      .catch(() => {});
+    loadBids();
+  }, [loadBids]);
+
+  // While anything is mid-flight (ingesting / a capture run), poll so the Ingesting/Processing
+  // sections self-empty as workers finish — even for items not on the current page. Armed by the
+  // server-side in_flight count, so it works cross-tab and after reload; disarms when idle.
+  useEffect(() => {
+    if (inFlight <= 0) return;
+    const t = setInterval(() => {
+      loadPage();
+      loadCounts();
+      loadBids();
+    }, 5000);
     return () => clearInterval(t);
-  }, [hasInFlight, load]);
+  }, [inFlight, loadPage, loadCounts, loadBids]);
+
+  // The detail pane lazy-loads the FULL (enriched) opportunity when a row is opened.
+  useEffect(() => {
+    if (!selectedId) {
+      setSelectedOpp(null);
+      return;
+    }
+    let alive = true;
+    setDetailLoading(true);
+    fetchOpportunity(selectedId)
+      .then((o) => alive && setSelectedOpp(o))
+      .catch(() => alive && setSelectedOpp(null))
+      .finally(() => alive && setDetailLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [selectedId]);
 
   // Restore this user's saved filters (decision + facets) once on mount.
   const filtersKey = `collecct:filters:${user.email}`;
@@ -278,11 +392,12 @@ function Console({ user }: { user: User }) {
   const onAssign = async (id: string, userIds: string[]) => {
     setError(null);
     setOpps((prev) => prev.map((o) => (o.id === id ? { ...o, assigned_to: userIds } : o)));
+    setSelectedOpp((prev) => (prev && prev.id === id ? { ...prev, assigned_to: userIds } : prev));
     try {
       await assignOpportunity(id, userIds);
     } catch {
       setError("Couldn't update the assignment — reverting.");
-      load();
+      loadPage();
     }
   };
 
@@ -448,17 +563,20 @@ function Console({ user }: { user: User }) {
     setError(null);
     setPicked(new Set());
     setView("pipeline"); // jump to the list so the incoming notices are actually visible
-    const before = opps.length;
+    const before = total;
     try {
       await pullFromSam(1); // only TODAY's new still-open notices (fresh-per-day)
       // Ingest-only: the matched opportunities land unanalyzed for the user to review.
       // The first pull of the day downloads ~217 MB in the worker, so be patient.
-      setFilter("new"); // surface the freshly-matched, awaiting-analysis list
-      await load();
+      setFilter("new"); // surface the freshly-matched, awaiting-analysis list (triggers a reload)
       for (let i = 0; i < 45; i++) {
         await sleep(4000);
-        const fresh = await load();
-        if (fresh.length > before) break; // new arrivals landed
+        await loadCounts();
+        const { total: t } = await fetchOpportunityPage({ ...params, status: "new", offset: 0, limit: PAGE });
+        if (t > before) {
+          await loadPage();
+          break; // new arrivals landed
+        }
       }
     } catch {
       setError(
@@ -487,11 +605,17 @@ function Console({ user }: { user: User }) {
       await analyzeSelected(ids);
       for (let i = 0; i < 60; i++) {
         await sleep(4000);
-        const fresh = await load();
-        if (ids.every((id) => fresh.find((o) => o.id === id)?.bid_decision)) break;
+        // Poll each picked opp by id (it may not be on the current page).
+        const verdicts = await Promise.all(
+          ids.map((id) => fetchOpportunity(id).then((o) => !!o.bid_decision).catch(() => false)),
+        );
+        if (verdicts.every(Boolean)) break;
       }
+      await loadPage();
+      await loadCounts();
+      await loadBids();
     },
-    [load],
+    [loadPage, loadCounts, loadBids],
   );
 
   // Send only the hand-picked opportunities to the Analyst, then poll for their verdicts.
@@ -510,15 +634,23 @@ function Console({ user }: { user: User }) {
     }
   };
 
-  // Jump from the Dashboard into an opportunity's detail in the Pipeline.
+  // Jump from the Dashboard into an opportunity's detail in the Pipeline. The detail pane
+  // fetches the opp by id independently of the list, so no need to clear filters to "find" it.
   const openOpp = (id: string) => {
     setSelectedId(id);
     setTab("info");
-    setFilter("all");
-    setFacets(EMPTY_FACETS); // clear filters so the opened pursuit is actually in the list
-    setViewingDate(null);
     setView("pipeline");
   };
+
+  // Refetch the open opp's full record (after a mutation completes server-side).
+  const refreshSelected = useCallback(
+    (id: string) => {
+      fetchOpportunity(id)
+        .then((o) => setSelectedOpp((prev) => (prev && prev.id === id ? o : prev)))
+        .catch(() => {});
+    },
+    [],
+  );
 
   // Human override of the Analyst verdict (Bid / Watch / No-Bid).
   const onSetDecision = async (id: string, decision: BidDecision) => {
@@ -529,11 +661,17 @@ function Console({ user }: { user: User }) {
         o.id === id ? { ...o, bid_decision: decision, decision_overridden: true } : o,
       ),
     );
+    setSelectedOpp((prev) =>
+      prev && prev.id === id ? { ...prev, bid_decision: decision, decision_overridden: true } : prev,
+    );
     try {
       await setDecision(id, decision);
+      loadCounts(); // the verdict moves it between pills
+      loadBids(); // ...and in/out of the Bid set
     } catch {
       setError("Couldn't save the decision — reverting.");
-      await load(); // re-sync from the server to undo the optimistic change
+      await loadPage();
+      refreshSelected(id);
     }
   };
 
@@ -542,12 +680,17 @@ function Console({ user }: { user: User }) {
     setError(null);
     try {
       await approveCapture(id);
+      loadCounts(); // now 'processing'
       for (let i = 0; i < 90; i++) {
         await sleep(5000);
-        const fresh = await load();
-        const updated = fresh.find((o) => o.id === id);
-        if (updated?.captured_at) break;
+        const fresh = await fetchOpportunity(id);
+        if (fresh.captured_at) {
+          setSelectedOpp((p) => (p && p.id === id ? fresh : p));
+          break;
+        }
       }
+      loadCounts();
+      loadBids();
     } catch {
       setError("Capture failed — is the backend + worker running?");
     } finally {
@@ -558,14 +701,16 @@ function Console({ user }: { user: User }) {
   const onRunOutreach = async (id: string) => {
     setOutreachBusy(id);
     setError(null);
-    const before = opps.find((o) => o.id === id)?.outreach_drafted_at ?? null;
+    const before = selectedOpp?.id === id ? selectedOpp?.outreach_drafted_at ?? null : null;
     try {
       await runOutreach(id);
       for (let i = 0; i < 60; i++) {
         await sleep(5000);
-        const fresh = await load();
-        const updated = fresh.find((o) => o.id === id);
-        if (updated && updated.outreach_drafted_at && updated.outreach_drafted_at !== before) break;
+        const fresh = await fetchOpportunity(id);
+        if (fresh.outreach_drafted_at && fresh.outreach_drafted_at !== before) {
+          setSelectedOpp((p) => (p && p.id === id ? fresh : p));
+          break;
+        }
       }
     } catch {
       setError("Couldn't draft outreach — is the backend + worker running?");
@@ -577,18 +722,20 @@ function Console({ user }: { user: User }) {
   const onRunOutreachOne = async (id: string, email: string) => {
     setOutreachOne(email);
     setError(null);
-    const draftBefore = opps
-      .find((o) => o.id === id)
-      ?.outreach_drafts?.find((d) => (d.to ?? "").toLowerCase() === email.toLowerCase())?.body;
+    const draftBefore =
+      selectedOpp?.id === id
+        ? selectedOpp?.outreach_drafts?.find((d) => (d.to ?? "").toLowerCase() === email.toLowerCase())?.body
+        : undefined;
     try {
       await runOutreachOne(id, email);
       for (let i = 0; i < 30; i++) {
         await sleep(4000);
-        const fresh = await load();
-        const d = fresh
-          .find((o) => o.id === id)
-          ?.outreach_drafts?.find((x) => (x.to ?? "").toLowerCase() === email.toLowerCase());
-        if (d && d.body !== draftBefore) break;
+        const fresh = await fetchOpportunity(id);
+        const d = fresh.outreach_drafts?.find((x) => (x.to ?? "").toLowerCase() === email.toLowerCase());
+        if (d && d.body !== draftBefore) {
+          setSelectedOpp((p) => (p && p.id === id ? fresh : p));
+          break;
+        }
       }
     } catch {
       setError("Couldn't regenerate this email — is the backend + worker running?");
@@ -597,77 +744,13 @@ function Console({ user }: { user: User }) {
     }
   };
 
-  const counts = useMemo(() => {
-    const c: Record<string, number> = {};
-    for (const f of FILTERS) c[f.key] = opps.filter(f.match).length;
-    return c;
-  }, [opps]);
+  // The server already applied the status filter + facets + search + calendar day, so the
+  // loaded page IS the visible list. (`availableDates` and `counts` come from the server too.)
+  const visible = opps;
 
-  // The Bid pursuits shown in the left sidebar (always visible).
-  const bidOpps = useMemo(() => opps.filter((o) => o.bid_decision === "Bid"), [opps]);
-
-  // Distinct facet values for the filter pickers (derived from the loaded opps).
-  const facetOptions = useMemo(() => {
-    const uniq = (arr: (string | undefined | null)[]) =>
-      [...new Set(arr.filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b));
-    return {
-      agencies: uniq(opps.map((o) => o.agency)),
-      naics: uniq(opps.map((o) => o.naics)),
-      setAsides: uniq(opps.map((o) => o.set_aside)),
-    };
-  }, [opps]);
-
-  // Everything matching the active status filter + facets + search, BEFORE the
-  // calendar-day filter. The calendar dots derive from this so a dot only shows on
-  // days that actually have opportunities in the current view.
-  const dayPool = useMemo(() => {
-    const f = FILTERS.find((x) => x.key === filter) ?? FILTERS[0];
-    const q = query.trim().toLowerCase();
-    const inValue = (v?: number | null) => {
-      switch (facets.value) {
-        case "lt1m":
-          return v != null && v < 1_000_000;
-        case "1to10m":
-          return v != null && v >= 1_000_000 && v <= 10_000_000;
-        case "gt10m":
-          return v != null && v > 10_000_000;
-        default:
-          return true;
-      }
-    };
-    const inDue = (s?: string | null) => {
-      if (facets.due === "any") return true;
-      const d = dueLabel(s).days;
-      return d != null && d >= 0 && d <= Number(facets.due);
-    };
-    return opps
-      .filter(f.match)
-      .filter((o) => facets.agencies.length === 0 || (!!o.agency && facets.agencies.includes(o.agency)))
-      .filter((o) => facets.naics.length === 0 || (!!o.naics && facets.naics.includes(o.naics)))
-      .filter((o) => facets.setAsides.length === 0 || (!!o.set_aside && facets.setAsides.includes(o.set_aside)))
-      .filter((o) => facets.source === "any" || o.source === facets.source)
-      .filter((o) => inValue(o.estimated_value))
-      .filter((o) => inDue(o.response_deadline))
-      .filter(
-        (o) =>
-          !q ||
-          o.title.toLowerCase().includes(q) ||
-          (o.agency ?? "").toLowerCase().includes(q) ||
-          (o.solicitation_number ?? "").toLowerCase().includes(q),
-      );
-  }, [opps, filter, query, facets]);
-
-  const availableDates = useMemo(
-    () => [...new Set(dayPool.map((o) => o.posted_date).filter(Boolean) as string[])],
-    [dayPool],
-  );
-
-  const visible = useMemo(
-    () => dayPool.filter((o) => !viewingDate || o.posted_date === viewingDate),
-    [dayPool, viewingDate],
-  );
-
-  const selected = opps.find((o) => o.id === selectedId) ?? null;
+  // The open opp's full record (enriched, lazy-loaded). Falls back to the slim list row while
+  // the detail fetch is in flight, so the header/title don't flash empty.
+  const selected = selectedOpp ?? opps.find((o) => o.id === selectedId) ?? null;
   return (
     <main className="console">
       <TopBar
@@ -686,7 +769,7 @@ function Console({ user }: { user: User }) {
         <div className="main">
       {view === "dashboard" ? (
         <section className="graph-pane">
-          <DashboardView opps={opps} loading={loading} onOpen={openOpp} />
+          <DashboardView opps={bidOpps} loading={loading} onOpen={openOpp} />
         </section>
       ) : view === "callplan" ? (
         <section className="graph-pane">
@@ -748,7 +831,7 @@ function Console({ user }: { user: User }) {
           <div className="list-head-row">
             <h2>
               Opportunities
-              <span className="c">{visible.length}</span>
+              <span className="c">{total}</span>
             </h2>
             <button className="mini-btn" onClick={() => setAddOppOpen(true)}>
               + Add opportunity
@@ -777,7 +860,7 @@ function Console({ user }: { user: User }) {
                     })
                   }
                 >
-                  {allOn ? "Clear all" : `Select all ${pickable.length}`}
+                  {allOn ? "Clear all" : `Select all ${pickable.length} loaded`}
                 </button>
                 <button
                   className="mini-btn"
@@ -868,16 +951,27 @@ function Console({ user }: { user: User }) {
               </div>
             </button>
           ))}
+          {!loading && opps.length < total && (
+            <button className="load-more" onClick={loadMore} disabled={loadingMore}>
+              {loadingMore ? "Loading…" : `Load more · ${opps.length} of ${total}`}
+            </button>
+          )}
         </div>
       </section>
 
       {/* ---------------- detail ---------------- */}
       <section className="detail">
         {!selected ? (
-          <div className="empty-detail">
-            <div className="big">Select an opportunity</div>
-            <div>Pick one from the list to see its verdict, contacts, and documents.</div>
-          </div>
+          selectedId && detailLoading ? (
+            <div className="empty-detail">
+              <div className="big">Loading…</div>
+            </div>
+          ) : (
+            <div className="empty-detail">
+              <div className="big">Select an opportunity</div>
+              <div>Pick one from the list to see its verdict, contacts, and documents.</div>
+            </div>
+          )
         ) : (
           <Detail
             opp={selected}
@@ -927,7 +1021,10 @@ function Console({ user }: { user: User }) {
           onClose={() => setAddOppOpen(false)}
           onCreated={(r) => {
             setAddOppOpen(false);
-            load(); // refetch so the new opp shows (docs + Analyst verdict land shortly after)
+            // The new manual opp starts "ingesting" → refresh the list + counts (which arms the
+            // in-flight poll), then open it so its docs/verdict land as they finish.
+            loadPage();
+            loadCounts();
             setSelectedId(r.opportunity_id);
           }}
         />
