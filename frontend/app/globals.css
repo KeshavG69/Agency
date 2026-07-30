@@ -1695,6 +1695,29 @@ button {
   user-select: none;
 }
 
+/* pipeline "Load more" pagination button */
+.load-more {
+  display: block;
+  width: calc(100% - 24px);
+  margin: 10px 12px 16px;
+  padding: 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  transition: background 0.16s var(--ease-out), color 0.16s var(--ease-out);
+}
+.load-more:hover:not(:disabled) {
+  background: var(--surface);
+  color: var(--ink);
+}
+.load-more:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 /* view mode switcher (graph / list / by-company) */
 .view-tabs {
   display: flex;

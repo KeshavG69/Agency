@@ -6,7 +6,7 @@ import tempfile
 import uuid
 
 from celery import group
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from auth.dependencies import get_current_user
@@ -116,7 +116,8 @@ async def create_manual_opportunity(
 
 @router.get("")
 def list_opportunities(current_user: dict = Depends(get_current_user)) -> dict:
-    """This org's opportunities, each enriched with its documents and calls (for the UI).
+    """DEPRECATED (kept during the pagination migration): the whole org enriched in one payload.
+    ~10MB/9.5s on a large org — the UI now uses /page + /counts + /{id} instead.
 
     Admins see everything; members see only opportunities assigned to them or unassigned.
     """
@@ -129,6 +130,77 @@ def list_opportunities(current_user: dict = Depends(get_current_user)) -> dict:
             is_admin=is_admin,
         )
     }
+
+
+def _list_filters(
+    status: str | None = Query(None),
+    agency: list[str] = Query(default=[]),
+    naics: list[str] = Query(default=[]),
+    set_aside: list[str] = Query(default=[]),
+    source: str | None = Query(None),
+    value: str | None = Query(None),
+    due: int | None = Query(None),
+    q: str | None = Query(None),
+    posted_date: str | None = Query(None),
+) -> dict:
+    """The shared pipeline filter/search/calendar params, mapped to crm_store kwargs."""
+    return {
+        "status": status, "agencies": agency, "naics": naics, "set_asides": set_aside,
+        "source": source, "value_bucket": value, "due_days": due, "q": q, "posted_date": posted_date,
+    }
+
+
+def _org_scope(current_user: dict) -> tuple[str, str, bool]:
+    return (
+        str(current_user["organization_id"]),
+        str(current_user["_id"]),
+        current_user.get("role") == "admin",
+    )
+
+
+@router.get("/page")
+def list_opportunities_page(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    filters: dict = Depends(_list_filters),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """One SLIM, filtered, sorted page of opportunities + the total match count."""
+    org, viewer, is_admin = _org_scope(current_user)
+    crm = get_crm_store()
+    items, total = crm.list_page(org, viewer_id=viewer, is_admin=is_admin,
+                                 offset=offset, limit=limit, **filters)
+    return {"items": items, "total": total, "offset": offset, "limit": limit}
+
+
+@router.get("/counts")
+def opportunity_counts(
+    filters: dict = Depends(_list_filters),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Per-status pill counts for the current facet/search/date filter + an in-flight total
+    (ingesting + processing) used to arm the frontend's background poll."""
+    org, viewer, is_admin = _org_scope(current_user)
+    crm = get_crm_store()
+    counts = crm.status_counts(org, viewer_id=viewer, is_admin=is_admin, **filters)
+    return {"counts": counts, "in_flight": counts.get("ingesting", 0) + counts.get("processing", 0)}
+
+
+@router.get("/facets")
+def opportunity_facets(current_user: dict = Depends(get_current_user)) -> dict:
+    """Distinct agency / NAICS / set-aside dropdown options (RBAC-scoped)."""
+    org, viewer, is_admin = _org_scope(current_user)
+    return get_crm_store().facet_values(org, viewer_id=viewer, is_admin=is_admin)
+
+
+@router.get("/posted-dates")
+def opportunity_posted_dates(
+    filters: dict = Depends(_list_filters),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Distinct posted dates across the active filter — for the calendar dots across all pages."""
+    org, viewer, is_admin = _org_scope(current_user)
+    return {"dates": get_crm_store().posted_dates(org, viewer_id=viewer, is_admin=is_admin, **filters)}
 
 
 class AssignRequest(BaseModel):
@@ -359,3 +431,24 @@ def run_capture(current_user: dict = Depends(get_current_user)) -> dict:
     """Kick off the capture pipeline for this org's approved, not-yet-captured opportunities."""
     task = run_capture_batch.delay(str(current_user["organization_id"]))
     return {"task_id": task.id}
+
+
+# NOTE: declared LAST so the single-segment path param doesn't shadow the static GET routes
+# above (/page, /counts, /facets, /posted-dates) — FastAPI matches in declaration order.
+@router.get("/{opportunity_id}")
+def get_opportunity_detail(
+    opportunity_id: str, current_user: dict = Depends(get_current_user)
+) -> dict:
+    """The FULL enriched opportunity (documents/calls/tasks + heavy fields) for the detail pane —
+    fetched only when a row is opened, so the list stays slim."""
+    crm = get_crm_store()
+    org = str(current_user["organization_id"])
+    opp = crm.get_opportunity_enriched(opportunity_id, org)
+    if opp is None:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    # Member-visibility parity: a non-admin can't open an opp assigned away from them.
+    if current_user.get("role") != "admin":
+        assigned = opp.get("assigned_to") or []
+        if assigned and str(current_user["_id"]) not in assigned:
+            raise HTTPException(status_code=404, detail="Opportunity not found")
+    return opp

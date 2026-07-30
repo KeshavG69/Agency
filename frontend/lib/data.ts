@@ -191,6 +191,80 @@ export async function fetchOpportunities(): Promise<Opportunity[]> {
   return data.opportunities ?? [];
 }
 
+// ---- Paginated pipeline (server-side filter/search/calendar + slim rows) ----
+// List rows are SLIM: no documents/calls/tasks/recommended_contacts/outreach_drafts/
+// analyst_rationale/description. Those come only from fetchOpportunity(id).
+export interface PipelineParams {
+  status?: string; // "all" | "Bid" | "Watch" | "No-Bid" | "captured" | "ingesting" | "processing" | "new"
+  agencies?: string[];
+  naics?: string[];
+  setAsides?: string[];
+  source?: string;
+  value?: string; // "any" | "lt1m" | "1to10m" | "gt10m"
+  due?: string; // "any" | "7" | "30" | "90"
+  q?: string;
+  postedDate?: string | null;
+}
+
+function pipelineQuery(p: PipelineParams): URLSearchParams {
+  const qs = new URLSearchParams();
+  if (p.status && p.status !== "all") qs.set("status", p.status);
+  (p.agencies ?? []).forEach((a) => qs.append("agency", a));
+  (p.naics ?? []).forEach((n) => qs.append("naics", n));
+  (p.setAsides ?? []).forEach((s) => qs.append("set_aside", s));
+  if (p.source) qs.set("source", p.source);
+  if (p.value && p.value !== "any") qs.set("value", p.value);
+  if (p.due && p.due !== "any") qs.set("due", p.due);
+  if (p.q && p.q.trim()) qs.set("q", p.q.trim());
+  if (p.postedDate) qs.set("posted_date", p.postedDate);
+  return qs;
+}
+
+export interface OpportunityPage {
+  items: Opportunity[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+export async function fetchOpportunityPage(
+  p: PipelineParams & { offset?: number; limit?: number },
+): Promise<OpportunityPage> {
+  const qs = pipelineQuery(p);
+  qs.set("offset", String(p.offset ?? 0));
+  qs.set("limit", String(p.limit ?? 50));
+  const { data } = await apiClient.get(`/api/opportunities/page?${qs.toString()}`);
+  return data;
+}
+
+export async function fetchOpportunityCounts(
+  p: PipelineParams,
+): Promise<{ counts: Record<string, number>; in_flight: number }> {
+  const { data } = await apiClient.get(`/api/opportunities/counts?${pipelineQuery(p).toString()}`);
+  return data;
+}
+
+export async function fetchFacets(): Promise<{ agencies: string[]; naics: string[]; set_asides: string[] }> {
+  const { data } = await apiClient.get("/api/opportunities/facets");
+  return data;
+}
+
+export async function fetchPostedDates(p: PipelineParams): Promise<string[]> {
+  const { data } = await apiClient.get(`/api/opportunities/posted-dates?${pipelineQuery(p).toString()}`);
+  return data.dates ?? [];
+}
+
+// The FULL enriched opportunity (documents/calls/tasks + heavy fields) for the detail pane.
+export async function fetchOpportunity(id: string): Promise<Opportunity> {
+  const { data } = await apiClient.get(`/api/opportunities/${id}`);
+  return data;
+}
+
+// The org's Bid set (few) for the left sidebar + dashboard — independent of the paged list.
+export async function fetchBids(): Promise<Opportunity[]> {
+  const page = await fetchOpportunityPage({ status: "Bid", limit: 500 });
+  return page.items;
+}
+
 // Trigger an on-demand SAM.gov pull for this org (NAICS-filtered, still-open notices).
 // Runs in the background (download + ingest + Analyst); the UI polls fetchOpportunities.
 export interface SamScanResult {

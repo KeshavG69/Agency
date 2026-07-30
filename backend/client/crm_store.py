@@ -10,8 +10,9 @@ create_call, create_task.
 """
 from __future__ import annotations
 
+import re
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from bson import ObjectId
 from pymongo import MongoClient
@@ -31,6 +32,20 @@ def _serialize(doc: dict) -> dict:
     if doc and "_id" in doc:
         doc["id"] = str(doc.pop("_id"))
     return doc
+
+
+# The fields the pipeline LIST (rows + facets + calendar + status/activity chips) needs — and
+# ONLY those. Heavy fields (document_text, analyst_rationale, extra, description, and the
+# documents/calls/tasks joins) are deliberately omitted; they load lazily in the detail pane via
+# get_opportunity_enriched(). Keeps a list page tiny (~a few hundred bytes/opp) instead of ~4KB.
+SLIM_PROJECTION: dict[str, int] = {f: 1 for f in (
+    "title", "solicitation_number", "notice_id", "agency", "naics", "psc_code", "set_aside",
+    "opp_type", "posted_date", "response_deadline", "estimated_value", "place_of_performance",
+    "stage", "source", "link", "priority_score", "bid_decision", "decision_overridden",
+    "analyzed_at", "capture_approved", "captured_at", "capture_error", "ingesting", "ingest_error",
+    "assigned_to", "contacts_searched_at", "outreach_drafted_at", "poc_name", "poc_email",
+    "organization_id",
+)}
 
 
 class CRMStore:
@@ -57,6 +72,10 @@ class CRMStore:
         self.opps.create_index("organization_id")
         self.opps.create_index("notice_id")
         self.opps.create_index("analyzed_at")
+        # Serve the paginated list's sort (priority desc) with a stable _id tiebreak
+        # (many opps share priority_score=null), and the member-visibility assigned_to filter.
+        self.opps.create_index([("organization_id", 1), ("priority_score", -1), ("_id", -1)])
+        self.opps.create_index([("organization_id", 1), ("assigned_to", 1)])
         # Fetch all calls/tasks/documents for an opportunity without scanning.
         self.calls.create_index("opportunity_id")
         self.tasks.create_index("opportunity_id")
@@ -432,6 +451,146 @@ class CRMStore:
             o["calls"] = calls.get(o["id"], [])
             o["tasks"] = tasks.get(o["id"], [])
         return opps
+
+    # --- paginated + filtered reads (server-side) -------------------------
+    @staticmethod
+    def _status_clause(status: str) -> dict | None:
+        """Mongo clause for a pipeline status bucket — mirrors the frontend FILTERS predicates
+        exactly. Buckets intentionally overlap (a Bid can also be 'processing'); they're
+        independent filters, not a partition. Returns None for 'all'/unknown."""
+        if status in ("Bid", "Watch", "No-Bid"):
+            return {"bid_decision": status}
+        if status == "captured":
+            return {"captured_at": {"$ne": None}}
+        if status == "ingesting":
+            return {"ingesting": True}
+        if status == "processing":
+            return {"$and": [{"capture_approved": True}, {"captured_at": {"$in": [None]}}]}
+        if status == "new":  # no verdict yet AND not still ingesting
+            return {"$and": [
+                {"$or": [{"bid_decision": {"$exists": False}}, {"bid_decision": None}]},
+                {"ingesting": {"$ne": True}},
+            ]}
+        return None
+
+    @staticmethod
+    def _value_clause(bucket: str) -> dict | None:
+        if bucket == "lt1m":
+            return {"estimated_value": {"$lt": 1_000_000}}
+        if bucket == "1to10m":
+            return {"estimated_value": {"$gte": 1_000_000, "$lte": 10_000_000}}
+        if bucket == "gt10m":
+            return {"estimated_value": {"$gt": 10_000_000}}
+        return None
+
+    @staticmethod
+    def _due_clause(due_days: int) -> dict:
+        """Response deadline within the next `due_days` days (not past). Dates are ISO
+        'YYYY-MM-DD' strings, so lexicographic comparison is chronological."""
+        today = date.today().isoformat()
+        cutoff = (date.today() + timedelta(days=int(due_days))).isoformat()
+        return {"response_deadline": {"$gte": today, "$lte": cutoff}}
+
+    def _filter_query(
+        self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True, *,
+        status: str | None = None, agencies: list[str] | None = None, naics: list[str] | None = None,
+        set_asides: list[str] | None = None, source: str | None = None,
+        value_bucket: str | None = None, due_days: int | None = None,
+        q: str | None = None, posted_date: str | None = None,
+    ) -> dict:
+        """Compose the full org-scoped, RBAC-aware, filtered Mongo query. Every filtering read
+        (list page, counts base, facet dates) goes through this so counts and rows always agree.
+        Clauses are AND-folded (each may carry its own $or) so multiple $or filters don't collide."""
+        clauses: list[dict] = [self._visibility_query(organization_id, viewer_id, is_admin)]
+        sc = self._status_clause(status) if status and status != "all" else None
+        if sc:
+            clauses.append(sc)
+        if agencies:
+            clauses.append({"agency": {"$in": agencies}})
+        if naics:
+            clauses.append({"naics": {"$in": naics}})
+        if set_asides:
+            clauses.append({"set_aside": {"$in": set_asides}})
+        if source:
+            clauses.append({"source": source})
+        vc = self._value_clause(value_bucket) if value_bucket and value_bucket != "any" else None
+        if vc:
+            clauses.append(vc)
+        if due_days:
+            clauses.append(self._due_clause(due_days))
+        if q and q.strip():
+            rx = re.escape(q.strip())
+            clauses.append({"$or": [
+                {"title": {"$regex": rx, "$options": "i"}},
+                {"agency": {"$regex": rx, "$options": "i"}},
+                {"solicitation_number": {"$regex": rx, "$options": "i"}},
+            ]})
+        if posted_date:
+            clauses.append({"posted_date": posted_date})
+        return clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+    def list_page(
+        self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True, *,
+        offset: int = 0, limit: int = 50, **filters,
+    ) -> tuple[list[dict], int]:
+        """One SLIM page of opportunities for the pipeline list + the total matching count.
+        Sorted priority desc with a stable _id tiebreak (many share priority_score=null).
+        No documents/calls/tasks — the detail pane loads those lazily."""
+        q = self._filter_query(organization_id, viewer_id, is_admin, **filters)
+        total = self.opps.count_documents(q)
+        cursor = (
+            self.opps.find(q, SLIM_PROJECTION)
+            .sort([("priority_score", -1), ("_id", -1)])
+            .skip(max(0, int(offset)))
+            .limit(max(1, min(int(limit), 200)))
+        )
+        return [_serialize(d) for d in cursor], total
+
+    def status_counts(
+        self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True, **filters,
+    ) -> dict[str, int]:
+        """Per-status pill counts for the CURRENT facet/search/date filter (but NOT the active
+        status — every bucket is counted). One aggregation with $facet."""
+        filters.pop("status", None)  # counts span all statuses regardless of the selected pill
+        base = self._filter_query(organization_id, viewer_id, is_admin, **filters)
+        facets: dict[str, list] = {"all": [{"$count": "n"}]}
+        for key in ("Bid", "Watch", "No-Bid", "captured", "ingesting", "processing", "new"):
+            facets[key] = [{"$match": self._status_clause(key)}, {"$count": "n"}]
+        res = list(self.opps.aggregate([{"$match": base}, {"$facet": facets}]))
+        row = res[0] if res else {}
+        return {k: (v[0]["n"] if v else 0) for k, v in row.items()}
+
+    def facet_values(
+        self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True,
+    ) -> dict[str, list[str]]:
+        """Distinct agency / NAICS / set-aside values for the dropdown options — RBAC-scoped so a
+        member's options match their visible rows. Sorted, non-null."""
+        base = self._visibility_query(organization_id, viewer_id, is_admin)
+        out: dict[str, list[str]] = {}
+        for key, field in (("agencies", "agency"), ("naics", "naics"), ("set_asides", "set_aside")):
+            vals = [v for v in self.opps.distinct(field, base) if v]
+            out[key] = sorted(vals, key=lambda s: s.lower())
+        return out
+
+    def posted_dates(
+        self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True, **filters,
+    ) -> list[str]:
+        """Distinct posted_date values across the active filter (minus posted_date itself) — so the
+        calendar dots are correct across every page, not just the loaded one."""
+        filters.pop("posted_date", None)
+        q = self._filter_query(organization_id, viewer_id, is_admin, **filters)
+        return sorted(d for d in self.opps.distinct("posted_date", q) if d)
+
+    def get_opportunity_enriched(self, opportunity_id: str, organization_id: str) -> dict | None:
+        """The full, heavy opportunity for the detail pane: base doc + documents/calls/tasks.
+        Org-scoped (None if not found / other org). Keeps the join OFF the list endpoint."""
+        opp = self.get_opportunity(opportunity_id, organization_id)
+        if opp is None:
+            return None
+        opp["documents"] = self.list_documents(opportunity_id)
+        opp["calls"] = self.list_calls(opportunity_id)
+        opp["tasks"] = self.list_tasks(opportunity_id)
+        return opp
 
     def list_calls(self, opportunity_id: str) -> list[dict]:
         cursor = self.calls.find({"opportunity_id": opportunity_id})
