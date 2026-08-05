@@ -17,7 +17,11 @@ class AnalystVerdict(BaseModel):
 
     bid_decision: Literal["Bid", "No-Bid", "Watch"]
     priority_score: int = Field(description="0–100; higher = pursue sooner", ge=0, le=100)
-    rationale: str = Field(description="1–2 lines explaining the decision")
+    rationale: str = Field(
+        description="2–5 sentences: the fit read, the specific gates to confirm internally "
+        "(e.g. IDIQ/vehicle access, facility clearance, past performance), the winnability read, "
+        "and the recommendation"
+    )
     recommended_stage: Literal["Qualify", "Discover", "No-Bid"] = Field(
         description="Bid -> Qualify, Watch -> Discover, No-Bid -> No-Bid"
     )

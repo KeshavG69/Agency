@@ -10,8 +10,8 @@ import logging
 
 from app.worker import celery_app
 from client.graph_store import clear_owner_graph, upsert_contacts
+from utils.company_enrich import enrich_contacts_company
 from utils.composio_utils import fetch_outlook_network
-from utils.explorium import enrich_contacts
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +38,12 @@ def sync_outlook_contacts_task(self, owner_email: str, organization_id: str) -> 
         raise self.retry(exc=exc)
     logger.info("Found %d network contacts for owner=%s", len(contacts), owner)
 
-    # Resolve designation / company / name from the email via Explorium.
-    enriched = enrich_contacts(contacts)
+    # Resolve each contact's COMPANY (+ what it does) for free from its email domain via the
+    # PDL Free Company Dataset. No paid API; unknown companies keep a derived name + a
+    # research flag for the CRM agent.
+    enriched = enrich_contacts_company(contacts)
     resolved = sum(1 for c in enriched if c.get("enriched"))
-    logger.info("Explorium resolved %d/%d contacts", resolved, len(enriched))
+    logger.info("Company-enriched %d/%d contacts from the domain dataset", resolved, len(enriched))
 
     # Prune-then-rebuild THIS employee's subgraph only, inside their org graph. Done
     # after a successful fetch/enrich, so a transient failure never empties the network.
@@ -85,9 +87,9 @@ def ingest_selected_contacts_task(
             logger.error("FalkorDB clear failed for %s: %s", owner, exc)
         return {"selected": 0, "enriched": 0, "graphed": 0, "owner_email": owner}
 
-    enriched = enrich_contacts(picked)
+    enriched = enrich_contacts_company(picked)
     resolved = sum(1 for c in enriched if c.get("enriched"))
-    logger.info("Explorium resolved %d/%d selected contacts for %s", resolved, len(enriched), owner)
+    logger.info("Company-enriched %d/%d selected contacts for %s", resolved, len(enriched), owner)
 
     try:
         clear_owner_graph(owner, org)

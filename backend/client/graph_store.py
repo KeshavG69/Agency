@@ -51,6 +51,7 @@ def _contact_text(c: dict) -> str:
         c.get("seniority"),
         c.get("department"),
         c.get("company"),
+        c.get("industry"),  # what the company does — the teaming-relevance signal
         c.get("domain"),
         ", ".join(skills[:10]) if skills else None,
     ]
@@ -155,6 +156,8 @@ def upsert_contacts(contacts: list[dict], owner_email: str, organization_id: str
             "prospect_id": c.get("prospect_id"),
             "enriched": bool(c.get("enriched")),
             "company": (c.get("company") or "").strip(),
+            "industry": c.get("industry"),  # what the company does (from the free domain dataset)
+            "company_needs_research": bool(c.get("company_needs_research")),
             "source": c.get("source") or "outlook",
             # correspondence signal (from email history)
             "corr_count": int(c.get("count") or 0),
@@ -214,6 +217,8 @@ def upsert_contacts(contacts: list[dict], owner_email: str, organization_id: str
               p.department = row.department,
               p.prospect_id = row.prospect_id,
               p.enriched = row.enriched,
+              p.industry = row.industry,
+              p.company_needs_research = row.company_needs_research,
               p.source = row.source,
               p.corr_count = row.corr_count,
               p.last_contact = row.last_contact,
