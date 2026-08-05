@@ -35,7 +35,8 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence
 
 from bson import ObjectId
-from pymongo import MongoClient
+from pymongo import MongoClient, UpdateMany, UpdateOne
+from pymongo.errors import BulkWriteError
 
 from app.settings import settings
 from models.evidence import Evidence, score_evidence
@@ -190,6 +191,119 @@ class FactsStore:
                 {"$set": {"status": SUPERSEDED, "updated_at": now}},
             )
         return FactOutcome(True, status, scored.rationale, scored.score, scored.band)
+
+    def record_bulk(
+        self,
+        organization_id: str,
+        claims: Sequence[tuple[str, str, Optional[str], Sequence[Evidence]]],
+    ) -> dict[str, int]:
+        """Record many claims across many contacts in a HANDFUL of round trips.
+
+        `claims` is (email, field, value, evidence) tuples.
+
+        WHY THIS EXISTS: `record_fact` costs ~4 round trips (dismissed check, human-owned
+        check, upsert, supersede). That is fine for the one-at-a-time paths — an agent
+        writing a result, a rep accepting a suggestion — but ingestion writes ~4 facts for
+        each of thousands of contacts. Measured against the production Mongo at 414 ms RTT
+        that came to 1.8 s per fact and a projected FIVE HOURS for one mailbox. Here the
+        same work is 2 queries + 1 bulk write per batch, regardless of size.
+
+        The three invariants are identical to `record_fact` — they are simply evaluated in
+        memory against one pre-loaded snapshot instead of being re-queried per claim:
+          1. never overwrite a human-set value
+          2. never re-offer a dismissed value
+          3. never write to the record without a primary source (the band gate)
+        `scripts/test_facts_store.py` asserts bulk and single agree.
+        """
+        org = (organization_id or "").strip()
+        if not org or not claims:
+            return {"applied": 0, "proposed": 0, "skipped": 0}
+
+        # Normalise + drop anything structurally invalid before touching the network.
+        wanted: list[tuple[str, str, str, Sequence[Evidence]]] = []
+        for email, field, value, evidence in claims:
+            addr = (email or "").strip().lower()
+            val = (value or "").strip()
+            if addr and field in FACT_FIELDS and val:
+                wanted.append((addr, field, val, evidence))
+        if not wanted:
+            return {"applied": 0, "proposed": 0, "skipped": 0}
+
+        emails = sorted({c[0] for c in wanted})
+
+        # ROUND TRIP 1: every row we already hold for these contacts.
+        existing: dict[tuple[str, str, str], dict] = {}
+        applied_now: dict[tuple[str, str], dict] = {}
+        for row in self.facts.find(
+            {"organization_id": org, "email": {"$in": emails}},
+            {"email": 1, "field": 1, "value": 1, "status": 1, "decided_by": 1, "evidence": 1},
+        ):
+            existing[(row["email"], row["field"], row["value"])] = row
+            if row.get("status") == APPLIED:
+                applied_now[(row["email"], row["field"])] = row
+
+        now = _utc_now()
+        ops: list = []
+        supersede: set[tuple[str, str, str]] = set()
+        tally = {"applied": 0, "proposed": 0, "skipped": 0}
+
+        for addr, field, val, evidence in wanted:
+            prior = existing.get((addr, field, val))
+
+            # (2) dismissed is permanent for this value
+            if prior and prior.get("status") == DISMISSED:
+                tally["skipped"] += 1
+                continue
+
+            merged = _merge_evidence(prior.get("evidence", []) if prior else [], evidence)
+            scored = score_evidence(merged)  # type: ignore[arg-type]
+            if scored.band is None:  # (3) too weak to store at all
+                tally["skipped"] += 1
+                continue
+
+            # (1) a human owns this field
+            current = applied_now.get((addr, field))
+            if current and current.get("decided_by") and current.get("value") != val:
+                tally["skipped"] += 1
+                continue
+
+            status = APPLIED if scored.band == "VERIFIED" else PROPOSED
+            ops.append(UpdateOne(
+                {"organization_id": org, "email": addr, "field": field, "value": val},
+                {
+                    "$set": {
+                        "value": val, "score": scored.score, "band": scored.band,
+                        "rationale": scored.rationale, "evidence": merged,
+                        "status": status, "updated_at": now,
+                    },
+                    "$setOnInsert": {"created_at": now, "decided_by": None},
+                },
+                upsert=True,
+            ))
+            if status == APPLIED:
+                supersede.add((addr, field, val))
+                # Keep the in-memory snapshot honest: a later claim for the same field in
+                # this same batch must see what we just decided, not the pre-batch state.
+                applied_now[(addr, field)] = {"value": val, "decided_by": None}
+                tally["applied"] += 1
+            else:
+                tally["proposed"] += 1
+
+        for addr, field, val in supersede:
+            ops.append(UpdateMany(
+                {"organization_id": org, "email": addr, "field": field,
+                 "status": APPLIED, "value": {"$ne": val}},
+                {"$set": {"status": SUPERSEDED, "updated_at": now}},
+            ))
+
+        # ROUND TRIP 2: everything at once. ordered=False so one duplicate-key collision
+        # cannot abandon the rest of the batch.
+        if ops:
+            try:
+                self.facts.bulk_write(ops, ordered=False)
+            except BulkWriteError as exc:  # noqa: BLE001 — report, do not lose the batch
+                logger.warning("record_bulk: %d write error(s)", len(exc.details.get("writeErrors", [])))
+        return tally
 
     def record_many(
         self, organization_id: str, email: str, items: Sequence[tuple[str, Optional[str]]],

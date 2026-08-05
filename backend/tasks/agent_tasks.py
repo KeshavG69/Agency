@@ -167,19 +167,59 @@ def _recheck_opportunity(task: dict) -> dict:
     return {"id": task["id"], "rechecked": True, "opportunity_id": opp_id}
 
 
-def _is_own_site(source_url: str | None, domain: str) -> bool:
-    """True when the page read was on the company's OWN domain.
+# Suffixes where the registrable name is the THIRD label from the right, not the second.
+# A short list, not the full Public Suffix List: govcon contacts are overwhelmingly .com /
+# .gov / .mil / .org, and pulling in a PSL dependency to serve a handful of edge cases is a
+# poor trade. An unlisted multi-part suffix simply falls back to the stricter comparison,
+# which errs toward "not their own site" — the safe direction.
+_MULTI_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "co.jp", "com.au", "net.au", "org.au",
+    "co.nz", "co.za", "com.br", "com.mx", "co.in", "com.sg",
+})
 
-    Deterministic on purpose. Asking a model 'was this an authoritative source?' invites
+
+def _registrable(host: str) -> str:
+    """The company-owned part of a hostname: aai.textron.com -> textron.com.
+
+    Approximate by design (see _MULTI_SUFFIXES). Returns the host unchanged when it is
+    already short enough to be registrable.
+    """
+    labels = [x for x in (host or "").split(".") if x]
+    if len(labels) < 3:
+        return ".".join(labels)
+    return ".".join(labels[-3:] if ".".join(labels[-2:]) in _MULTI_SUFFIXES else labels[-2:])
+
+
+def _is_own_site(source_url: str | None, domain: str) -> bool:
+    """True when the page read was published by the company that owns `domain`.
+
+    Deterministic on purpose. Asking a model "was this an authoritative source?" invites
     exactly the self-grading the evidence model exists to remove; comparing two hostnames
     is something code can simply know.
+
+    Matches on the REGISTRABLE domain, so researching `aai.textron.com` and finding the
+    answer on `textron.com` counts — a subsidiary's page on its parent's site is still the
+    company describing itself, and the strict host-equality version scored that as a
+    third-party claim.
+
+    It will NOT match `textronsystems.com`, and that is correct: knowing AAI belongs to
+    Textron Systems is a fact about corporate structure, not about DNS. A brand-adjacent
+    domain stays a third-party source, which downgrades the claim to a suggestion rather
+    than asserting it — the right failure direction.
     """
     from urllib.parse import urlparse
 
     host = urlparse((source_url or "").strip()).netloc.lower().split(":")[0]
     host = host[4:] if host.startswith("www.") else host
     dom = (domain or "").strip().lower()
-    return bool(host and dom) and (host == dom or host.endswith("." + dom))
+    if not host or not dom:
+        return False
+    # Exact / subdomain match first, then the registrable-domain relaxation. Comparing the
+    # registrable forms is also what blocks the lookalike attack: a source at
+    # `nexagen.com.evil.example` registers as `evil.example`, not `nexagen.com`.
+    if host == dom or host.endswith("." + dom):
+        return True
+    return _registrable(host) == _registrable(dom)
 
 
 def _emails_on_domain(organization_id: str, domain: str) -> list[str]:

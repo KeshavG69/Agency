@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     EXTRACTION_MODEL: str = "google/gemini-3.1-flash-lite"
+     # The mail sweep reads signatures with this model (one call per sender per sweep). Gemma 4
+    # 26B MoE (~4B active) is the pick: A/B'd against gemma-4-31b and nemotron-3-super-120b on
+    # real signatures, all three gave identical titles/phones — so the small, cheap, highly
+    # parallel MoE wins. Reading a 5-line signature needs no bigger or reasoning model.
+    SIGNATURE_MODEL: str = "google/gemma-4-26b-a4b-it"
 
     # OpenAI — embeddings (optional, used by the cached LLM client)
     OPENAI_API_KEY: str = ""
@@ -26,9 +31,6 @@ class Settings(BaseSettings):
     # Exa — web search tool for agents
     EXA_API_KEY: str = ""
 
-    # Explorium — resolve a contact's name / title / company from their email
-    EXPLORIUM_API_KEY: str = ""
-    EXPLORIUM_BASE_URL: str = "https://api.explorium.ai/v1"
 
     # SAM.gov Entity API — fetch a company's registration details from its UEI
     # (free key from api.data.gov / sam.gov). Used by the Organisation settings.

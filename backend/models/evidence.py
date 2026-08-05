@@ -43,6 +43,7 @@ EvidenceKind = Literal[
     "outlook.thread-reply",
     "gov-domain-rule",
     "outlook.signature-block",
+    "llm.signature-extraction",
     "pdl.domain-company",
     "sharepoint.authored-doc",
     "outlook.meeting-attend",
@@ -87,6 +88,14 @@ WEIGHTS: dict[EvidenceKind, Weighting] = {
     # are promoted, which is more than can be said for any profile or data vendor.
     "outlook.signature-block": Weighting(
         0.80, True, "their own email signature says so"
+    ),
+    # The mail sweep reads signatures with a small model (Gemma), not regex — it handles the
+    # free-form blocks a pattern never will. Same standing as the regex block above: it is the
+    # person's OWN signature on their OWN mail, so primary, and at the same 0.80 — a lone read
+    # is a suggestion, and a reply from that address corroborates it into a fact. The model is
+    # told to return nulls rather than guess, and runs at temperature 0, to keep it honest.
+    "llm.signature-extraction": Weighting(
+        0.80, True, "a model read it from their own email signature"
     ),
     # At the VERIFIED floor deliberately: a curated domain->company dataset match is a
     # LOOKUP, not a guess — @raytheon.com is Raytheon. This is the line that separates a

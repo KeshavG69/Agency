@@ -233,7 +233,7 @@ def fetch_outlook_contacts(user_id: str, top: int = 999) -> list[dict]:
     Paginates through the full address book — a single page silently undercounts on
     any mailbox with more than `top` contacts. Returns normalized dicts:
     { name, email, company, title }. This is the raw node feed for the knowledge
-    graph (enrichment via Explorium happens next).
+    graph (company enrichment from the email domain happens next).
     """
     raw = _paginate(
         "OUTLOOK_LIST_USER_CONTACTS",
@@ -403,7 +403,9 @@ def delete_outlook_message_triggers(connected_account_id: str) -> bool:
     return ok
 
 
-def fetch_recent_messages(user_id: str, limit: int = 400, page_size: int = 100) -> list[dict]:
+def fetch_recent_messages(
+    user_id: str, limit: int = 400, page_size: int = 100, since: str | None = None,
+) -> list[dict]:
     """The mailbox's most recent messages, with full bodies — the input to the mail sweep.
 
     ONE pass buys three things that are otherwise expensive or missing entirely:
@@ -413,8 +415,13 @@ def fetch_recent_messages(user_id: str, limit: int = 400, page_size: int = 100) 
         is instructed to rank on it
       * who has replied to us -> primary identity evidence
 
-    Deliberately a bounded sweep, not a full-mailbox crawl: `limit` caps how far back we
-    go, because the recent tail is where the value is and the cost of the rest is real.
+    Two stopping conditions, whichever comes first:
+      * `limit` — how far back a FIRST (backfill) sweep reaches, because the recent tail is
+        where the value is and the cost of the rest is real.
+      * `since` — a high-water mark (a `receivedDateTime` ISO string). Messages arrive
+        newest-first, so the first one at-or-before the mark means we have caught up to the
+        last sweep and everything beyond it is already processed. This is the bookmark that
+        turns the daily re-scan into an incremental read (see mailbox_sync_store).
     """
     # NOT `_paginate`: that helper deliberately exhausts every page (right for a 4000-entry
     # address book you want in full, catastrophic for a mailbox). Graph reports a
@@ -422,9 +429,11 @@ def fetch_recent_messages(user_id: str, limit: int = 400, page_size: int = 100) 
     # mail — thousands of calls — to then throw all but the newest `limit` away. This loop
     # stops the moment it has enough, which is the whole point of a bounded sweep.
     client = get_composio_client()
+    mark = (since or "").strip()
     raw: list[dict] = []
     skip = 0
-    while len(raw) < limit:
+    caught_up = False
+    while len(raw) < limit and not caught_up:
         resp = client.tools.execute(
             "OUTLOOK_LIST_MESSAGES",
             {
@@ -441,7 +450,16 @@ def fetch_recent_messages(user_id: str, limit: int = 400, page_size: int = 100) 
         page = data.get("value") or data.get("messages") or data.get("items") or []
         if not page:
             break
-        raw.extend(page)
+        # Reached the bookmark: keep only the strictly-newer head of this page and stop.
+        # Strict `>` with a forward-only mark means each message is counted exactly once.
+        if mark:
+            kept = [m for m in page if (m.get("receivedDateTime") or "") > mark]
+            raw.extend(kept)
+            if len(kept) < len(page):
+                caught_up = True
+                break
+        else:
+            raw.extend(page)
         skip += len(page)
         if not data.get("@odata.nextLink"):
             break

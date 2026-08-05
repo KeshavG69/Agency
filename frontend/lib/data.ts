@@ -186,10 +186,9 @@ export async function createOutlookDraft(
 // The pipeline board columns.
 export const STAGES = ["Discover", "Qualify", "Capture", "Pursue", "Submitted"];
 
-export async function fetchOpportunities(): Promise<Opportunity[]> {
-  const { data } = await apiClient.get("/api/opportunities");
-  return data.opportunities ?? [];
-}
+// REMOVED: fetchOpportunities() — it hit GET /api/opportunities, which returned the whole
+// org enriched in one payload (~10 MB / 9.5 s on a large org). It had no callers left; the
+// pipeline uses fetchOpportunityPage() and the detail pane fetches one record at a time.
 
 // ---- Paginated pipeline (server-side filter/search/calendar + slim rows) ----
 // List rows are SLIM: no documents/calls/tasks/recommended_contacts/outreach_drafts/
@@ -293,7 +292,7 @@ export async function fetchBids(): Promise<Opportunity[]> {
 }
 
 // Trigger an on-demand SAM.gov pull for this org (NAICS-filtered, still-open notices).
-// Runs in the background (download + ingest + Analyst); the UI polls fetchOpportunities.
+// Runs in the background (download + ingest + Analyst); the UI polls fetchOpportunityPage.
 export interface SamScanResult {
   scan_started?: boolean;
   task_id?: string;

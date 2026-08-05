@@ -115,22 +115,10 @@ async def create_manual_opportunity(
     }
 
 
-@router.get("")
-def list_opportunities(current_user: dict = Depends(get_current_user)) -> dict:
-    """DEPRECATED (kept during the pagination migration): the whole org enriched in one payload.
-    ~10MB/9.5s on a large org — the UI now uses /page + /counts + /{id} instead.
-
-    Admins see everything; members see only opportunities assigned to them or unassigned.
-    """
-    crm = get_crm_store()
-    is_admin = current_user.get("role") == "admin"
-    return {
-        "opportunities": crm.list_all_enriched(
-            str(current_user["organization_id"]),
-            viewer_id=str(current_user["_id"]),
-            is_admin=is_admin,
-        )
-    }
+# REMOVED: GET /api/opportunities — the whole org enriched in one payload (~10 MB / 9.5 s
+# on a large org). The pagination migration it was "kept during" is finished: the list
+# uses /page (SLIM rows + total + counts, fetched concurrently) and the detail pane loads
+# documents/calls/tasks lazily via /{id}. Its frontend caller was already dead code.
 
 
 def _list_filters(

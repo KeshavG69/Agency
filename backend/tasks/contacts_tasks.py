@@ -2,7 +2,7 @@
 
 The OAuth callback triggers this. It (1) pulls the employee's network — email-history
 correspondents MERGED with their Outlook address book — via Composio, (2) enriches them
-via Explorium, and (3) prunes-then-rebuilds ONLY that employee's slice of the FalkorDB
+from its email domain, and (3) prunes-then-rebuilds ONLY that employee's slice of the FalkorDB
 graph — so a re-sync drops their stale contacts and never touches another employee's
 network. `owner_email` is the employee's login email (their Composio entity).
 """
@@ -10,7 +10,12 @@ import logging
 
 from app.worker import celery_app
 from client.facts_store import get_facts_store
-from client.graph_store import clear_owner_graph, upsert_contacts
+from client.graph_store import (
+    _new_stamp,
+    clear_owner_graph,
+    sweep_owner_graph,
+    upsert_contacts,
+)
 from client.task_store import PRIORITY, STAND_DOWN_DAYS, get_task_store
 from utils.company_enrich import enrich_contacts_company
 from utils.composio_utils import fetch_outlook_network
@@ -46,17 +51,21 @@ def _queue_company_research(organization_id: str, contacts: list[dict]) -> int:
 def _record_contact_facts(organization_id: str, contacts: list[dict]) -> int:
     """Store what we learned about each contact, tagged with WHERE it came from.
 
-    A plain loop — no agent, no network, milliseconds. The evidence decides the outcome:
-    a dataset/gov-rule match is written onto the record, while a company name derived off
-    the domain becomes a SUGGESTION a rep settles in one click, instead of being asserted
-    as though we knew it.
+    A plain loop — no agent, no network per contact. The evidence decides the outcome: a
+    dataset/gov-rule match is written onto the record, while a company name derived off the
+    domain becomes a SUGGESTION a rep settles in one click, instead of being asserted as
+    though we knew it.
+
+    Collected first and written in ONE bulk call. Writing each fact individually costs ~4
+    round trips, which against a remote Mongo measured 1.8 s per fact — five hours for a
+    single 2,700-contact mailbox. The invariants are identical either way (facts_store
+    evaluates them in memory against one pre-loaded snapshot); only the round trips differ.
 
     Facts are org-level (organization_id + email), not per-owner: a job title is the same
     truth for every rep in the org. Relationship signals (corr_count, last_contact) stay
     per-owner in the graph, which is why they are not recorded here.
     """
-    store = get_facts_store()
-    stored = 0
+    claims: list[tuple[str, str, str | None, list]] = []
     for c in contacts:
         email = (c.get("email") or "").strip().lower()
         if not email:
@@ -66,15 +75,8 @@ def _record_contact_facts(organization_id: str, contacts: list[dict]) -> int:
         # resolved the domain (dataset hit, .gov/.mil rule, or the derived guess).
         company_evidence = c.get("evidence") or []
         if company_evidence:
-            stored += sum(
-                1
-                for outcome in store.record_many(
-                    organization_id, email,
-                    [("company", c.get("company")), ("industry", c.get("industry"))],
-                    company_evidence,
-                ).values()
-                if outcome.stored
-            )
+            claims.append((email, "company", c.get("company"), company_evidence))
+            claims.append((email, "industry", c.get("industry"), company_evidence))
 
         # A job title on the contact came from Outlook's own address book — a different
         # source from the domain, so it carries its own (weaker) evidence. Seniority and
@@ -86,18 +88,14 @@ def _record_contact_facts(organization_id: str, contacts: list[dict]) -> int:
                 "kind": "outlook.address-book",
                 "detail": f'their Outlook contact card lists "{title}"',
             }]
-            stored += sum(
-                1
-                for outcome in store.record_many(
-                    organization_id, email,
-                    [("title", title),
-                     ("seniority", derive_seniority(title)),
-                     ("function", derive_function(title))],
-                    book,
-                ).values()
-                if outcome.stored
-            )
-    return stored
+            claims.append((email, "title", title, book))
+            claims.append((email, "seniority", derive_seniority(title), book))
+            claims.append((email, "function", derive_function(title), book))
+
+    if not claims:
+        return 0
+    tally = get_facts_store().record_bulk(organization_id, claims)
+    return tally["applied"] + tally["proposed"]
 
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=20)
@@ -139,15 +137,26 @@ def sync_outlook_contacts_task(self, owner_email: str, organization_id: str) -> 
     except Exception as exc:  # noqa: BLE001
         logger.warning("Recording contact facts failed for %s: %s", owner, exc)
 
-    # Prune-then-rebuild THIS employee's subgraph only, inside their org graph. Done
-    # after a successful fetch/enrich, so a transient failure never empties the network.
+    # WRITE FIRST, THEN SWEEP — never the other way round.
+    #
+    # This used to clear the owner's slice and then rebuild it. That window between the
+    # two is a data-loss bug: any failure inside it (a proxy blip, a timeout, a crash)
+    # leaves the employee with an EMPTY contact network and nothing the user ever sees —
+    # the error was logged and the task still returned success. It fired twice on real
+    # data while this was being tested.
+    #
+    # Writing first means a mid-run failure leaves the OLD contacts in place next to the
+    # new ones: stale, but present, and corrected by the next successful sync. The sweep
+    # only runs once the write has fully succeeded.
+    written = 0
     try:
-        clear_owner_graph(owner, org)
-        written = upsert_contacts(enriched, owner, org)
-        logger.info("Rebuilt %s's graph with %d contacts", owner, written)
+        stamp = _new_stamp()
+        written = upsert_contacts(enriched, owner, org, sync_stamp=stamp)
+        removed = sweep_owner_graph(owner, org, stamp)
+        logger.info("Rebuilt %s's graph with %d contacts (%d stale removed)",
+                    owner, written, removed)
     except Exception as exc:  # graph down shouldn't lose the fetched data
-        logger.error("FalkorDB rebuild failed: %s", exc)
-        written = 0
+        logger.error("FalkorDB rebuild failed (old contacts left intact): %s", exc)
 
     return {
         "fetched": len(contacts),
@@ -194,12 +203,17 @@ def ingest_selected_contacts_task(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Recording contact facts failed for %s: %s", owner, exc)
 
+    # Write-then-sweep, same as the sync path: a failure mid-write leaves the previous
+    # contacts intact rather than wiping the employee's network. (The "nothing picked"
+    # branch above is the one place a bare clear is correct — importing none MEANS empty.)
     try:
-        clear_owner_graph(owner, org)
-        written = upsert_contacts(enriched, owner, org)
-        logger.info("Rebuilt %s's graph with %d selected contacts", owner, written)
+        stamp = _new_stamp()
+        written = upsert_contacts(enriched, owner, org, sync_stamp=stamp)
+        removed = sweep_owner_graph(owner, org, stamp)
+        logger.info("Rebuilt %s's graph with %d selected contacts (%d stale removed)",
+                    owner, written, removed)
     except Exception as exc:  # noqa: BLE001
-        logger.error("FalkorDB rebuild failed: %s", exc)
+        logger.error("FalkorDB rebuild failed (old contacts left intact): %s", exc)
         raise self.retry(exc=exc)
 
     return {"selected": len(picked), "enriched": resolved, "graphed": written, "owner_email": owner}

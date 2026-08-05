@@ -432,32 +432,11 @@ class CRMStore:
         cursor = self.opps.find(q).sort("priority_score", -1)
         return [_serialize(d) for d in cursor]
 
-    def list_all_enriched(
-        self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True
-    ) -> list[dict]:
-        """list_all + each opp's documents/calls/tasks attached — but BATCHED into a
-        handful of queries (not 3-per-opp), so it scales to a large SAM.gov pull instead
-        of firing thousands of round-trips at the DB."""
-        from collections import defaultdict
-
-        opps = self.list_all(organization_id, viewer_id=viewer_id, is_admin=is_admin)
-        ids = [o["id"] for o in opps]
-        if not ids:
-            return opps
-        docs: dict[str, list] = defaultdict(list)
-        calls: dict[str, list] = defaultdict(list)
-        tasks: dict[str, list] = defaultdict(list)
-        for d in self.documents.find({"opportunity_id": {"$in": ids}}).sort("created_at", -1):
-            docs[d["opportunity_id"]].append(_serialize(d))
-        for c in self.calls.find({"opportunity_id": {"$in": ids}}):
-            calls[c["opportunity_id"]].append(_serialize(c))
-        for t in self.tasks.find({"opportunity_id": {"$in": ids}}):
-            tasks[t["opportunity_id"]].append(_serialize(t))
-        for o in opps:
-            o["documents"] = docs.get(o["id"], [])
-            o["calls"] = calls.get(o["id"], [])
-            o["tasks"] = tasks.get(o["id"], [])
-        return opps
+    # NOTE: `list_all_enriched` lived here — every opportunity in the org with its
+    # documents/calls/tasks attached. It was well written (batched `$in` reads, not
+    # 3-per-opp) but it was still the whole org in one payload: ~10 MB / 9.5 s on a large
+    # org. Removed along with its only caller, GET /api/opportunities. The list now uses
+    # /page (SLIM + paged) and the detail pane loads children lazily via /{id}.
 
     # --- paginated + filtered reads (server-side) -------------------------
     @staticmethod

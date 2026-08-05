@@ -4,7 +4,7 @@ Nodes:  (:Person {email, owner_email, name, title, ...})
         (:Company {name, owner_email})
 Edges:  (:Person)-[:WORKS_AT]->(:Company)
 
-Built from enriched Outlook contacts (Composio → Explorium). The CRM Agent later
+Built from enriched Outlook contacts (Composio → domain/company dataset). The CRM Agent later
 traverses this graph to surface the valuable contacts for an opportunity. Mongo
 stays the system-of-record; this graph holds ONLY the relationship network.
 
@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import uuid
 from typing import Optional
 
 from falkordb import FalkorDB
@@ -130,7 +131,10 @@ def get_graph(organization_id: str):
     return g
 
 
-def upsert_contacts(contacts: list[dict], owner_email: str, organization_id: str) -> int:
+def upsert_contacts(
+    contacts: list[dict], owner_email: str, organization_id: str,
+    sync_stamp: str | None = None,
+) -> int:
     """Upsert enriched contacts into ONE org's graph, for ONE owner (employee).
 
     `organization_id` picks the org graph; `owner_email` is the employee whose mailbox
@@ -144,6 +148,7 @@ def upsert_contacts(contacts: list[dict], owner_email: str, organization_id: str
         raise ValueError("upsert_contacts requires an owner_email")
     if not (organization_id or "").strip():
         raise ValueError("upsert_contacts requires an organization_id")
+    sync_stamp = sync_stamp or _new_stamp()
     rows = [
         {
             "owner_email": owner,
@@ -159,12 +164,15 @@ def upsert_contacts(contacts: list[dict], owner_email: str, organization_id: str
             "industry": c.get("industry"),  # what the company does (from the free domain dataset)
             "company_needs_research": bool(c.get("company_needs_research")),
             "source": c.get("source") or "outlook",
+            # Marks which sync run wrote this node. The sweep below deletes anything this
+            # run did NOT touch, which is what makes a rebuild safe (see sweep_owner_graph).
+            "synced_at": sync_stamp,
             # correspondence signal (from email history)
             "corr_count": int(c.get("count") or 0),
             "last_contact": c.get("last_seen"),
             "external": c.get("external"),
             "domain": c.get("domain"),
-            # full enrichment (everything the CRM/Explorium API returned)
+            # full enrichment (everything the enrichment pipeline resolved)
             "first_name": c.get("first_name"),
             "last_name": c.get("last_name"),
             "seniority": c.get("seniority"),
@@ -184,7 +192,7 @@ def upsert_contacts(contacts: list[dict], owner_email: str, organization_id: str
     if not rows:
         return 0
 
-    # Domain → company backfill: people Explorium resolved anchor a domain→company
+    # Domain → company backfill: people with a resolved company anchor a domain→company
     # mapping; same-domain contacts it missed inherit that company (e.g. Soham
     # resolves mail.composio.dev → Composio, so Sharath joins the same node).
     domain_company: dict[str, str] = {}
@@ -208,6 +216,56 @@ def upsert_contacts(contacts: list[dict], owner_email: str, organization_id: str
             logger.warning("contact embedding failed (storing without vectors): %s", ex)
 
     g = get_graph(organization_id)
+    # Written in CHUNKS, not one statement. A single UNWIND of a whole address book
+    # (~3,200 rows, each carrying a 1536-float embedding) is megabytes of payload and blew
+    # through the 30s socket timeout on a remote FalkorDB — which is worse than slow,
+    # because `clear_owner_graph` has already run by then and the owner's slice is left
+    # EMPTY. Chunking keeps every statement well inside the timeout and turns a failure
+    # into a partial rebuild rather than a wipe.
+    # Wake the socket before writing. Embedding thousands of contacts above is several
+    # minutes of pure OpenAI traffic with NO graph activity, and Railway's proxy drops an
+    # idle TCP socket well inside that window — so the pooled connection is frequently
+    # already dead by the time the first chunk goes out. This is the same failure the
+    # SharePoint crawl hit (see _get_db); there it surfaced as "Timeout reading from
+    # socket", here as "Timeout writing to socket", and because clear_owner_graph has
+    # already run it would leave the owner's slice EMPTY.
+    _wake(g)
+
+    written = 0
+    for start in range(0, len(rows), UPSERT_CHUNK):
+        chunk = rows[start:start + UPSERT_CHUNK]
+        try:
+            _upsert_chunk(g, chunk)
+        except Exception as exc:  # noqa: BLE001 — one retry re-dials a dropped connection
+            logger.warning("upsert chunk at %d failed (%s); retrying on a fresh connection",
+                           start, exc)
+            _wake(g)
+            _upsert_chunk(g, chunk)
+        written += len(chunk)
+    return written
+
+
+# Sized so one statement stays well under the 30s socket timeout even with embeddings
+# attached (each row is ~6 KB of vector).
+UPSERT_CHUNK = 250
+
+
+def _wake(g) -> None:
+    """Force a live connection before a burst of writes.
+
+    A trivial query costs nothing when the socket is healthy; when it is not, the failure
+    happens HERE — on a throwaway statement — and redis-py re-dials, so the real write that
+    follows lands on a fresh connection instead of dying halfway through.
+    """
+    for _ in range(2):
+        try:
+            g.query("RETURN 1")
+            return
+        except Exception as exc:  # noqa: BLE001 — first attempt reaps the dead socket
+            logger.info("graph connection was stale (%s); re-dialling", exc)
+
+
+def _upsert_chunk(g, rows: list[dict]) -> None:
     g.query(
         """
         UNWIND $rows AS row
@@ -217,9 +275,21 @@ def upsert_contacts(contacts: list[dict], owner_email: str, organization_id: str
               p.department = row.department,
               p.prospect_id = row.prospect_id,
               p.enriched = row.enriched,
-              p.industry = row.industry,
-              p.company_needs_research = row.company_needs_research,
+              // NEVER blind-overwrite enrichment. A re-sync carries row.industry = NULL for
+              // any domain the free dataset still cannot resolve — which is exactly the set
+              // the research agent was paid to answer. Writing that NULL straight in erased
+              // 28 of 40 researched companies on the first re-sync, and the 30-day stand-down
+              // then stopped them being re-queued, so the money was simply gone. coalesce
+              // keeps a known value when the incoming one is empty.
+              p.industry = coalesce(row.industry, p.industry),
+              p.company_website = coalesce(row.company_website, p.company_website),
+              p.company_linkedin = coalesce(row.company_linkedin, p.company_linkedin),
+              // Only still "needs research" if, after that merge, we STILL know nothing.
+              p.company_needs_research = CASE
+                  WHEN coalesce(row.industry, p.industry) IS NULL
+                  THEN row.company_needs_research ELSE false END,
               p.source = row.source,
+              p.synced_at = row.synced_at,
               p.corr_count = row.corr_count,
               p.last_contact = row.last_contact,
               p.external = row.external,
@@ -227,8 +297,6 @@ def upsert_contacts(contacts: list[dict], owner_email: str, organization_id: str
               p.first_name = row.first_name,
               p.last_name = row.last_name,
               p.seniority = row.seniority,
-              p.company_website = row.company_website,
-              p.company_linkedin = row.company_linkedin,
               p.linkedin = row.linkedin,
               p.country = row.country,
               p.region = row.region,
@@ -241,12 +309,12 @@ def upsert_contacts(contacts: list[dict], owner_email: str, organization_id: str
         )
         FOREACH (_ IN CASE WHEN row.company = '' THEN [] ELSE [1] END |
           MERGE (c:Company {name: row.company, owner_email: row.owner_email})
+          SET c.synced_at = row.synced_at
           MERGE (p)-[:WORKS_AT]->(c)
         )
         """,
         params={"rows": rows},
     )
-    return len(rows)
 
 
 def _norm_domain(d: str | None) -> str:
@@ -263,6 +331,7 @@ def update_correspondence(
     organization_id: str,
     counts: dict[str, int],
     last_seen: dict[str, str] | None = None,
+    mode: str = "overwrite",
 ) -> int:
     """Write the relationship signal onto ONE employee's slice of the graph.
 
@@ -274,6 +343,16 @@ def update_correspondence(
     `fetch_outlook_network` reads only the address book and has no mail-history signal,
     yet `crm_agent.py` tells the model that `corr_count` is how it should judge
     relationship strength. Until this runs, that instruction weighs a constant.
+
+    Two modes, chosen by the sweep:
+      * "overwrite"  — SET the count to `n`. Correct for a BACKFILL that recomputes the
+        count over a whole window (the first sweep, or the old stateless 400-message pass).
+      * "accumulate" — ADD `n` to what is already there. Correct for an INCREMENTAL sweep
+        that only counted the NEW messages since the bookmark; overwriting would replace the
+        lifetime total with just the delta and erase the history. Safe because the bookmark
+        is forward-only, so each message is counted exactly once.
+    `last_contact` is always a MAX (`greatest`), never a blind overwrite, so an overlapping
+    or out-of-order sweep can never move it backwards.
 
     Only updates contacts already in the graph — the sweep is a signal pass, not an
     import path, so a stranger who emailed once does not silently become a CRM contact.
@@ -288,13 +367,22 @@ def update_correspondence(
         for e, n in counts.items()
         if e
     ]
+    count_expr = (
+        "coalesce(p.corr_count, 0) + row.corr_count"
+        if mode == "accumulate"
+        else "row.corr_count"
+    )
     g = get_graph(organization_id)
     res = g.query(
-        """
+        f"""
         UNWIND $rows AS row
-        MATCH (p:Person {email: row.email, owner_email: row.owner_email})
-        SET p.corr_count = row.corr_count,
-            p.last_contact = coalesce(row.last_contact, p.last_contact)
+        MATCH (p:Person {{email: row.email, owner_email: row.owner_email}})
+        SET p.corr_count = {count_expr},
+            p.last_contact = CASE
+                WHEN row.last_contact IS NULL THEN p.last_contact
+                WHEN p.last_contact IS NULL THEN row.last_contact
+                WHEN row.last_contact > p.last_contact THEN row.last_contact
+                ELSE p.last_contact END
         RETURN count(p)
         """,
         params={"rows": rows},
@@ -372,6 +460,40 @@ def update_company_for_domain(
         params={"rows": rows},
     )
     return len(rows)
+
+
+def _new_stamp() -> str:
+    """A unique marker for one sync run."""
+    return uuid.uuid4().hex
+
+
+def sweep_owner_graph(owner_email: str, organization_id: str, sync_stamp: str) -> int:
+    """Delete this owner's nodes that the just-completed sync did NOT write.
+
+    THE SAFE HALF OF A REBUILD. The obvious way to re-sync is clear-then-write, and that
+    is what this code did: `clear_owner_graph` followed by `upsert_contacts`. It has a
+    window — between the delete and the write — where ANY failure (a proxy blip, a
+    timeout, a crash) leaves the employee with an EMPTY contact network and no error the
+    user ever sees. It happened here twice while testing, on real data.
+
+    Writing first and sweeping second removes the window. A failure mid-write leaves the
+    old contacts in place alongside the new ones — stale, but present, and fixed by the
+    next successful run. The worst case becomes "slightly out of date" instead of "gone".
+    """
+    owner = (owner_email or "").strip().lower()
+    if not owner or not sync_stamp:
+        raise ValueError("sweep_owner_graph requires owner_email + sync_stamp")
+    g = get_graph(organization_id)
+    res = g.query(
+        """
+        MATCH (n) WHERE n.owner_email = $owner
+          AND (n.synced_at IS NULL OR n.synced_at <> $stamp)
+        DETACH DELETE n
+        RETURN count(n)
+        """,
+        params={"owner": owner, "stamp": sync_stamp},
+    )
+    return int(res.result_set[0][0]) if res.result_set else 0
 
 
 def clear_owner_graph(owner_email: str, organization_id: str) -> None:
