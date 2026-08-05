@@ -51,6 +51,11 @@ _INDEXES: list[tuple[str, list, dict]] = [
      {"unique": True}),
     ("contact_facts",
      [("organization_id", ASCENDING), ("email", ASCENDING), ("status", ASCENDING)], {}),
+    # The org-wide review queue (/api/intelligence/suggestions): filter by (org, status),
+    # sort by score desc. The score key is what keeps that sort index-backed instead of
+    # an in-memory sort over every open suggestion in the org.
+    ("contact_facts",
+     [("organization_id", ASCENDING), ("status", ASCENDING), ("score", DESCENDING)], {}),
     # agent tasks: the de-dup lookup ("already queued or recently done?") and the claim
     # query (open + due + unleased, highest priority first). Also created in task_store.
     ("agent_tasks",

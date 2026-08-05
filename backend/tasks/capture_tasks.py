@@ -11,6 +11,7 @@ from celery import group
 from agent.capture_agent import generate_capture
 from app.worker import celery_app
 from client.crm_store import get_crm_store
+from client.events_store import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,17 @@ def capture_task(self, opp: dict, employee_email: str | None = None) -> dict:
         logger.warning("Capture for %s produced %d deliverable(s) but NONE were backed by a real "
                        "upload — nothing persisted.", opp.get("id"), len(output.deliverables))
     crm.mark_captured(opp["id"])
+
+    # A deliverable the model listed but never actually uploaded is DROPPED above. That
+    # gap is invisible otherwise — the rep sees fewer documents than the agent claimed and
+    # has no way to know why — so record it as a miss with the count.
+    dropped = len(output.deliverables) - created
+    record_event(
+        str(opp.get("organization_id") or ""), "capture", "opportunity", str(opp["id"]),
+        f"produced {created} deliverable(s)",
+        ", ".join(d.doc_type for d in output.deliverables) or "none",
+        ok=dropped == 0,
+    )
     return {"id": opp["id"], "deliverables": [d.doc_type for d in output.deliverables], "created": created}
 
 

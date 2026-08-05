@@ -225,13 +225,20 @@ export interface OpportunityPage {
   total: number;
   offset: number;
   limit: number;
+  // Present unless the caller asked for withCounts: false — see fetchOpportunityPage.
+  counts?: Record<string, number>;
+  in_flight?: number;
 }
 export async function fetchOpportunityPage(
-  p: PipelineParams & { offset?: number; limit?: number },
+  p: PipelineParams & { offset?: number; limit?: number; withCounts?: boolean },
 ): Promise<OpportunityPage> {
   const qs = pipelineQuery(p);
   qs.set("offset", String(p.offset ?? 0));
   qs.set("limit", String(p.limit ?? 50));
+  // The status pill counts now ride along with the page — rows, total and counts are
+  // fetched concurrently server-side, so one request replaces two. Pass false where the
+  // caller does not render the pills (e.g. the Bid sidebar).
+  if (p.withCounts === false) qs.set("with_counts", "false");
   const { data } = await apiClient.get(`/api/opportunities/page?${qs.toString()}`);
   return data;
 }
@@ -260,9 +267,29 @@ export async function fetchOpportunity(id: string): Promise<Opportunity> {
 }
 
 // The org's Bid set (few) for the left sidebar + dashboard — independent of the paged list.
+//
+// Pages through rather than asking for one huge response. The API caps a page at 100, and
+// the previous single `limit: 500` call had two problems: it would now be rejected, and it
+// SILENTLY TRUNCATED at 500 — an org with more active pursuits than that simply lost the
+// rest from its sidebar with no error anywhere. Looping is both correct and bounded: it
+// stops as soon as a short page comes back.
 export async function fetchBids(): Promise<Opportunity[]> {
-  const page = await fetchOpportunityPage({ status: "Bid", limit: 500 });
-  return page.items;
+  const PAGE_SIZE = 100;
+  const MAX_PAGES = 20; // 2,000 active bids is far beyond real; a guard against a bad total
+  const all: Opportunity[] = [];
+
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const page = await fetchOpportunityPage({
+      status: "Bid",
+      offset: all.length,
+      limit: PAGE_SIZE,
+      // The sidebar never renders the status pills, so skip computing them per page.
+      withCounts: false,
+    });
+    all.push(...page.items);
+    if (page.items.length < PAGE_SIZE || all.length >= page.total) break;
+  }
+  return all;
 }
 
 // Trigger an on-demand SAM.gov pull for this org (NAICS-filtered, still-open notices).

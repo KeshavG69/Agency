@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from pydantic import BaseModel
 
 from auth.dependencies import get_current_user
-from client.crm_store import get_crm_store
+from utils.cache import cached
+from client.crm_store import MAX_PAGE_SIZE, get_crm_store
 from client.idrive_storage import get_idrive_storage
 from models.opportunity import Opportunity
 from tasks.analyst_tasks import analyze_opportunity_task, run_analyst_batch
@@ -161,16 +162,29 @@ def _org_scope(current_user: dict) -> tuple[str, str, bool]:
 @router.get("/page")
 def list_opportunities_page(
     offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=1000),  # list pages use 50; the Bid set fetch asks for up to 500
+    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
+    with_counts: bool = Query(True, description="Include the status pill counts in this response"),
     filters: dict = Depends(_list_filters),
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """One SLIM, filtered, sorted page of opportunities + the total match count."""
+    """One SLIM, filtered, sorted page of opportunities + the total + the status counts.
+
+    The counts ride along by default so the list costs the browser ONE request instead of
+    two: rows, total and pill counts are fetched concurrently in the store (see
+    `list_page`), so including them is close to free. `/counts` is still there for the
+    poll loop, which wants counts WITHOUT re-fetching a page of rows.
+    """
     org, viewer, is_admin = _org_scope(current_user)
     crm = get_crm_store()
-    items, total = crm.list_page(org, viewer_id=viewer, is_admin=is_admin,
-                                 offset=offset, limit=limit, **filters)
-    return {"items": items, "total": total, "offset": offset, "limit": limit}
+    items, total, counts = crm.list_page(
+        org, viewer_id=viewer, is_admin=is_admin,
+        offset=offset, limit=limit, with_counts=with_counts, **filters,
+    )
+    body = {"items": items, "total": total, "offset": offset, "limit": limit}
+    if counts is not None:
+        body["counts"] = counts
+        body["in_flight"] = counts.get("ingesting", 0) + counts.get("processing", 0)
+    return body
 
 
 @router.get("/counts")
@@ -179,18 +193,37 @@ def opportunity_counts(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
     """Per-status pill counts for the current facet/search/date filter + an in-flight total
-    (ingesting + processing) used to arm the frontend's background poll."""
+    (ingesting + processing) used to arm the frontend's background poll.
+
+    Still its own endpoint because the poll wants ONLY the counts — re-fetching a page of
+    rows every few seconds to learn a number would be worse than the two calls we just
+    merged. For the initial render, prefer `/page?with_counts=true`.
+    """
     org, viewer, is_admin = _org_scope(current_user)
     crm = get_crm_store()
     counts = crm.status_counts(org, viewer_id=viewer, is_admin=is_admin, **filters)
     return {"counts": counts, "in_flight": counts.get("ingesting", 0) + counts.get("processing", 0)}
 
 
+# The dropdown options are a `distinct()` across the whole org. They were recomputed on
+# EVERY page load to fill lists that change when a new agency or NAICS first appears —
+# perhaps once a day. Five minutes of staleness is imperceptible here and takes the query
+# off the hot path entirely.
+_FACETS_TTL_SECONDS = 300
+
+
 @router.get("/facets")
 def opportunity_facets(current_user: dict = Depends(get_current_user)) -> dict:
-    """Distinct agency / NAICS / set-aside dropdown options (RBAC-scoped)."""
+    """Distinct agency / NAICS / set-aside dropdown options (RBAC-scoped), cached 5 min."""
     org, viewer, is_admin = _org_scope(current_user)
-    return get_crm_store().facet_values(org, viewer_id=viewer, is_admin=is_admin)
+    # The cache key MUST carry the org AND the viewer's scope: an admin sees every
+    # opportunity's facets, a member only their own, so one key per (org, scope) or a
+    # member would be served the admin's wider list.
+    key = f"facets:opps:{org}:{'admin' if is_admin else viewer}"
+    return cached(
+        key, _FACETS_TTL_SECONDS,
+        lambda: get_crm_store().facet_values(org, viewer_id=viewer, is_admin=is_admin),
+    )
 
 
 @router.get("/posted-dates")

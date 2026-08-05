@@ -10,6 +10,7 @@ import logging
 from agent.mail_agent import draft_outreach, draft_outreach_batch
 from app.worker import celery_app
 from client.crm_store import get_crm_store
+from client.events_store import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,10 @@ def draft_outreach_task(self, opp: dict, employee_email: str | None = None) -> d
     contacts = [c for c in (opp.get("recommended_contacts") or []) if c.get("email")]
     if not contacts:
         crm.set_outreach_drafts(opp["id"], [])  # mark 'generated, none to send'
+        record_event(
+            str(opp.get("organization_id") or ""), "mail", "opportunity", str(opp["id"]),
+            "no emailable contacts", "The recommended contacts carry no email address.", ok=False,
+        )
         logger.info("No emailable contacts for %s — no drafts.", opp.get("id"))
         return {"id": opp["id"], "drafts": 0}
 
@@ -49,6 +54,15 @@ def draft_outreach_task(self, opp: dict, employee_email: str | None = None) -> d
                 )
             except Exception:  # noqa: BLE001
                 pass
+    # Nothing is sent here — these are drafts a human still has to click Send on. Record
+    # what was produced, and flag a short count: a contact the agent silently skipped is
+    # otherwise indistinguishable from one it never had.
+    record_event(
+        str(opp.get("organization_id") or ""), "mail", "opportunity", str(opp["id"]),
+        f"drafted {len(out)} outreach email(s)",
+        ", ".join(d.get("to", "") for d in out) or "none",
+        ok=len(out) == len(contacts),
+    )
     logger.info("Drafted %d/%d outreach emails for %s", len(out), len(contacts), opp.get("id"))
     return {"id": opp["id"], "drafts": len(out)}
 
@@ -77,5 +91,9 @@ def draft_one_outreach_task(self, opp: dict, contact: dict, employee_email: str 
             )
         except Exception:  # noqa: BLE001
             pass
+    record_event(
+        str(opp.get("organization_id") or ""), "mail", "opportunity", str(opp["id"]),
+        "re-drafted one outreach email", f"to {draft.to}",
+    )
     logger.info("Re-drafted outreach for %s on %s", draft.to, opp.get("id"))
     return {"id": opp["id"], "to": draft.to}

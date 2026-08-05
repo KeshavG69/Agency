@@ -90,12 +90,24 @@ OUTPUT — your FINAL message must be ONLY this JSON object, no prose, no markdo
 """
 
 
+# `tool_call_limit` counts EVERY tool call, and loading a skill is a tool call
+# (`get_skill_instructions`). Without headroom, an agent that reads its two relevant
+# skills would spend its entire search budget before searching once. Three is enough for
+# the skills it is pointed at, plus a spare.
+_SKILL_CALL_ALLOWANCE = 3
+
+
 def build_company_research_agent(domain: str, budget: int = 3) -> Agent:
     return Agent(
         name="CompanyResearch",
         model=get_chat_llm_agno(model=settings.ANALYST_MODEL),
         tools=[create_exa_web_search_tool()],
         skills=get_bd_skills(),
+        # The budget is ENFORCED here, not merely requested in the prompt. A model that
+        # decides one more search would help cannot take it — the cap is the pocket money,
+        # not a note asking it to be careful. Without this, a single stubborn lookup can
+        # quietly spend many times what the queue row authorised.
+        tool_call_limit=max(1, int(budget)) + _SKILL_CALL_ALLOWANCE,
         instructions=_instructions(domain, budget),
     )
 

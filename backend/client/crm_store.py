@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 from bson import ObjectId
@@ -38,6 +39,12 @@ def _serialize(doc: dict) -> dict:
 # ONLY those. Heavy fields (document_text, analyst_rationale, extra, description, and the
 # documents/calls/tasks joins) are deliberately omitted; they load lazily in the detail pane via
 # get_opportunity_enriched(). Keeps a list page tiny (~a few hundred bytes/opp) instead of ~4KB.
+# A hard ceiling on any single page. Nothing in the product needs more, and an
+# unbounded `limit` is how a list endpoint becomes a 10 MB response on the one customer
+# with the most data — which is exactly what the deprecated list-everything endpoint
+# above did (~10 MB / 9.5 s). Enforced in the store so no caller can opt out.
+MAX_PAGE_SIZE = 100
+
 SLIM_PROJECTION: dict[str, int] = {f: 1 for f in (
     "title", "solicitation_number", "notice_id", "agency", "naics", "psc_code", "set_aside",
     "opp_type", "posted_date", "response_deadline", "estimated_value", "place_of_performance",
@@ -531,20 +538,52 @@ class CRMStore:
 
     def list_page(
         self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True, *,
-        offset: int = 0, limit: int = 50, **filters,
-    ) -> tuple[list[dict], int]:
-        """One SLIM page of opportunities for the pipeline list + the total matching count.
+        offset: int = 0, limit: int = 50, with_counts: bool = False, **filters,
+    ) -> tuple[list[dict], int, dict | None]:
+        """One SLIM page of opportunities, the total match count, and (optionally) the
+        status pill counts — all fetched CONCURRENTLY.
+
         Sorted priority desc with a stable _id tiebreak (many share priority_score=null).
-        No documents/calls/tasks — the detail pane loads those lazily."""
+        No documents/calls/tasks — the detail pane loads those lazily.
+
+        WHY THREADS. These are three independent, network-bound queries; run serially the
+        page waits for the sum of them. pymongo releases the GIL while waiting on a
+        socket, so a thread per query genuinely overlaps them and the page costs the
+        SLOWEST query rather than all three added up. (This is the sync equivalent of a
+        `Promise.all` in a Node service.) An async driver would do the same job, but this
+        store is shared with nine Celery task modules that are synchronous — threads keep
+        one code path for both callers.
+
+        WHY NOT `$facet` FOR THE ROWS. It looks tempting to fetch rows+total+counts in a
+        single aggregation, but a `$facet` sub-pipeline CANNOT use an index: the sort
+        would become a blocking in-memory sort of every matching document. The find()
+        below uses the (organization_id, priority_score, _id) index and stops after
+        `limit` rows. Counting and faceting are index-friendly; sorting is not.
+        """
         q = self._filter_query(organization_id, viewer_id, is_admin, **filters)
-        total = self.opps.count_documents(q)
-        cursor = (
-            self.opps.find(q, SLIM_PROJECTION)
-            .sort([("priority_score", -1), ("_id", -1)])
-            .skip(max(0, int(offset)))
-            .limit(max(1, min(int(limit), 1000)))
-        )
-        return [_serialize(d) for d in cursor], total
+        take = max(1, min(int(limit), MAX_PAGE_SIZE))
+        skip = max(0, int(offset))
+
+        def _rows() -> list[dict]:
+            cursor = (
+                self.opps.find(q, SLIM_PROJECTION)
+                .sort([("priority_score", -1), ("_id", -1)])
+                .skip(skip)
+                .limit(take)
+            )
+            return [_serialize(d) for d in cursor]
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            rows_f = pool.submit(_rows)
+            total_f = pool.submit(self.opps.count_documents, q)
+            counts_f = (
+                pool.submit(self.status_counts, organization_id, viewer_id, is_admin, **filters)
+                if with_counts
+                else None
+            )
+            rows, total = rows_f.result(), total_f.result()
+            counts = counts_f.result() if counts_f else None
+        return rows, total, counts
 
     def status_counts(
         self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True, **filters,

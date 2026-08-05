@@ -14,6 +14,7 @@ celery_app = Celery(
 # Explicitly import task modules so they register (more reliable than autodiscovery).
 import tasks.agent_tasks  # noqa: E402,F401
 import tasks.analyst_tasks  # noqa: E402,F401
+import tasks.backfill_tasks  # noqa: E402,F401
 import tasks.capture_tasks  # noqa: E402,F401
 import tasks.contacts_tasks  # noqa: E402,F401
 import tasks.crm_tasks  # noqa: E402,F401

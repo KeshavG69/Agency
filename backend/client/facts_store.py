@@ -108,6 +108,13 @@ class FactsStore:
         )
         # The read path: everything we hold on one contact, split by status.
         self.facts.create_index([("organization_id", 1), ("email", 1), ("status", 1)])
+        # The org-wide review queue: filter (organization_id, status), sort by score desc.
+        # WITHOUT the third key Mongo must load every PROPOSED row in the org and sort it
+        # in memory — fine at fifty suggestions, a cliff once a mailbox sweep has produced
+        # thousands. With it, the index IS the sort order and the query stops at `limit`.
+        self.facts.create_index(
+            [("organization_id", 1), ("status", 1), ("score", -1)]
+        )
 
     # --- write path ---------------------------------------------------------------
 
