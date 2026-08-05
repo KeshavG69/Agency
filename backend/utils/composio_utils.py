@@ -403,8 +403,83 @@ def delete_outlook_message_triggers(connected_account_id: str) -> bool:
     return ok
 
 
+def fetch_recent_messages(user_id: str, limit: int = 400, page_size: int = 100) -> list[dict]:
+    """The mailbox's most recent messages, with full bodies — the input to the mail sweep.
+
+    ONE pass buys three things that are otherwise expensive or missing entirely:
+      * signature blocks -> job titles and phone numbers, free
+      * who corresponds with whom -> `corr_count` / `last_contact`, which
+        `fetch_outlook_network` currently hardcodes to 0 even though the Relation agent
+        is instructed to rank on it
+      * who has replied to us -> primary identity evidence
+
+    Deliberately a bounded sweep, not a full-mailbox crawl: `limit` caps how far back we
+    go, because the recent tail is where the value is and the cost of the rest is real.
+    """
+    # NOT `_paginate`: that helper deliberately exhausts every page (right for a 4000-entry
+    # address book you want in full, catastrophic for a mailbox). Graph reports a
+    # `@odata.nextLink` on essentially every inbox, so exhausting it means walking years of
+    # mail — thousands of calls — to then throw all but the newest `limit` away. This loop
+    # stops the moment it has enough, which is the whole point of a bounded sweep.
+    client = get_composio_client()
+    raw: list[dict] = []
+    skip = 0
+    while len(raw) < limit:
+        resp = client.tools.execute(
+            "OUTLOOK_LIST_MESSAGES",
+            {
+                "user_id": "me",
+                "top": min(page_size, limit - len(raw)),
+                "skip": skip,
+                "select": ["subject", "from", "toRecipients", "body", "bodyPreview",
+                           "receivedDateTime", "conversationId"],
+                "orderby": "receivedDateTime desc",
+            },
+            user_id=user_id, dangerously_skip_version_check=True,
+        )
+        data = _resp_data(resp)
+        page = data.get("value") or data.get("messages") or data.get("items") or []
+        if not page:
+            break
+        raw.extend(page)
+        skip += len(page)
+        if not data.get("@odata.nextLink"):
+            break
+    raw = raw[:limit]
+
+    out: list[dict] = []
+    for m in raw:
+        sender_email, sender_name = _addr(m.get("from"))
+        body = m.get("body")
+        if isinstance(body, dict):
+            content, is_html = body.get("content") or "", (body.get("contentType") or "").lower() == "html"
+        else:
+            content, is_html = (body or ""), None
+        out.append({
+            "message_id": m.get("id"),
+            "sender_email": (sender_email or "").strip().lower(),
+            "sender_name": sender_name,
+            "recipients": [
+                (a or "").strip().lower()
+                for a, _ in (_addr(r) for r in (m.get("toRecipients") or []))
+                if a
+            ],
+            "subject": m.get("subject") or "",
+            "body": content,
+            "body_is_html": is_html,
+            "received_at": m.get("receivedDateTime"),
+            "conversation_id": m.get("conversationId"),
+        })
+    return out
+
+
 def fetch_outlook_message(message_id: str, user_id: str) -> dict:
     """One Outlook message's essentials for triage (sender, subject, snippet, ...).
+
+    `body` is selected as well as `bodyPreview`: the preview is the TOP of the message,
+    and a signature block is at the BOTTOM. Pulling the full body is what makes a job
+    title and a phone number free — see utils/signature.py. No extra API call; it is the
+    same request with one more field.
 
     Raises on failure — the triage task decides how to handle it (retry / drop).
     """
@@ -413,7 +488,8 @@ def fetch_outlook_message(message_id: str, user_id: str) -> dict:
         "OUTLOOK_GET_MESSAGE",
         {
             "message_id": message_id, "user_id": "me",
-            "select": ["subject", "from", "bodyPreview", "receivedDateTime", "conversationId", "webLink"],
+            "select": ["subject", "from", "bodyPreview", "body", "receivedDateTime",
+                       "conversationId", "webLink"],
         },
         user_id=user_id, dangerously_skip_version_check=True,
     )
@@ -422,12 +498,22 @@ def fetch_outlook_message(message_id: str, user_id: str) -> dict:
         raise RuntimeError(f"OUTLOOK_GET_MESSAGE failed: {err}")
     data = _resp_data(resp)
     sender_email, sender_name = _addr(data.get("from"))
+    # Graph returns {"contentType": "html"|"text", "content": "..."}; older shapes
+    # occasionally hand back a bare string, so tolerate both.
+    body = data.get("body")
+    if isinstance(body, dict):
+        body_content = body.get("content") or ""
+        body_is_html = (body.get("contentType") or "").lower() == "html"
+    else:
+        body_content, body_is_html = (body or ""), None
     return {
         "message_id": message_id,
         "sender_email": (sender_email or "").strip().lower(),
         "sender_name": sender_name,
         "subject": data.get("subject") or "",
         "snippet": (data.get("bodyPreview") or "")[:280],
+        "body": body_content,
+        "body_is_html": body_is_html,
         "received_at": data.get("receivedDateTime"),
         "conversation_id": data.get("conversationId"),
         "web_link": data.get("webLink"),

@@ -258,6 +258,122 @@ def _norm_domain(d: str | None) -> str:
     return d
 
 
+def update_correspondence(
+    owner_email: str,
+    organization_id: str,
+    counts: dict[str, int],
+    last_seen: dict[str, str] | None = None,
+) -> int:
+    """Write the relationship signal onto ONE employee's slice of the graph.
+
+    `corr_count` and `last_contact` are inherently per-employee — Alice having emailed
+    someone forty times says nothing about Bob — which is why contacts are one node per
+    owner rather than one shared node.
+
+    This exists because those two properties are currently always 0/None:
+    `fetch_outlook_network` reads only the address book and has no mail-history signal,
+    yet `crm_agent.py` tells the model that `corr_count` is how it should judge
+    relationship strength. Until this runs, that instruction weighs a constant.
+
+    Only updates contacts already in the graph — the sweep is a signal pass, not an
+    import path, so a stranger who emailed once does not silently become a CRM contact.
+    """
+    owner = (owner_email or "").strip().lower()
+    if not owner or not (organization_id or "").strip() or not counts:
+        return 0
+    seen = last_seen or {}
+    rows = [
+        {"email": e, "owner_email": owner, "corr_count": int(n),
+         "last_contact": seen.get(e)}
+        for e, n in counts.items()
+        if e
+    ]
+    g = get_graph(organization_id)
+    res = g.query(
+        """
+        UNWIND $rows AS row
+        MATCH (p:Person {email: row.email, owner_email: row.owner_email})
+        SET p.corr_count = row.corr_count,
+            p.last_contact = coalesce(row.last_contact, p.last_contact)
+        RETURN count(p)
+        """,
+        params={"rows": rows},
+    )
+    return int(res.result_set[0][0]) if res.result_set else 0
+
+
+def update_company_for_domain(
+    organization_id: str,
+    domain: str,
+    *,
+    industry: Optional[str] = None,
+    company_website: Optional[str] = None,
+    company_linkedin: Optional[str] = None,
+) -> int:
+    """Apply a researched company's details to EVERY contact on that domain and clear the
+    research flag. Returns how many contacts were updated.
+
+    Spans every owner's slice inside the org graph: the company is the same company
+    whoever happens to know the person, so one lookup improves the whole org's network.
+
+    Re-embeds the affected contacts, which is the point rather than a nicety — `industry`
+    is part of `_contact_text`, so filling it is exactly what lets the Relation agent's
+    semantic search find "people at defence IT integrators" instead of only literal
+    keyword matches. The domain is matched as stored (company_enrich already normalised
+    it), so no second normalisation is applied here.
+    """
+    dom = (domain or "").strip().lower()
+    if not dom or not (organization_id or "").strip():
+        return 0
+
+    g = get_graph(organization_id)
+    found = g.ro_query(
+        """
+        MATCH (p:Person) WHERE p.domain = $dom
+        OPTIONAL MATCH (p)-[:WORKS_AT]->(c:Company)
+        RETURN p.email, p.owner_email, p.name, p.title, p.seniority,
+               p.department, c.name, p.skills
+        """,
+        params={"dom": dom},
+    )
+    rows = [
+        {
+            "email": r[0], "owner_email": r[1], "name": r[2], "title": r[3],
+            "seniority": r[4], "department": r[5], "company": r[6], "skills": r[7] or [],
+            "domain": dom, "industry": industry,
+            "company_website": company_website, "company_linkedin": company_linkedin,
+            "embedding": None,
+        }
+        for r in found.result_set
+    ]
+    if not rows:
+        return 0
+
+    if settings.OPENAI_API_KEY:
+        try:
+            embs = _embedder().embed_documents([_contact_text(r) for r in rows])
+            for row, emb in zip(rows, embs):
+                row["embedding"] = emb
+        except Exception as exc:  # noqa: BLE001 — never lose the research over an embedding blip
+            logger.warning("re-embedding after company research failed: %s", exc)
+
+    g.query(
+        """
+        UNWIND $rows AS row
+        MATCH (p:Person {email: row.email, owner_email: row.owner_email})
+        SET p.industry = coalesce(row.industry, p.industry),
+            p.company_website = coalesce(row.company_website, p.company_website),
+            p.company_linkedin = coalesce(row.company_linkedin, p.company_linkedin),
+            p.company_needs_research = false
+        FOREACH (_ IN CASE WHEN row.embedding IS NULL THEN [] ELSE [1] END |
+          SET p.embedding = vecf32(row.embedding)
+        )
+        """,
+        params={"rows": rows},
+    )
+    return len(rows)
+
+
 def clear_owner_graph(owner_email: str, organization_id: str) -> None:
     """Prune ONE employee's subgraph within their org graph — delete only nodes they own.
 

@@ -139,13 +139,34 @@ def lookup_companies(domains: set[str]) -> dict[str, dict]:
         return {}
 
 
+def _evidence(kind: str, detail: str, existing: str = "") -> list[dict]:
+    """The observation(s) behind a company name — see models/evidence.py.
+
+    When Outlook's own contact card already carried a company, that is a SECOND,
+    independent source for the same employer, so it is recorded as its own entry rather
+    than silently replacing the domain observation.
+    """
+    out = [{"kind": kind, "detail": detail}]
+    if existing:
+        out.append(
+            {
+                "kind": "outlook.address-book",
+                "detail": f'their Outlook contact card says "{existing}"',
+            }
+        )
+    return out
+
+
 def enrich_contacts_company(contacts: list[dict]) -> list[dict]:
     """Resolve each contact's COMPANY (+ industry / website / linkedin) for free from its email
     domain via the PDL Free Company Dataset. Personal-mailbox contacts get no company. Unknown
     company domains keep a derived name and `company_needs_research=True` for the agent to research.
 
-    Returns the same list with company fields filled and `enriched: bool` (True only when the
-    dataset had a match — so downstream 'enriched' counts stay meaningful)."""
+    Returns the same list with company fields filled, `enriched: bool` (True only when the
+    dataset had a match — so downstream 'enriched' counts stay meaningful), and `evidence`:
+    WHERE the company name came from, so a dataset match (a lookup) and a name derived off
+    the domain (a guess) stop being indistinguishable downstream. The evidence is scored in
+    models/evidence.py and stored by client/facts_store.py; the graph write ignores the key."""
     # Government/military domains skip the commercial dataset entirely (see is_gov_domain).
     by_domain = lookup_companies({domain_of(c) for c in contacts if not is_gov_domain(domain_of(c))})
     out: list[dict] = []
@@ -161,6 +182,11 @@ def enrich_contacts_company(contacts: list[dict]) -> list[dict]:
                 "enriched": False,
                 "company_needs_research": False,
                 "government": True,
+                # A deterministic table, not a guess: us.army.mil IS the US Army.
+                "evidence": _evidence(
+                    "gov-domain-rule",
+                    f"{dom} is a US government/military domain", existing,
+                ),
             })
             continue
         rec = by_domain.get(dom)
@@ -175,6 +201,12 @@ def enrich_contacts_company(contacts: list[dict]) -> list[dict]:
                 "domain": dom,
                 "enriched": True,
                 "company_needs_research": False,
+                # A lookup in a curated dataset — strong enough to assert on the record.
+                "evidence": _evidence(
+                    "pdl.domain-company",
+                    f'{dom} matched "{rec.get("name") or dom}" in the company dataset',
+                    existing,
+                ),
             })
         elif dom and dom not in _PERSONAL_DOMAINS:  # a real company domain, just not in the dataset
             out.append({
@@ -182,8 +214,15 @@ def enrich_contacts_company(contacts: list[dict]) -> list[dict]:
                 "company": existing or company_name_from_domain(dom),
                 "domain": dom,
                 "enriched": False,
-                "company_needs_research": True,  # CRM agent researches it when relevant
+                "company_needs_research": True,  # researched by research_company_task
+                # THE GUESS. raytheon.com -> "Raytheon" is usually right and occasionally
+                # embarrassing, so it is offered as a suggestion and never asserted.
+                "evidence": _evidence(
+                    "domain-derived-name",
+                    f"the company name was derived from the domain {dom}", existing,
+                ),
             })
         else:  # personal mailbox / no domain — no company to attach
-            out.append({**c, "domain": dom, "enriched": False, "company_needs_research": False})
+            out.append({**c, "domain": dom, "enriched": False,
+                        "company_needs_research": False, "evidence": []})
     return out

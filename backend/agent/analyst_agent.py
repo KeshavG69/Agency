@@ -16,6 +16,7 @@ from datetime import datetime
 from agno.agent import Agent
 
 from agent.company_profile import company_context
+from agent.skills_registry import get_bd_skills
 from app.settings import settings
 from client.llm_client import get_chat_llm_agno
 from models.verdict import AnalystVerdict
@@ -92,13 +93,20 @@ OUTPUT:
 - rationale: 2-5 sentences — the fit read, the specific GATES TO CONFIRM (spell them out, e.g.
   "confirm RS3 IDIQ access and SECRET FCL"), the winnability read, and the recommendation. Mark
   unverified facts as "unverified". Cite URLs for external facts.
+- recheck_after_days + recheck_reason: REQUIRED when bid_decision is "Watch", null otherwise.
+  A Watch is not a filing decision, it is a DEFERRAL — so say when to look again and what you
+  expect to have changed. A Sources Sought or RFI typically warrants 14-30 days ("the RFP should
+  follow"); a pre-solicitation with a named date warrants the days until that date. The system
+  re-runs this analysis automatically on that day, so pick the day the answer could actually differ.
 
 After researching and reasoning, your FINAL message must be ONLY this JSON object —
 no prose, no markdown fences, no <reasoning> tags:
 {{"bid_decision": "Bid" | "No-Bid" | "Watch", "priority_score": <integer 0-100>,
   "rationale": "<2-5 sentences incl. the gates to confirm>", "recommended_stage": "Qualify" | "Discover" | "No-Bid",
-  "call_action": {{"contact": "<who>", "channel": "email", "talking_point": "<one line>"}}}}
+  "call_action": {{"contact": "<who>", "channel": "email", "talking_point": "<one line>"}},
+  "recheck_after_days": <integer 1-365 or null>, "recheck_reason": "<one line or null>"}}
 Use null for "call_action" unless bid_decision is "Bid".
+Use null for both recheck fields unless bid_decision is "Watch".
 """
 
 _OPP_FIELDS = [
@@ -115,6 +123,11 @@ def build_analyst_agent(organization_id: str | None = None) -> Agent:
         name="Analyst",
         model=get_chat_llm_agno(model=settings.ANALYST_MODEL),
         tools=[create_exa_web_search_tool(), create_reasoning_tool()],
+        # Additive: the grounding + brief-writing rules are also stated inline below, and
+        # stay there. The skills are the versioned reference the agent can pull in full
+        # when it needs the detail. De-duplicating the two is a deliberate follow-up —
+        # not something to do in the same pass as adding them.
+        skills=get_bd_skills(),
         instructions=_instructions(company, profile),
         debug_mode=True
     )

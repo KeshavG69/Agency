@@ -28,3 +28,15 @@ class AnalystVerdict(BaseModel):
     call_action: Optional[CallAction] = Field(
         None, description="Present only when bid_decision == 'Bid'"
     )
+    # A "Watch" used to leave a card nothing ever re-read, so an early-stage notice that
+    # became a real solicitation was simply missed. These two fields put the opportunity
+    # back on the agent to-do list with a date and a reason a rep can read.
+    recheck_after_days: Optional[int] = Field(
+        None, ge=1, le=365,
+        description="Days until this should be judged again. Required for 'Watch'; "
+                    "null for a decided Bid or No-Bid.",
+    )
+    recheck_reason: Optional[str] = Field(
+        None, description="One line a rep will read next to the date: what you expect to "
+                          "have changed by then (e.g. 'the RFP should follow this Sources Sought')",
+    )

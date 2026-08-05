@@ -13,6 +13,7 @@ from celery import group
 from agent.analyst_agent import analyze_opportunity
 from app.worker import celery_app
 from client.crm_store import get_crm_store
+from client.events_store import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,45 @@ def analyze_opportunity_task(self, opp: dict) -> dict:
     elif verdict.bid_decision == "Watch":
         crm.create_task(opp["id"], name=f"Revisit: {name}", description=verdict.rationale)
 
+    # Keep the reasoning, not just the verdict. A No-Bid is recorded as ok=False so the
+    # trail can show WHY we walked away — the question a rep actually asks later.
+    record_event(
+        str(opp.get("organization_id") or ""), "analyst", "opportunity", str(opp["id"]),
+        f"{verdict.bid_decision} — priority {verdict.priority_score}",
+        verdict.rationale, ok=verdict.bid_decision != "No-Bid",
+    )
+
+    _schedule_recheck(opp, verdict)
     return {"id": opp["id"], "decision": verdict.bid_decision, "priority": verdict.priority_score}
+
+
+def _schedule_recheck(opp: dict, verdict) -> None:  # noqa: ANN001
+    """Put a deferred opportunity back on the agent to-do list with a date and a reason.
+
+    The `Revisit:` card above is for a human to find. This is for the system to act on:
+    without it a "Watch" is a dead end — an early-stage notice that becomes a real
+    solicitation next month is simply never looked at again, because nothing re-reads
+    cards. Best-effort: a scheduling miss must never lose the verdict we just wrote.
+    """
+    days = getattr(verdict, "recheck_after_days", None)
+    org = str(opp.get("organization_id") or "")
+    if not days or not org or not opp.get("id"):
+        return
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        from client.task_store import PRIORITY, get_task_store
+
+        get_task_store().enqueue(
+            org, "recheck_opportunity", "opportunity", str(opp["id"]),
+            getattr(verdict, "recheck_reason", None) or "scheduled re-judgement",
+            priority=PRIORITY["recheck"], budget=4,
+            due_at=datetime.now(timezone.utc) + timedelta(days=int(days)),
+            cooldown_days=0,  # a recheck is MEANT to recur
+        )
+        logger.info("Recheck scheduled for %s in %d days", opp["id"], days)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not schedule recheck for %s: %s", opp.get("id"), exc)
 
 
 @celery_app.task

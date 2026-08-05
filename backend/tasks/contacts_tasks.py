@@ -9,11 +9,95 @@ network. `owner_email` is the employee's login email (their Composio entity).
 import logging
 
 from app.worker import celery_app
+from client.facts_store import get_facts_store
 from client.graph_store import clear_owner_graph, upsert_contacts
+from client.task_store import PRIORITY, STAND_DOWN_DAYS, get_task_store
 from utils.company_enrich import enrich_contacts_company
 from utils.composio_utils import fetch_outlook_network
+from utils.signature import derive_function, derive_seniority
 
 logger = logging.getLogger(__name__)
+
+
+def _queue_company_research(organization_id: str, contacts: list[dict]) -> int:
+    """Queue the companies our free dataset could not resolve, so an agent can look them
+    up later. This is what finally READS `company_needs_research` — the flag has been
+    written on every ingest since day one and, until now, nothing ever acted on it.
+
+    One job per DOMAIN, not per contact: fifty contacts at the same unknown company are
+    one question, asked once. The stand-down stops a fruitless lookup being re-bought
+    every time the mailbox is re-synced.
+    """
+    domains = {
+        (c.get("domain") or "").strip().lower()
+        for c in contacts
+        if c.get("company_needs_research")
+    }
+    domains.discard("")
+    if not domains:
+        return 0
+    return get_task_store().enqueue_many(
+        organization_id, "research_company", "company", sorted(domains),
+        "the company dataset had no entry for this domain",
+        priority=PRIORITY["sweep"], budget=3, cooldown_days=STAND_DOWN_DAYS,
+    )
+
+
+def _record_contact_facts(organization_id: str, contacts: list[dict]) -> int:
+    """Store what we learned about each contact, tagged with WHERE it came from.
+
+    A plain loop — no agent, no network, milliseconds. The evidence decides the outcome:
+    a dataset/gov-rule match is written onto the record, while a company name derived off
+    the domain becomes a SUGGESTION a rep settles in one click, instead of being asserted
+    as though we knew it.
+
+    Facts are org-level (organization_id + email), not per-owner: a job title is the same
+    truth for every rep in the org. Relationship signals (corr_count, last_contact) stay
+    per-owner in the graph, which is why they are not recorded here.
+    """
+    store = get_facts_store()
+    stored = 0
+    for c in contacts:
+        email = (c.get("email") or "").strip().lower()
+        if not email:
+            continue
+
+        # The company name and what that company does share one observation: whatever
+        # resolved the domain (dataset hit, .gov/.mil rule, or the derived guess).
+        company_evidence = c.get("evidence") or []
+        if company_evidence:
+            stored += sum(
+                1
+                for outcome in store.record_many(
+                    organization_id, email,
+                    [("company", c.get("company")), ("industry", c.get("industry"))],
+                    company_evidence,
+                ).values()
+                if outcome.stored
+            )
+
+        # A job title on the contact came from Outlook's own address book — a different
+        # source from the domain, so it carries its own (weaker) evidence. Seniority and
+        # function are derived from it for free, and are what let the Relation agent tell
+        # a Capture Manager from a junior developer.
+        title = (c.get("title") or "").strip()
+        if title:
+            book = [{
+                "kind": "outlook.address-book",
+                "detail": f'their Outlook contact card lists "{title}"',
+            }]
+            stored += sum(
+                1
+                for outcome in store.record_many(
+                    organization_id, email,
+                    [("title", title),
+                     ("seniority", derive_seniority(title)),
+                     ("function", derive_function(title))],
+                    book,
+                ).values()
+                if outcome.stored
+            )
+    return stored
 
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=20)
@@ -44,6 +128,16 @@ def sync_outlook_contacts_task(self, owner_email: str, organization_id: str) -> 
     enriched = enrich_contacts_company(contacts)
     resolved = sum(1 for c in enriched if c.get("enriched"))
     logger.info("Company-enriched %d/%d contacts from the domain dataset", resolved, len(enriched))
+
+    # Record WHERE each value came from, so a guess is stored as a suggestion rather than
+    # asserted. Never fatal: the graph rebuild below is the important part of this task.
+    try:
+        facts = _record_contact_facts(org, enriched)
+        queued = _queue_company_research(org, enriched)
+        logger.info("Recorded %d contact facts, queued %d company lookups for %s",
+                    facts, queued, owner)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Recording contact facts failed for %s: %s", owner, exc)
 
     # Prune-then-rebuild THIS employee's subgraph only, inside their org graph. Done
     # after a successful fetch/enrich, so a transient failure never empties the network.
@@ -90,6 +184,15 @@ def ingest_selected_contacts_task(
     enriched = enrich_contacts_company(picked)
     resolved = sum(1 for c in enriched if c.get("enriched"))
     logger.info("Company-enriched %d/%d selected contacts for %s", resolved, len(enriched), owner)
+
+    # Same as the sync path: provenance is recorded, and never fatal to the ingest.
+    try:
+        facts = _record_contact_facts(org, enriched)
+        queued = _queue_company_research(org, enriched)
+        logger.info("Recorded %d contact facts, queued %d company lookups for %s",
+                    facts, queued, owner)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Recording contact facts failed for %s: %s", owner, exc)
 
     try:
         clear_owner_graph(owner, org)

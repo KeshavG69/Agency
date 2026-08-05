@@ -43,6 +43,26 @@ _INDEXES: list[tuple[str, list, dict]] = [
     # duplicates a card; the list endpoint queries by (employee_email, status) newest-first.
     ("mail_triage", [("employee_email", ASCENDING), ("message_id", ASCENDING)], {"unique": True}),
     ("mail_triage", [("employee_email", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)], {}),
+    # contact facts: one row per distinct claim (re-recording MERGES evidence into it
+    # rather than duplicating), plus the per-contact read split by status. Also created
+    # in facts_store's constructor; listed here so the full index surface is in one place.
+    ("contact_facts",
+     [("organization_id", ASCENDING), ("email", ASCENDING), ("field", ASCENDING), ("value", ASCENDING)],
+     {"unique": True}),
+    ("contact_facts",
+     [("organization_id", ASCENDING), ("email", ASCENDING), ("status", ASCENDING)], {}),
+    # agent tasks: the de-dup lookup ("already queued or recently done?") and the claim
+    # query (open + due + unleased, highest priority first). Also created in task_store.
+    ("agent_tasks",
+     [("organization_id", ASCENDING), ("kind", ASCENDING), ("subject.id", ASCENDING),
+      ("finished_at", ASCENDING)], {}),
+    ("agent_tasks",
+     [("finished_at", ASCENDING), ("due_at", ASCENDING), ("lease_until", ASCENDING),
+      ("priority", DESCENDING)], {}),
+    # agent events: append-only trail, read as "everything that happened to this record,
+    # oldest first". Also created in events_store.
+    ("agent_events",
+     [("organization_id", ASCENDING), ("subject.id", ASCENDING), ("created_at", ASCENDING)], {}),
 ]
 
 

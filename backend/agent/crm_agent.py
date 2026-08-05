@@ -16,6 +16,7 @@ import json
 from agno.agent import Agent
 
 from agent.company_profile import company_context
+from agent.skills_registry import get_bd_skills
 from app.settings import settings
 from client.graph_store import search_contacts_hybrid
 from client.llm_client import get_chat_llm_agno
@@ -90,6 +91,9 @@ def build_crm_agent(
         name="CRM",
         model=get_chat_llm_agno(model=settings.ANALYST_MODEL),
         tools=[search_network, create_exa_web_search_tool(), create_reasoning_tool()],
+        # `identity-matching` and `company-research` are the two that earn their place
+        # here: this agent judges who a contact is and whether their employer matters.
+        skills=get_bd_skills(),
         instructions=_instructions(company, profile),
         debug_mode=True,
     )

@@ -10,6 +10,7 @@ import logging
 from agent.crm_agent import recommend_contacts
 from app.worker import celery_app
 from client.crm_store import get_crm_store
+from client.events_store import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -30,5 +31,21 @@ def recommend_contacts_task(self, opp: dict, employee_email: str | None = None) 
 
     recs = [r.model_dump() for r in result.recommendations]
     crm.set_recommended_contacts(opp["id"], recs)
+
+    # Keep WHY each contact was surfaced. An empty result is recorded too (ok=False):
+    # "the search ran and found nobody relevant" is a real answer, and without it the
+    # UI cannot tell that apart from "the search never ran".
+    org = str(opp.get("organization_id") or "")
+    if recs:
+        record_event(
+            org, "relation", "opportunity", str(opp["id"]),
+            f"surfaced {len(recs)} contact(s)",
+            "; ".join(f"{r.get('name') or r.get('email')} — {r.get('reason', '')}" for r in recs[:10]),
+        )
+    else:
+        record_event(org, "relation", "opportunity", str(opp["id"]),
+                     "no relevant contacts in the network",
+                     "The graph search ran and returned nobody worth engaging.", ok=False)
+
     logger.info("CRM found %d relevant contacts for %s", len(recs), opp.get("id"))
     return {"id": opp["id"], "relevant": len(recs)}
