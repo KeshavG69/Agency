@@ -263,6 +263,39 @@ def assign_opportunity(
     return {"opportunity_id": opportunity_id, "assigned_to": req.user_ids, "notified": len(new_ids)}
 
 
+class ContactIn(BaseModel):
+    name: str
+    email: str | None = None
+    company: str | None = None
+    title: str | None = None
+    relevance_score: int | None = None
+    reason: str | None = None
+    suggested_outreach: str | None = None
+    source: str | None = None  # "manual" when a rep added the contact by hand
+
+
+class ContactsUpdate(BaseModel):
+    contacts: list[ContactIn]
+
+
+@router.put("/{opportunity_id}/contacts")
+def update_contacts(
+    opportunity_id: str,
+    req: ContactsUpdate,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Replace an opportunity's contact list. The Relation agent populates it; the Contacts
+    tab lets a rep curate it — add someone the graph search missed, or drop a bad match.
+    The UI sends the WHOLE list it wants to keep, so add and remove are the same write."""
+    crm = get_crm_store()
+    organization_id = str(current_user["organization_id"])
+    if crm.get_opportunity(opportunity_id, organization_id) is None:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+    contacts = [c.model_dump(exclude_none=True) for c in req.contacts]
+    crm.set_recommended_contacts(opportunity_id, contacts)
+    return {"opportunity_id": opportunity_id, "recommended_contacts": contacts}
+
+
 @router.post("/analyze/run")
 def run_analyst(current_user: dict = Depends(get_current_user)) -> dict:
     """Phase 1 — kick off the Analyst on this org's unanalyzed opportunities (Celery)."""

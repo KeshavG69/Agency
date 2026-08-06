@@ -201,74 +201,96 @@ export function DonutStat({
   const sum = total ?? data.reduce((n, d) => n + d.value, 0);
   const centre = (formatTotal ?? formatValue ?? ((v: number) => v.toLocaleString()))(sum);
 
+  const fmt = formatValue ?? ((v: number) => v.toLocaleString());
   return (
-    <ChartContainer
-      config={config}
-      className={cn("aspect-auto w-full", className)}
-      style={{ height }}
-    >
-      <PieChart>
-        <ChartTooltip
-          cursor={false}
-          // Slices carry their identity in the datum, not on dataKey; hideLabel because the
-          // slice name is already the row name and would otherwise print twice.
-          content={<ChartTooltipContent nameKey="key" hideLabel valueFormatter={formatValue} />}
-        />
-        <Pie
-          data={data}
-          dataKey="value"
-          nameKey="key"
-          innerRadius="58%"
-          outerRadius="82%"
-          // recharts 3's pie entrance animation stalls at its first frame here, leaving the
-          // ring empty (verified in the browser: the sector paths never advance past t≈0).
-          // Bar and Area animate correctly, so this is disabled for the pie alone.
-          isAnimationActive={false}
-          // Separator in the surface colour, so slices read as distinct in both themes.
-          stroke="var(--card)"
-          strokeWidth={2}
-          // Index, not payload: recharts' click datum is wrapped and its shape shifts between
-          // versions, but the index into `data` is stable.
-          onClick={onSelect ? (_, index) => onSelect(data[index]?.key) : undefined}
-          style={onSelect ? { cursor: "pointer", outline: "none" } : undefined}
-        >
-          {data.map((d) => (
-            <Cell
-              key={d.key}
-              fill={`var(--color-${d.key})`}
-              // When a slice is active, the others fade so the ring reads as a filter.
-              fillOpacity={activeKey && d.key !== activeKey ? 0.28 : 1}
-            />
-          ))}
-          <Label
-            content={({ viewBox }) => {
-              // Only a polar viewBox has a centre; anything else means it has not measured yet.
-              if (!viewBox || !("cx" in viewBox)) return null;
-              return (
-                <text x={viewBox.cx} y={viewBox.cy} textAnchor="middle" dominantBaseline="middle">
-                  <tspan
-                    x={viewBox.cx}
-                    y={viewBox.cy}
-                    className="fill-foreground text-2xl font-semibold tabular-nums"
-                  >
-                    {centre}
-                  </tspan>
-                  {totalLabel ? (
+    <div className={cn("w-full", className)}>
+      <ChartContainer config={config} className="aspect-auto w-full" style={{ height }}>
+        <PieChart>
+          <ChartTooltip
+            cursor={false}
+            // Slices carry their identity in the datum, not on dataKey; hideLabel because the
+            // slice name is already the row name and would otherwise print twice.
+            content={<ChartTooltipContent nameKey="key" hideLabel valueFormatter={formatValue} />}
+          />
+          <Pie
+            data={data}
+            dataKey="value"
+            nameKey="key"
+            innerRadius="64%"
+            outerRadius="90%"
+            // Rounded segment ends + a small angular gap read as a modern, premium donut.
+            cornerRadius={5}
+            paddingAngle={2}
+            // recharts 3's pie entrance animation stalls at its first frame here, leaving the
+            // ring empty (verified in the browser: the sector paths never advance past t≈0).
+            // Bar and Area animate correctly, so this is disabled for the pie alone.
+            isAnimationActive={false}
+            // Separator in the surface colour, so slices read as distinct in both themes.
+            stroke="var(--card)"
+            strokeWidth={2}
+            // Index, not payload: recharts' click datum is wrapped and its shape shifts between
+            // versions, but the index into `data` is stable.
+            onClick={onSelect ? (_, index) => onSelect(data[index]?.key) : undefined}
+            style={onSelect ? { cursor: "pointer", outline: "none" } : undefined}
+          >
+            {data.map((d) => (
+              <Cell
+                key={d.key}
+                fill={`var(--color-${d.key})`}
+                // When a slice is active, the others fade so the ring reads as a filter.
+                fillOpacity={activeKey && d.key !== activeKey ? 0.24 : 1}
+              />
+            ))}
+            <Label
+              content={({ viewBox }) => {
+                // Only a polar viewBox has a centre; anything else means it has not measured yet.
+                if (!viewBox || !("cx" in viewBox)) return null;
+                return (
+                  <text x={viewBox.cx} y={viewBox.cy} textAnchor="middle" dominantBaseline="middle">
                     <tspan
                       x={viewBox.cx}
-                      y={viewBox.cy + 20}
-                      className="fill-muted-foreground text-xs"
+                      y={viewBox.cy - 2}
+                      className="fill-foreground text-[30px] font-semibold tracking-tight tabular-nums"
                     >
-                      {totalLabel}
+                      {centre}
                     </tspan>
-                  ) : null}
-                </text>
-              );
-            }}
-          />
-        </Pie>
-        {data.length > 1 ? <ChartLegend content={<ChartLegendContent nameKey="key" />} /> : null}
-      </PieChart>
-    </ChartContainer>
+                    {totalLabel ? (
+                      <tspan
+                        x={viewBox.cx}
+                        y={viewBox.cy + 20}
+                        className="fill-muted-foreground text-[11px] uppercase tracking-wider"
+                      >
+                        {totalLabel}
+                      </tspan>
+                    ) : null}
+                  </text>
+                );
+              }}
+            />
+          </Pie>
+        </PieChart>
+      </ChartContainer>
+      {data.length > 1 && (
+        <div className="donut-legend">
+          {data.map((d) => {
+            const dim = activeKey && d.key !== activeKey;
+            const label = (config[d.key] as { label?: string } | undefined)?.label ?? d.key;
+            return (
+              <button
+                type="button"
+                key={d.key}
+                className={cn("dl-item", dim && "is-dim", !onSelect && "dl-static")}
+                onClick={onSelect ? () => onSelect(d.key) : undefined}
+                disabled={!onSelect}
+              >
+                <span className="dl-dot" style={{ background: `var(--color-${d.key})` }} />
+                <span className="dl-label">{label}</span>
+                <span className="dl-val">{fmt(d.value)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

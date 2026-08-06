@@ -47,6 +47,13 @@
   --chart-4: #7c3aed;
   --chart-5: #0891b2;
 
+  /* Deadline urgency = a SEQUENTIAL teal ramp (dark = this week/urgent -> light = later)
+     + a neutral slate for "no deadline" (off the scale). Validated for this light surface. */
+  --deadline-week: #006b4f;
+  --deadline-month: #2f9e78;
+  --deadline-later: #86cfb5;
+  --deadline-none: #647587;
+
   /* Domain signal, not brand. Same value as --chart-3 today but declared separately:
      status colours are reserved and must never renumber when a series is added. */
   --watch: #b45309;
@@ -98,6 +105,12 @@
   --chart-3: #c07e22;
   --chart-4: #9b7bf0;
   --chart-5: #1e93b8;
+
+  /* Deadline ramp, stepped for the dark surface: bright teal (this week) -> dim, + slate. */
+  --deadline-week: #34d399;
+  --deadline-month: #10a37a;
+  --deadline-later: #0e7457;
+  --deadline-none: #7c8899;
 
   --watch: #c07e22;
 
@@ -1642,6 +1655,57 @@ button {
   font-size: 13.5px;
   font-weight: 600;
 }
+/* Manual add/remove on the Contacts tab */
+.rec-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.rec-remove:hover {
+  background: color-mix(in srgb, var(--nobid) 12%, transparent);
+  border-color: color-mix(in srgb, var(--nobid) 35%, transparent);
+  color: var(--nobid);
+}
+.rec-manual {
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  vertical-align: middle;
+}
+.add-contact .ac-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.add-contact .ac-in {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 13px;
+}
+.add-contact .ac-in:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .rec-body {
   font-size: 13px;
   color: var(--muted);
@@ -2463,9 +2527,50 @@ button {
 }
 .dash-top .dash-stats { margin-bottom: 0; }
 .dash-top .dash-stats.dash-stats-3 { max-width: none; }
-.dash-chart-card { margin-bottom: 0; }
+.dash-chart-card {
+  margin-bottom: 0;
+  padding: 18px 20px 16px;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 5%, transparent);
+}
 @media (max-width: 1100px) {
   .dash-top { grid-template-columns: 1fr; }
+}
+
+/* Premium donut legend — a labelled row per slice with its count, doubling as a filter. */
+.donut-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.donut-legend .dl-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.donut-legend .dl-item.dl-static { cursor: default; }
+.donut-legend .dl-item:not(.dl-static):hover { background: var(--surface-2); }
+.donut-legend .dl-item.is-dim { opacity: 0.4; }
+.donut-legend .dl-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.donut-legend .dl-label { color: var(--muted); }
+.donut-legend .dl-val {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .dash-stats {

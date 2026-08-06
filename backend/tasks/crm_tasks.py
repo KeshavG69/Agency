@@ -30,7 +30,17 @@ def recommend_contacts_task(self, opp: dict, employee_email: str | None = None) 
         raise self.retry(exc=exc)
 
     recs = [r.model_dump() for r in result.recommendations]
-    crm.set_recommended_contacts(opp["id"], recs)
+
+    # Keep contacts a rep added by hand (source="manual") — a re-search during capture must
+    # not silently wipe their curation. Drop a manual one only if the agent independently
+    # surfaced the same email, so it isn't listed twice.
+    existing = crm.get_opportunity(opp["id"], str(opp.get("organization_id") or "")) or {}
+    found = {(r.get("email") or "").lower() for r in recs if r.get("email")}
+    manual = [
+        c for c in (existing.get("recommended_contacts") or [])
+        if c.get("source") == "manual" and (c.get("email") or "").lower() not in found
+    ]
+    crm.set_recommended_contacts(opp["id"], recs + manual)
 
     # Keep WHY each contact was surfaced. An empty result is recorded too (ok=False):
     # "the search ran and found nobody relevant" is a real answer, and without it the

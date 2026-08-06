@@ -90,7 +90,12 @@ class Settings(BaseSettings):
     SHAREPOINT_GRAPH_NAME: str = "sharepoint_structure"
     
     
-    ANALYST_MODEL: str = "openai/gpt-5.4-mini"
+    # ---- Agent models — one per agent, so each can be tuned independently ----
+    ANALYST_MODEL: str = "openai/gpt-5.4-mini"   # bid / no-bid analyst
+    CRM_MODEL: str = "openai/gpt-5.6-terra"      # relation / contact-finding agent
+    RESEARCH_MODEL: str = "openai/gpt-5.4-mini"  # company research
+    CAPTURE_MODEL: str = "openai/gpt-5.6-terra"  # capture strategy + deliverables
+    MAIL_MODEL: str = "openai/gpt-5.6-terra"     # outreach drafting
 
     # Manual opportunity upload — the small/fast model that digests big solicitation
     # packages. If the whole package fits (<= STUFF_MAX) it's kept verbatim with no

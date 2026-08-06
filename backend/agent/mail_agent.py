@@ -25,6 +25,7 @@ from agno.agent import Agent
 
 from agent.company_profile import company_context
 from client.graph_store import get_contact_relationship
+from app.settings import settings
 from client.llm_client import get_chat_llm_agno
 from utils.doc_parse import document_context
 from client.sharepoint_graph import search_sharepoint
@@ -110,7 +111,7 @@ def build_mail_agent(
     company, profile = company_context(organization_id or "")
     return Agent(
         name="Mail",
-        model=get_chat_llm_agno(max_tokens=12000),
+        model=get_chat_llm_agno(model=settings.MAIL_MODEL, max_tokens=12000),
         tools=[
             search_sharepoint_tool,
             # create_reasoning_tool(),
@@ -311,7 +312,7 @@ def build_reply_agent(
     company, profile = company_context(organization_id or "")
     return Agent(
         name="MailReply",
-        model=get_chat_llm_agno(max_tokens=8000),
+        model=get_chat_llm_agno(model=settings.MAIL_MODEL, max_tokens=8000),
         tools=[
             search_sharepoint_tool,
             create_reasoning_tool(),

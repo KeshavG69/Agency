@@ -29,7 +29,9 @@ from utils.structured import coerce_output
 def _instructions(company: str, profile: str) -> str:
     return f"""\
 You are a business-development relationship manager for {company}.
-Given ONE opportunity, find the contacts in the company's network worth engaging for it.
+Given ONE opportunity, find the EXTERNAL contacts in the company's network worth engaging
+for it — people at customers, potential teaming partners, or competitors. Do NOT surface
+internal {company} colleagues (they are already filtered out of your search results).
 
 COMPANY PROFILE (the fit lens):
 {profile}
@@ -56,7 +58,7 @@ IT shop, etc. just because the name sounds like one) — an unverified guess is 
 searching. If the search turns up nothing useful either, say so in `reason` rather than
 inventing a fit.
 
-Use the reasoning tool to think before ranking. Return at most the 10 most valuable.
+Think step by step before ranking, then return at most the 10 most valuable.
 
 Your FINAL message must be ONLY this JSON — no prose, no markdown fences, no <reasoning> tags:
 {{"recommendations": [{{"name": "<name>", "email": "<email or null>", "company": "<company or null>", "title": "<title or null>", "relevance_score": <integer 0-100>, "reason": "<1-2 lines>", "suggested_outreach": "<one line>"}}]}}
@@ -73,23 +75,35 @@ def build_crm_agent(
     tool so it only ever sees that employee's OWN contact network inside their org's
     graph — the LLM never sets them.
     """
+    company, profile = company_context(organization_id or "")
+    # INTERNAL-CONTACT FILTER. This agent finds EXTERNAL people to engage (customers,
+    # teaming partners, competitors); our own colleagues are noise here. Match on the domain
+    # of the acting rep's own (connected Outlook) email: any contact on that domain is a
+    # colleague and is dropped before the model ever sees it.
+    own_domain = (employee_email or "").rpartition("@")[2].strip().lower()
+
+    def _is_internal(row: dict) -> bool:
+        dom = (row.get("email") or "").lower().rpartition("@")[2]
+        return bool(own_domain) and (dom == own_domain or dom.endswith("." + own_domain))
+
     def search_network(query: str) -> str:
         """Search the acting employee's contact network for people relevant to `query`.
 
         Pass capability / technology / company-type terms (comma or space separated),
         e.g. "speech-to-text, real-time voice, data infrastructure, agent tooling".
         Combines keyword + semantic (vector) search over the employee's graph. Returns a
-        JSON list of contacts, each with: email, name, title, company, corr_count (how
-        many times the employee has emailed them = relationship strength). Returns [] if
-        nothing matches. Call it more than once with different angles if helpful.
+        JSON list of EXTERNAL contacts (own-company colleagues are filtered out), each with:
+        email, name, title, company, corr_count (how many times the employee has emailed
+        them = relationship strength). Returns [] if nothing matches. Call it more than once
+        with different angles if helpful.
         """
         rows = search_contacts_hybrid(query, employee_email or "", organization_id or "")
+        rows = [r for r in rows if not _is_internal(r)]
         return json.dumps(rows)
 
-    company, profile = company_context(organization_id or "")
     return Agent(
         name="CRM",
-        model=get_chat_llm_agno(model=settings.ANALYST_MODEL),
+        model=get_chat_llm_agno(model=settings.CRM_MODEL),
         tools=[search_network, create_exa_web_search_tool()],# create_reasoning_tool()],
         # `identity-matching` and `company-research` are the two that earn their place
         # here: this agent judges who a contact is and whether their employer matters.

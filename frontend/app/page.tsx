@@ -17,6 +17,8 @@ import {
   analyzeSelected,
   setDecision,
   assignOpportunity,
+  updateOpportunityContacts,
+  type RecommendedContact,
   getDocUrl,
   fetchOpportunitySharePointFiles,
   type SharePointFile,
@@ -114,11 +116,14 @@ const fmtDate = (s?: string | null) => {
 // Slice colours for the deadline donut. Declared once, at module scope and in a fixed order,
 // because that is what pins a colour to a BUCKET rather than to its rank: a week with no
 // deadlines drops out of the chart without recolouring the buckets that remain.
+// Deadline urgency is ORDINAL, so it gets a sequential teal ramp (dark = this week / urgent
+// → light = later) plus a neutral slate for "no deadline" (off the urgency scale) — not four
+// rainbow hues. Tokens defined in legacy.css so light/dark each get their own steps.
 const DEADLINE_SLICES: ChartConfig = {
-  week: { label: "This week", color: "var(--chart-1)" },
-  month: { label: "This month", color: "var(--chart-2)" },
-  later: { label: "Later", color: "var(--chart-3)" },
-  none: { label: "No deadline", color: "var(--chart-4)" },
+  week: { label: "This week", color: "var(--deadline-week)" },
+  month: { label: "This month", color: "var(--deadline-month)" },
+  later: { label: "Later", color: "var(--deadline-later)" },
+  none: { label: "No deadline", color: "var(--deadline-none)" },
 };
 
 // One shared empty array, so `query.data ?? NO_OPPS` keeps a stable identity while a query
@@ -465,6 +470,29 @@ function Console({ user }: { user: User }) {
     } catch {
       setError("Couldn't update the assignment — reverting.");
       void reload();
+    }
+  };
+
+  // Manual add/remove of contacts on the Contacts tab. The tab always sends the FULL list it
+  // wants to keep, so add and remove are one code path. Optimistic: patch the open opp now,
+  // reconcile with the server's echo, revert by refetch on failure.
+  const onContactsChange = async (id: string, contacts: RecommendedContact[]) => {
+    setError(null);
+    const patch = (o: Opportunity): Opportunity => ({
+      ...o,
+      recommended_contacts: contacts,
+      contacts_searched_at: o.contacts_searched_at ?? new Date().toISOString(),
+    });
+    setSelectedOpp((prev) => (prev && prev.id === id ? patch(prev) : prev));
+    qc.setQueryData(opportunityQuery(id).queryKey, (o?: Opportunity) => (o ? patch(o) : o));
+    try {
+      const saved = await updateOpportunityContacts(id, contacts);
+      const apply = (o: Opportunity): Opportunity => ({ ...o, recommended_contacts: saved });
+      setSelectedOpp((prev) => (prev && prev.id === id ? apply(prev) : prev));
+      qc.setQueryData(opportunityQuery(id).queryKey, (o?: Opportunity) => (o ? apply(o) : o));
+    } catch {
+      setError("Couldn't update the contact list — reverting.");
+      void cache.opportunity(id);
     }
   };
 
@@ -872,8 +900,8 @@ function Console({ user }: { user: User }) {
         pulling={pulling}
         onSignOut={onSignOut}
       />
-      <div className={`workspace ${view === "dashboard" || view === "callplan" ? "" : "no-bidbar"}`}>
-        {(view === "dashboard" || view === "callplan") && (
+      <div className={`workspace ${view === "callplan" ? "" : "no-bidbar"}`}>
+        {view === "callplan" && (
           <BidSidebar bids={bidOpps} selectedId={selectedId} onOpen={openOpp} />
         )}
         <div className="main">
@@ -1217,6 +1245,7 @@ function Console({ user }: { user: User }) {
             onRunOutreach={() => onRunOutreach(selected.id)}
             outreachOne={outreachOne}
             onRunOutreachOne={(email) => onRunOutreachOne(selected.id, email)}
+            onContactsChange={(contacts) => onContactsChange(selected.id, contacts)}
           />
         )}
       </section>
@@ -1765,6 +1794,7 @@ function Detail({
   onRunOutreach,
   outreachOne,
   onRunOutreachOne,
+  onContactsChange,
 }: {
   opp: Opportunity;
   tab: TabKey;
@@ -1779,6 +1809,7 @@ function Detail({
   onRunOutreach: () => void;
   outreachOne: string | null;
   onRunOutreachOne: (email: string) => void;
+  onContactsChange: (contacts: RecommendedContact[]) => Promise<void>;
 }) {
   const captured = !!opp.captured_at;
   const docs = opp.documents ?? [];
@@ -1896,6 +1927,7 @@ function Detail({
             onRunOutreach={onRunOutreach}
             outreachOne={outreachOne}
             onRunOutreachOne={onRunOutreachOne}
+            onContactsChange={onContactsChange}
           />
         )}
         {tab === "documents" && <DocumentsTab opp={opp} />}
@@ -2014,18 +2046,41 @@ function ContactsTab({
   onRunOutreach,
   outreachOne,
   onRunOutreachOne,
+  onContactsChange,
 }: {
   opp: Opportunity;
   outreachBusy: boolean;
   onRunOutreach: () => void;
   outreachOne: string | null;
   onRunOutreachOne: (email: string) => void;
+  onContactsChange: (contacts: RecommendedContact[]) => Promise<void>;
 }) {
   const relevant = opp.recommended_contacts ?? [];
   const searched = !!opp.contacts_searched_at;
   const drafts = opp.outreach_drafts ?? [];
   const drafted = !!opp.outreach_drafted_at;
   const emailable = relevant.filter((c) => c.email).length;
+
+  // Manual add/remove. `onContactsChange` persists the whole list; the two helpers just
+  // build the next list and hand it over.
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ name: "", email: "", company: "", title: "" });
+  const removeContact = (idx: number) =>
+    onContactsChange(relevant.filter((_, i) => i !== idx));
+  const submitAdd = () => {
+    const name = form.name.trim();
+    if (!name) return;
+    const added: RecommendedContact = {
+      name,
+      email: form.email.trim() || null,
+      company: form.company.trim() || null,
+      title: form.title.trim() || null,
+      source: "manual",
+    };
+    void onContactsChange([...relevant, added]);
+    setForm({ name: "", email: "", company: "", title: "" });
+    setAdding(false);
+  };
 
   // Collision check: which contacts a teammate is already engaging. Keyed on the
   // actual contact emails (not just opp.id) so it refetches when a background reload
@@ -2053,16 +2108,44 @@ function ContactsTab({
     <>
       <div className="sec-title first sec-row">
         <span>Relevant contacts · from your network</span>
-        {emailable > 0 && (
-          <button className="mini-btn" onClick={onRunOutreach} disabled={outreachBusy}>
-            {outreachBusy
-              ? "Drafting…"
-              : drafted
-                ? "Regenerate emails"
-                : `Draft ${emailable} email${emailable > 1 ? "s" : ""}`}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="mini-btn" onClick={() => setAdding((v) => !v)}>
+            {adding ? "Cancel" : "+ Add contact"}
           </button>
-        )}
+          {emailable > 0 && (
+            <button className="mini-btn" onClick={onRunOutreach} disabled={outreachBusy}>
+              {outreachBusy
+                ? "Drafting…"
+                : drafted
+                  ? "Regenerate emails"
+                  : `Draft ${emailable} email${emailable > 1 ? "s" : ""}`}
+            </button>
+          )}
+        </div>
       </div>
+      {adding && (
+        <div className="rec add-contact">
+          <div className="ac-grid">
+            <input className="ac-in" placeholder="Name *" value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && submitAdd()} autoFocus />
+            <input className="ac-in" placeholder="Email" value={form.email}
+              onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
+            <input className="ac-in" placeholder="Company" value={form.company}
+              onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
+            <input className="ac-in" placeholder="Title" value={form.title}
+              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <button className="mini-btn" onClick={submitAdd} disabled={!form.name.trim()}>
+              Add
+            </button>
+          </div>
+        </div>
+      )}
       {relevant.length > 0 ? (
         <div className="card-list">
           {relevant.map((c, i) => {
@@ -2079,16 +2162,27 @@ function ContactsTab({
                       {c.company && (
                         <span style={{ color: "var(--muted)", fontWeight: 400 }}> · {c.company}</span>
                       )}
+                      {c.source === "manual" && <span className="rec-manual">added</span>}
                     </div>
                     {c.title && (
                       <div style={{ fontSize: 12, color: "var(--faint)", marginTop: 2 }}>{c.title}</div>
                     )}
                   </div>
-                  {c.relevance_score != null && (
-                    <span className="pscore">
-                      P<b>{c.relevance_score}</b>
-                    </span>
-                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {c.relevance_score != null && (
+                      <span className="pscore">
+                        P<b>{c.relevance_score}</b>
+                      </span>
+                    )}
+                    <button
+                      className="rec-remove"
+                      title="Remove from this opportunity"
+                      aria-label={`Remove ${c.name}`}
+                      onClick={() => removeContact(i)}
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
                 {/* What enrichment knows about this person, plus any open question, right
                     where the rep is choosing who to contact. Renders nothing if we hold

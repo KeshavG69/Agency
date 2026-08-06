@@ -69,21 +69,6 @@ export default function TopBar({
       </nav>
 
       <div className="tb-right">
-        <button
-          className="tb-sam"
-          onClick={onPull}
-          disabled={pulling}
-          title="Fetch today's open SAM.gov notices matching your company's NAICS"
-        >
-          {pulling ? (
-            <>
-              <span className="spin" /> Pulling…
-            </>
-          ) : (
-            <>⟳ Pull from SAM.gov</>
-          )}
-        </button>
-
         <div className="tb-user" ref={ref}>
           <button className="tb-userbtn" onClick={() => setMenuOpen((v) => !v)}>
             <span className="tb-avatar">{initials}</span>

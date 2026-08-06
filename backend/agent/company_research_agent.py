@@ -100,7 +100,7 @@ _SKILL_CALL_ALLOWANCE = 3
 def build_company_research_agent(domain: str, budget: int = 3) -> Agent:
     return Agent(
         name="CompanyResearch",
-        model=get_chat_llm_agno(model=settings.ANALYST_MODEL),
+        model=get_chat_llm_agno(model=settings.RESEARCH_MODEL),
         tools=[create_exa_web_search_tool()],
         skills=get_bd_skills(),
         # The budget is ENFORCED here, not merely requested in the prompt. A model that

@@ -46,6 +46,7 @@ export interface RecommendedContact {
   relevance_score?: number | null;
   reason?: string;
   suggested_outreach?: string;
+  source?: string | null; // "manual" when a rep added the contact from the Contacts tab
 }
 // One outreach email the Mail Agent drafted — shaped for the artifact + send tool.
 export interface OutreachDraft {
@@ -546,6 +547,17 @@ export async function setDecision(id: string, decision: BidDecision): Promise<vo
 // Assign an opportunity to members (by user id). Admin only. Empty list = unassign.
 export async function assignOpportunity(id: string, userIds: string[]): Promise<void> {
   await apiClient.post(`/api/opportunities/${id}/assign`, { user_ids: userIds });
+}
+
+// Replace an opportunity's contact list (manual add/remove from the Contacts tab). The UI
+// sends the whole list it wants to keep, so add and remove are the same call. Returns the
+// stored list echoed back by the server.
+export async function updateOpportunityContacts(
+  id: string,
+  contacts: RecommendedContact[],
+): Promise<RecommendedContact[]> {
+  const { data } = await apiClient.put(`/api/opportunities/${id}/contacts`, { contacts });
+  return data.recommended_contacts ?? contacts;
 }
 
 // Mint a FRESH presigned URL for a generated document (the stored one expires).

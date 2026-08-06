@@ -20,6 +20,7 @@ from agno.skills import LocalSkills, Skills
 from agno.tools.function import ToolResult
 
 from agent.company_profile import company_context
+from app.settings import settings
 from client.llm_client import get_chat_llm_agno
 from client.sharepoint_graph import search_sharepoint
 from models.capture import CaptureOutput
@@ -287,7 +288,7 @@ def build_capture_agent(
         name="Capture",
         # Big output budget: the agent writes whole docx/pptx-generation scripts as a single
         # tool argument; 10k truncates the code mid-call -> "missing argument".
-        model=get_chat_llm_agno(max_tokens=60000),
+        model=get_chat_llm_agno(model=settings.CAPTURE_MODEL, max_tokens=60000),
         tools=[
             create_exa_web_search_tool(),
             # create_reasoning_tool(),
