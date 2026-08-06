@@ -606,8 +606,11 @@ class CRMStore:
         return [_serialize(d) for d in cursor]
 
     # Addresses that are machines, not people — nobody can take a call at one, so they never
-    # earn a brief. SAM.gov POC fields are full of them.
-    _NO_REPLY = ("noreply", "no-reply", "no_reply", "donotreply", "do-not-reply", "dibbsbsm")
+    # earn a brief. Kept to unambiguous no-reply patterns ONLY. A shared/role mailbox is NOT
+    # in here: `dibbsbsm@dla.mil` (the DLA DIBBS bid board) is monitored and reps genuinely
+    # email it with solicitation questions. Filtering it removed the sole contact on those
+    # pursuits, which hid the Prep-calls button and stranded briefs already written.
+    _NO_REPLY = ("noreply", "no-reply", "no_reply", "donotreply", "do-not-reply")
 
     @staticmethod
     def _person_name(raw: str | None) -> str | None:
