@@ -371,6 +371,30 @@ export async function fetchContactGraph(): Promise<ContactGraph> {
   return data;
 }
 
+// ---- Contacts LIST (the graph is too heavy at ~3k nodes) ----
+export interface ContactRow {
+  name: string;
+  email?: string | null;
+  company?: string | null;
+  title?: string | null;
+  corr_count?: number;
+  industry?: string | null;
+  last_contact?: string | null;
+}
+// `total` is present only on the first page (offset 0); the client keeps it and pages the rest.
+export interface ContactsPage {
+  items: ContactRow[];
+  total: number | null;
+}
+export async function fetchContactsPage(
+  offset: number,
+  limit: number,
+  q: string,
+): Promise<ContactsPage> {
+  const { data } = await apiClient.get("/api/contacts", { params: { offset, limit, q } });
+  return data;
+}
+
 // ---- SharePoint document structure graph ----
 export interface SPNode {
   id: string;

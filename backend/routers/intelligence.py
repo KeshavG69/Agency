@@ -129,6 +129,32 @@ def pending_suggestions(
             "offset": offset, "limit": limit}
 
 
+@router.get("/suggestions/contacts")
+def suggestion_contacts(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """The review queue grouped BY CONTACT — one entry per person, with how many open
+    suggestions they carry. A rep opens one contact and settles all of theirs at once,
+    instead of the same person appearing three times (title, seniority, function) in a flat
+    list. Ordered by the contact's strongest suggestion, so the easiest wins float up."""
+    org = _org(current_user)
+    facts = get_facts_store().facts
+    match = {"organization_id": org, "status": "PROPOSED"}
+    pipeline = [
+        {"$match": match},
+        {"$group": {"_id": "$email", "count": {"$sum": 1}, "top": {"$max": "$score"}}},
+        {"$sort": {"top": -1, "_id": 1}},
+        {"$skip": offset},
+        {"$limit": limit},
+    ]
+    contacts = [{"email": r["_id"], "count": r["count"]} for r in facts.aggregate(pipeline)]
+    # Distinct-contact total on the first page only; the client keeps it while it scrolls.
+    total = len(facts.distinct("email", match)) if offset == 0 else None
+    return {"contacts": contacts, "total": total, "offset": offset, "limit": limit}
+
+
 # --- what the agents did ------------------------------------------------------------
 
 

@@ -546,6 +546,210 @@ button {
   padding: 0;
 }
 
+/* ---------------- contacts list (replaces the graph) ---------------- */
+.contacts-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.cl-head {
+  padding: 4px 2px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cl-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.cl-title-row h1 {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+.cl-count {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.cl-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.cl-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.cl-row:last-of-type {
+  border-bottom: none;
+}
+.cl-row:hover {
+  background: var(--surface-2);
+}
+.cl-main {
+  min-width: 0;
+  flex: 1;
+}
+.cl-name {
+  font-size: 13.5px;
+  font-weight: 550;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cl-co {
+  color: var(--muted);
+  font-weight: 400;
+}
+.cl-sub {
+  font-size: 12px;
+  color: var(--faint);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cl-corr {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 2px 9px;
+}
+.cl-empty,
+.cl-foot {
+  padding: 18px 16px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+.cl-sentinel {
+  height: 1px;
+}
+
+/* Suggestions review queue (Contacts → To review) — one clickable row per CONTACT. */
+.review-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.review-contact {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.13s var(--ease-out);
+}
+.review-contact:last-of-type {
+  border-bottom: none;
+}
+.review-contact:hover {
+  background: var(--surface-2);
+}
+.review-contact .rc-email {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-contact .rc-count {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 20px;
+  padding: 2px 10px;
+}
+.review-contact .rc-arrow {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* The per-contact review dialog */
+.rev-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--overlay);
+}
+.rev-modal {
+  width: min(560px, 100%);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px -24px color-mix(in srgb, var(--ink) 55%, transparent);
+  overflow: hidden;
+}
+.rev-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.rev-email {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rev-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.rev-head .sheet-btn {
+  position: static;
+  flex-shrink: 0;
+}
+.rev-body {
+  overflow-y: auto;
+  padding: 8px 20px 18px;
+}
+
 /* ---------------- pipeline data table ---------------- */
 .opp-table {
   width: 100%;
@@ -1415,11 +1619,31 @@ button {
 .detail.open {
   transform: translateX(0);
 }
-.sheet-close {
+/* Drag handle on the sheet's left edge — grab it to resize; the expand button toggles a wide
+   preset. The width is set inline from React state, so it isn't in the transform transition. */
+.detail-resize {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 3;
+  transition: background 0.15s ease;
+}
+.detail-resize:hover,
+.detail-resize:active {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.sheet-actions {
   position: absolute;
   top: 14px;
   right: 16px;
   z-index: 2;
+  display: flex;
+  gap: 6px;
+}
+.sheet-btn {
   width: 30px;
   height: 30px;
   display: flex;
@@ -1433,7 +1657,7 @@ button {
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
-.sheet-close:hover {
+.sheet-btn:hover {
   background: var(--surface-2);
   color: var(--ink);
 }
@@ -1467,6 +1691,9 @@ button {
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
+  /* Clear the sheet's action buttons (expand/close) pinned to the top-right, so the priority
+     card never sits under them. */
+  padding-right: 56px;
 }
 .detail h1 {
   font-family: var(--font-display);
@@ -1863,24 +2090,46 @@ button {
 }
 
 /* toast / error line */
-.toast {
+/* Stack container: fixed at bottom-center, newest below. The single <Toaster> owns this;
+   individual toasts are plain flow items inside it (no longer each position:fixed). */
+.toaster {
   position: fixed;
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none; /* clicks pass through the gaps; each toast re-enables its own */
+}
+.toast {
+  pointer-events: auto;
   background: var(--ink);
   color: var(--paper);
   padding: 11px 18px;
   border-radius: 5px;
   font-size: 13px;
-  z-index: 50;
   box-shadow: var(--shadow-md);
   animation: toastIn 0.3s var(--ease-spring);
+  border: none;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  max-width: min(92vw, 460px);
+}
+.toast.error {
+  border-left-color: var(--danger, #d84a4a);
+}
+.toast.success {
+  border-left-color: var(--deadline-week, #2f9e78);
 }
 @keyframes toastIn {
   from {
     opacity: 0;
-    transform: translate(-50%, 10px);
+    transform: translateY(10px);
   }
 }
 

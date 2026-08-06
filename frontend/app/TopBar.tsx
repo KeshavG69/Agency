@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { User } from "@/lib/types";
-
-export type ViewKey = "dashboard" | "pipeline" | "callplan" | "contacts" | "documents" | "org";
+import type { ViewKey } from "@/lib/stores/uiStore";
 
 const NAV: { key: ViewKey; label: string; admin?: boolean }[] = [
   { key: "dashboard", label: "Dashboard" },

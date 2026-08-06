@@ -686,6 +686,57 @@ def search_contacts_hybrid(
     return list(merged.values())
 
 
+def list_contacts_page(
+    owner_email: str, organization_id: str,
+    offset: int = 0, limit: int = 50, q: str = "",
+) -> dict:
+    """One page of an employee's contacts for the Contacts LIST view (replaces the graph).
+
+    Warmest first (corr_count desc, then name), so the people they actually talk to are on
+    top. `q` filters name/email/company/title. Returns {items, total} so the client can
+    infinite-scroll: it stops requesting once it has `total` rows.
+    """
+    owner = (owner_email or "").strip().lower()
+    if not owner or not (organization_id or "").strip():
+        return {"items": [], "total": 0}
+    term = (q or "").strip().lower()
+    where = "p.owner_email = $owner"
+    if term:
+        where += (
+            " AND (toLower(coalesce(p.name,'')) CONTAINS $q"
+            " OR toLower(coalesce(p.email,'')) CONTAINS $q"
+            " OR toLower(coalesce(p.company,'')) CONTAINS $q"
+            " OR toLower(coalesce(p.title,'')) CONTAINS $q)"
+        )
+    g = get_graph(organization_id)
+    params = {"owner": owner, "q": term, "offset": int(offset), "limit": int(limit)}
+    # Count only on the FIRST page (or a new search). Each query is a ~440ms round trip to the
+    # remote graph; the client keeps the total it got on page 1, so paying for it on every
+    # scroll would double the latency for nothing. `total` is None on subsequent pages.
+    total = None
+    if int(offset) == 0:
+        total = int(
+            g.ro_query(f"MATCH (p:Person) WHERE {where} RETURN count(p)", params=params)
+            .result_set[0][0]
+        )
+    res = g.ro_query(
+        f"""
+        MATCH (p:Person) WHERE {where}
+        RETURN p.name, p.email, p.title, p.company, coalesce(p.corr_count, 0),
+               p.industry, p.last_contact
+        ORDER BY coalesce(p.corr_count, 0) DESC, toLower(coalesce(p.name, ''))
+        SKIP $offset LIMIT $limit
+        """,
+        params=params,
+    )
+    items = [
+        {"name": n, "email": e, "title": t, "company": c,
+         "corr_count": corr or 0, "industry": ind, "last_contact": last}
+        for n, e, t, c, corr, ind, last in res.result_set
+    ]
+    return {"items": items, "total": total}  # total is None on pages after the first
+
+
 def candidate_contacts(owner_email: str, organization_id: str, limit: int = 200) -> list[dict]:
     """Pull ONE employee's candidate contacts (+ their company) for the CRM Agent to rank."""
     owner = (owner_email or "").strip().lower()

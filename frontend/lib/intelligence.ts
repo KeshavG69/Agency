@@ -106,6 +106,31 @@ export async function fetchSuggestions(
   return data;
 }
 
+// The review queue grouped BY CONTACT: one entry per person + how many open suggestions they
+// carry, strongest-suggestion first. The rep opens one contact and settles all of theirs.
+export interface SuggestionContact {
+  email: string;
+  count: number;
+}
+export interface SuggestionContactsPage {
+  contacts: SuggestionContact[];
+  total: number | null; // distinct contacts to review; present only on the first page
+  offset: number;
+  limit: number;
+}
+export async function fetchSuggestionContacts(
+  p: { offset?: number; limit?: number } = {},
+): Promise<SuggestionContactsPage> {
+  const qs = new URLSearchParams({
+    offset: String(p.offset ?? 0),
+    limit: String(p.limit ?? 50),
+  });
+  const { data } = await apiClient.get(
+    `/api/intelligence/suggestions/contacts?${qs.toString()}`,
+  );
+  return data;
+}
+
 // THE human action: accept a suggestion (making it human-owned and unoverwritable) or
 // dismiss it (never offered again). Both are enforced in the store, not here.
 export async function decideFact(

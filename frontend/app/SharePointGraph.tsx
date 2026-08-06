@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { fetchSharePointGraph, type SPGraph, type SPNode } from "@/lib/data";
+import { useUiStore } from "@/lib/stores/uiStore";
 import ForceGraph, { type NodeVisual } from "./ForceGraph";
 
 const TYPE: Record<string, { color: string; r: number; square?: boolean }> = {
@@ -226,7 +227,8 @@ function SPBySite({ nodes, edges }: { nodes: SPNode[]; edges: { source: string; 
   );
 }
 
-export default function SharePointGraph({ refreshSignal }: { refreshSignal?: number } = {}) {
+export default function SharePointGraph() {
+  const sharePointRefresh = useUiStore((s) => s.sharePointRefresh);
   const [data, setData] = useState<SPGraph | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>("graph");
@@ -235,8 +237,8 @@ export default function SharePointGraph({ refreshSignal }: { refreshSignal?: num
   // item — a real sync takes a few minutes) and can be triggered by a resync click OR
   // by landing back here right after connecting. Rather than making the user manually
   // reload the page once it's done, poll for a while and pick it up automatically —
-  // re-fetching on mount and every time `refreshSignal` changes (bumped by the parent
-  // on resync / post-connect).
+  // re-fetching on mount and every time the ui store's `sharePointRefresh` bumps
+  // (on resync / post-connect).
   useEffect(() => {
     let cancelled = false;
     let attempt = 0;
@@ -267,7 +269,7 @@ export default function SharePointGraph({ refreshSignal }: { refreshSignal?: num
     return () => {
       cancelled = true;
     };
-  }, [refreshSignal]);
+  }, [sharePointRefresh]);
 
   if (err) return <div className="graph-empty">{err}</div>;
   if (!data) return <div className="graph-empty">Loading structure…</div>;

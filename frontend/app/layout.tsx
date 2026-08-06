@@ -5,6 +5,7 @@ import "./globals.css";
 import AuthProvider from "@/components/AuthProvider";
 import QueryProvider from "@/components/QueryProvider";
 import ThemeProvider from "@/components/ThemeProvider";
+import Toaster from "@/components/Toaster";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 
 export const metadata: Metadata = {
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <ThemeProvider>
             <QueryProvider>
               <AuthProvider>{children}</AuthProvider>
+              <Toaster />
             </QueryProvider>
           </ThemeProvider>
         </NuqsAdapter>

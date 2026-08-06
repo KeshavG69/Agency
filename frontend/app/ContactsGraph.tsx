@@ -2,45 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { fetchContactGraph, type ContactGraph, type GraphNode } from "@/lib/data";
-import ForceGraph, { type NodeVisual } from "./ForceGraph";
+import { useUiStore } from "@/lib/stores/uiStore";
+import SuggestionsReview from "./SuggestionsReview";
 
-const visual = (n: GraphNode): NodeVisual => {
-  if (n.type === "Company") {
-    return { color: "var(--ink)", r: 9, square: true, label: n.label };
-  }
-  const r = 5 + Math.min(Math.sqrt(n.weight || 1) * 1.6, 9);
-  return {
-    color: n.enriched ? "var(--accent)" : "var(--faint)",
-    r,
-    square: false,
-    label: (n.label || "").split(" ")[0].slice(0, 16),
-  };
-};
-
-const card = (n: GraphNode) =>
-  n.type === "Person" ? (
-    <>
-      <div className="gc-name">{n.label}</div>
-      {n.title && <div className="gc-row">{n.title}</div>}
-      {n.company && <div className="gc-row">{n.company}</div>}
-      {n.email && <div className="gc-row mono">{n.email}</div>}
-      <div className="gc-meta">
-        <span>{n.weight}× contacted</span>
-        <span className={`gc-tag ${n.enriched ? "on" : ""}`}>
-          {n.enriched ? "enriched" : "unenriched"}
-        </span>
-      </div>
-    </>
-  ) : (
-    <>
-      <div className="gc-name">{n.label}</div>
-      <div className="gc-row">Company</div>
-    </>
-  );
+// The force-directed graph view was removed: at ~3,000 contacts its physics loop pinned the
+// browser. The List and By-company views (kept below) render the same data as fast tables.
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type ViewMode = "graph" | "list" | "company";
+type ViewMode = "list" | "company" | "review";
 type SortKey = "name" | "company" | "title" | "weight";
 
 function ContactsList({ people }: { people: GraphNode[] }) {
@@ -201,15 +171,16 @@ function ContactsByCompany({ people }: { people: GraphNode[] }) {
   );
 }
 
-export default function ContactsGraph({ refreshSignal }: { refreshSignal?: number } = {}) {
+export default function ContactsGraph() {
+  const contactsRefresh = useUiStore((s) => s.contactsRefresh);
   const [data, setData] = useState<ContactGraph | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [view, setView] = useState<ViewMode>("graph");
+  const [view, setView] = useState<ViewMode>("list");
 
   // Contact ingestion (and disconnect's purge) runs/completes in the background — rather
   // than making the user manually reload the page to see it land, poll for a while and
-  // pick it up automatically. Re-fetches on mount and every time `refreshSignal` changes
-  // (bumped by the parent on ingest / disconnect). Mirrors SharePointGraph's polling.
+  // pick it up automatically. Re-fetches on mount and every time the ui store's
+  // `contactsRefresh` bumps (on ingest / disconnect). Mirrors SharePointGraph's polling.
   useEffect(() => {
     let cancelled = false;
     let attempt = 0;
@@ -239,7 +210,7 @@ export default function ContactsGraph({ refreshSignal }: { refreshSignal?: numbe
     return () => {
       cancelled = true;
     };
-  }, [refreshSignal]);
+  }, [contactsRefresh]);
 
   if (err) return <div className="graph-empty">{err}</div>;
   if (!data) return <div className="graph-empty">Loading network…</div>;
@@ -247,7 +218,7 @@ export default function ContactsGraph({ refreshSignal }: { refreshSignal?: numbe
     return (
       <div className="graph-empty">
         <div className="ge-t">No contacts yet</div>
-        Connect Outlook and sync to build the network graph.
+        Connect Outlook and sync to build your contact list.
       </div>
     );
 
@@ -255,9 +226,9 @@ export default function ContactsGraph({ refreshSignal }: { refreshSignal?: numbe
   const companies = data.nodes.filter((n) => n.type === "Company").length;
 
   const tabs: { key: ViewMode; label: string }[] = [
-    { key: "graph", label: "Graph" },
     { key: "list", label: "List" },
     { key: "company", label: "By company" },
+    { key: "review", label: "To review" },
   ];
 
   const heading = (
@@ -282,34 +253,6 @@ export default function ContactsGraph({ refreshSignal }: { refreshSignal?: numbe
     </div>
   );
 
-  if (view === "graph") {
-    return (
-      <ForceGraph
-        nodes={data.nodes}
-        edges={data.edges}
-        visual={visual}
-        card={card}
-        header={heading}
-        legend={
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div className="graph-legend">
-              <span>
-                <i className="dot" style={{ background: "var(--accent)" }} /> enriched
-              </span>
-              <span>
-                <i className="dot" style={{ background: "var(--faint)" }} /> unenriched
-              </span>
-              <span>
-                <i className="dot sq" style={{ background: "var(--ink)" }} /> company
-              </span>
-            </div>
-            {tabBar}
-          </div>
-        }
-      />
-    );
-  }
-
   return (
     <div className="graph-wrap">
       <div className="graph-head">
@@ -318,6 +261,7 @@ export default function ContactsGraph({ refreshSignal }: { refreshSignal?: numbe
       </div>
       {view === "list" && <ContactsList people={people} />}
       {view === "company" && <ContactsByCompany people={people} />}
+      {view === "review" && <SuggestionsReview />}
     </div>
   );
 }

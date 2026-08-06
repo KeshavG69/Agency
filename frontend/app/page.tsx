@@ -1,10 +1,17 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AgentTrail } from "@/components/agent/AgentTrail";
 import { PageTransition, switchView } from "@/components/PageTransition";
-import { ContactFacts } from "@/components/agent/ContactFacts";
 import { useQueryState, useQueryStates, parseAsString, debounce } from "nuqs";
 import { pipelineParsers } from "@/lib/pipeline-params";
 import {
@@ -57,7 +64,9 @@ import AddOpportunityModal from "./AddOpportunityModal";
 import AssignModal from "./AssignModal";
 import ContactReviewModal from "./ContactReviewModal";
 import SharePointFolderPicker from "./SharePointFolderPicker";
-import TopBar, { type ViewKey } from "./TopBar";
+import TopBar from "./TopBar";
+import { useUiStore, type ViewKey, type TabKey } from "@/lib/stores/uiStore";
+import { useToastStore } from "@/lib/stores/toastStore";
 import BidSidebar from "./BidSidebar";
 import FilterBar, { type Facets, EMPTY_FACETS, activeFacetCount } from "./FilterBar";
 import { DonutStat, type ChartConfig } from "@/components/dashboard-charts";
@@ -144,8 +153,6 @@ const FILTERS: { key: string; label: string; match: (o: Opportunity) => boolean 
   { key: "new", label: "Awaiting analysis", match: (o) => !o.bid_decision && !isIngesting(o) },
 ];
 
-type TabKey = "info" | "contacts" | "documents" | "activity" | "agent";
-
 // Auth gate: the whole console is behind login. While auth initializes we show a
 // splash; if there's no session we bounce to /auth/login. Console only mounts
 // (and only fires its data loads) once we have an authenticated user.
@@ -184,7 +191,12 @@ function Console({ user }: { user: User }) {
   const qc = useQueryClient();
   const cache = useCollecctCache();
   const prefetchOpp = usePrefetchOpportunity();
-  const [error, setError] = useState<string | null>(null);
+  const pushToast = useToastStore((s) => s.push);
+  // Thin shim over the toast store: existing handlers call setError("msg") / setError(null).
+  // A message becomes a toast; the null-clear is a no-op now that toasts auto-dismiss.
+  const setError = (msg: string | null) => {
+    if (msg) pushToast(msg);
+  };
   // Filter state lives in the URL, so a filtered pipeline is shareable and the back button
   // works. `q` is separate from the group because it carries a debounce — folding a debounced
   // key into useQueryStates would debounce every filter with it.
@@ -224,8 +236,31 @@ function Console({ user }: { user: User }) {
       }),
     [setUrlParams],
   );
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabKey>("info");
+  const selectedId = useUiStore((s) => s.selectedId);
+  const setSelectedId = useUiStore((s) => s.setSelectedId);
+  // Detail sheet width: null = the CSS default. The expand button sets a wide preset; dragging
+  // the sheet's left edge sets a custom px width. Both write here so there's one source of truth.
+  const detailWidth = useUiStore((s) => s.detailWidth);
+  const setDetailWidth = useUiStore((s) => s.setDetailWidth);
+  const startDetailResize = useCallback((e: ReactMouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      // The sheet is anchored to the right, so its width is the distance from the pointer to
+      // the right edge. Clamp between a readable minimum and (nearly) the full window.
+      const w = Math.min(Math.max(window.innerWidth - ev.clientX, 380), window.innerWidth - 48);
+      setDetailWidth(w);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+    };
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+  const tab = useUiStore((s) => s.tab);
+  const setTab = useUiStore((s) => s.setTab);
   const [pulling, setPulling] = useState(false);
   const [analyzingSel, setAnalyzingSel] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -260,22 +295,23 @@ function Console({ user }: { user: User }) {
   const [spConnecting, setSpConnecting] = useState(false);
   const [resyncing, setResyncing] = useState(false);
   const [spResyncing, setSpResyncing] = useState(false);
-  // Bumped whenever a SharePoint sync starts (manual resync, or the post-connect OAuth
-  // landing) so the Library graph knows to start polling for the background crawl's
-  // result — the user shouldn't have to reload the page to see it appear.
-  const [spGraphRefresh, setSpGraphRefresh] = useState(0);
-  // Same idea for the Contacts graph — bumped after an ingest completes (background task)
-  // or Outlook is disconnected (which purges the graph server-side), so the graph
-  // re-fetches instead of showing stale data until a manual reload.
-  const [contactsGraphRefresh, setContactsGraphRefresh] = useState(0);
-  const [spPickerOpen, setSpPickerOpen] = useState(false);
-  const [addOppOpen, setAddOppOpen] = useState(false);
+  // "Go refetch" signals for the graph views, now in the ui store so the graph components
+  // subscribe directly instead of taking a refreshSignal prop. Bumped when a sync starts
+  // (SharePoint) / an ingest completes (Contacts) / a disconnect purges the graph server-side.
+  const bumpSharePointRefresh = useUiStore((s) => s.bumpSharePointRefresh);
+  const bumpContactsRefresh = useUiStore((s) => s.bumpContactsRefresh);
+  const spPickerOpen = useUiStore((s) => s.spPickerOpen);
+  const setSpPickerOpen = useUiStore((s) => s.setSpPickerOpen);
+  const addOppOpen = useUiStore((s) => s.addOppOpen);
+  const setAddOppOpen = useUiStore((s) => s.setAddOppOpen);
   // Outlook contact-review dialog (pick which contacts to ingest).
-  const [reviewOpen, setReviewOpen] = useState(false);
+  const reviewOpen = useUiStore((s) => s.reviewOpen);
+  const setReviewOpen = useUiStore((s) => s.setReviewOpen);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewContacts, setReviewContacts] = useState<ContactCandidate[]>([]);
-  const [view, setView] = useState<ViewKey>("dashboard");
+  const view = useUiStore((s) => s.view);
+  const setView = useUiStore((s) => s.setView);
   // Every view change goes through here so the swap animates. Sibling tabs imply no
   // hierarchy, so the transition is "lateral": a fade and a 12px rise, no directional slide.
   const navigate = useCallback((v: ViewKey) => switchView(() => setView(v)), []);
@@ -339,6 +375,13 @@ function Console({ user }: { user: User }) {
 
   const rows = listQuery.data?.items ?? NO_OPPS;
   const total = listQuery.data?.total ?? 0;
+
+  // The list failing to reach the backend is its own toast. Fires on the false→true edge, so
+  // a retry that stays failed doesn't re-toast on every poll.
+  useEffect(() => {
+    if (listQuery.isError) pushToast("Can't reach the backend — start it on :8000.");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listQuery.isError]);
 
   // Reload the pipeline list + the Bid set. Both live under the "opportunities" key prefix,
   // so one invalidation covers what used to be loadPage() + loadBids(). Awaitable: the SAM
@@ -550,7 +593,7 @@ function Console({ user }: { user: User }) {
       // real backend status per stage, so this never causes a stage to be skipped. But if a
       // stage's delete call itself errored, tell the admin rather than implying full success.
       setConnection("sharepoint", false, null);
-      setSpGraphRefresh((n) => n + 1); // disconnect purges the graph server-side — re-fetch to reflect it
+      bumpSharePointRefresh(); // disconnect purges the graph server-side — re-fetch to reflect it
       if (result.failed.length > 0) {
         setError(
           `SharePoint disconnect was incomplete (${result.failed.join(", ")} still connected) — try again.`,
@@ -570,7 +613,7 @@ function Console({ user }: { user: User }) {
     try {
       await disconnectOutlook(outlookAccount);
       setConnection("outlook", false, null);
-      setContactsGraphRefresh((n) => n + 1); // disconnect purges the graph server-side — re-fetch to reflect it
+      bumpContactsRefresh(); // disconnect purges the graph server-side — re-fetch to reflect it
     } catch {
       setError("Couldn't disconnect Outlook.");
     } finally {
@@ -606,7 +649,7 @@ function Console({ user }: { user: User }) {
     try {
       await ingestOutlookContacts(selected);
       setError(`Importing ${selected.length} contact${selected.length === 1 ? "" : "s"} — this runs in the background.`);
-      setContactsGraphRefresh((n) => n + 1);
+      bumpContactsRefresh();
     } catch {
       setError("Couldn't import the selected contacts.");
     } finally {
@@ -616,8 +659,8 @@ function Console({ user }: { user: User }) {
 
   // Returning from the Outlook OAuth round-trip lands on /?review=outlook — open the
   // review dialog automatically, then strip the param so a refresh doesn't re-open it.
-  // Landing on /?connected=sharepoint (after the Graph+REST OAuth chain) bumps
-  // spGraphRefresh so the Library graph starts polling for the background crawl's
+  // Landing on /?connected=sharepoint (after the Graph+REST OAuth chain) bumps the
+  // SharePoint refresh signal so the Library graph starts polling for the background crawl's
   // result automatically — the user shouldn't have to manually reload the page.
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -627,7 +670,7 @@ function Console({ user }: { user: User }) {
     }
     if (p.get("connected") === "sharepoint") {
       navigate("documents");        // land on Library tab
-      setSpGraphRefresh((n) => n + 1);
+      bumpSharePointRefresh();
       setSpPickerOpen(true);        // open folder picker immediately
     }
     if (p.has("review") || p.has("connected")) {
@@ -645,7 +688,7 @@ function Console({ user }: { user: User }) {
     try {
       await syncSharePointStructure();
       setError("SharePoint resync started — it runs in the background.");
-      setSpGraphRefresh((n) => n + 1);
+      bumpSharePointRefresh();
     } catch {
       setError("Couldn't start the SharePoint resync.");
     } finally {
@@ -886,6 +929,24 @@ function Console({ user }: { user: User }) {
   // progress state.
   const loadingMore = listQuery.isFetching && visible.length < limit && visible.length < total;
 
+  // Infinite scroll: widen the window as the sentinel nears the viewport, so the pipeline
+  // grows on scroll instead of a "Load more" click. Same `setListWindow` the button used.
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !loadingMore && visible.length < total) {
+          setListWindow({ params, extra: extra + PAGE });
+        }
+      },
+      { rootMargin: "400px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [loadingMore, visible.length, total, params, extra]);
+
   // The open opp's full record (enriched, lazy-loaded). Falls back to the slim list row while
   // the detail fetch is in flight, so the header/title don't flash empty.
   const selected = selectedOpp ?? rows.find((o) => o.id === selectedId) ?? null;
@@ -931,7 +992,7 @@ function Console({ user }: { user: User }) {
             onDisconnect={onDisconnectOutlook}
             onResync={onResyncContacts}
           />
-          <ContactsGraph refreshSignal={contactsGraphRefresh} />
+          <ContactsGraph />
         </section>
       ) : view === "documents" ? (
         <section className="graph-pane">
@@ -949,7 +1010,7 @@ function Console({ user }: { user: User }) {
               extraAction={{ label: "Select folders", onClick: () => setSpPickerOpen(true) }}
             />
           )}
-          <SharePointGraph refreshSignal={spGraphRefresh} />
+          <SharePointGraph />
         </section>
       ) : view === "org" ? (
         <section className="graph-pane">
@@ -1174,14 +1235,10 @@ function Console({ user }: { user: User }) {
               )}
             </tbody>
           </table>
+          {/* Infinite-scroll sentinel: the observer above widens the window as this nears the
+              viewport. Only mounted while there's more to load. */}
           {visible.length > 0 && visible.length < total && (
-            <button
-              className="load-more"
-              onClick={() => setListWindow({ params, extra: extra + PAGE })}
-              disabled={loadingMore}
-            >
-              {loadingMore ? "Loading…" : `Load more · ${visible.length} of ${total}`}
-            </button>
+            <div ref={loadMoreRef} className="load-sentinel" aria-hidden />
           )}
         </div>
         {/* The footer is the ONLY thing that moves during a refetch. It is always mounted at
@@ -1193,12 +1250,19 @@ function Console({ user }: { user: User }) {
           className="flex h-6 shrink-0 items-center justify-center gap-2 text-[11px] text-muted-foreground"
           aria-hidden
         >
-          {listQuery.isFetching && visible.length > 0 && (
+          {loadingMore ? (
+            <>
+              <span className="size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              Loading more…
+            </>
+          ) : listQuery.isFetching && visible.length > 0 ? (
             <>
               <span className="size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
               Updating…
             </>
-          )}
+          ) : total > 0 ? (
+            `${visible.length} of ${total}`
+          ) : null}
         </div>
       </section>
 
@@ -1210,15 +1274,42 @@ function Console({ user }: { user: User }) {
         onClick={() => setSelectedId(null)}
         aria-hidden
       />
-      <section className={`detail ${selectedId ? "open" : ""}`} role="dialog" aria-modal="true">
-        <button
-          className="sheet-close"
-          onClick={() => setSelectedId(null)}
-          aria-label="Close"
-          title="Close"
-        >
-          ✕
-        </button>
+      <section
+        className={`detail ${selectedId ? "open" : ""}`}
+        style={detailWidth ? { width: `${detailWidth}px` } : undefined}
+        role="dialog"
+        aria-modal="true"
+      >
+        {/* Drag the left edge to resize. */}
+        <div
+          className="detail-resize"
+          onMouseDown={startDetailResize}
+          role="separator"
+          aria-orientation="vertical"
+          title="Drag to resize"
+        />
+        <div className="sheet-actions">
+          <button
+            className="sheet-btn"
+            onClick={() =>
+              setDetailWidth(
+                detailWidth ? null : Math.min(1180, Math.round(window.innerWidth * 0.94)),
+              )
+            }
+            aria-label={detailWidth ? "Collapse" : "Expand"}
+            title={detailWidth ? "Collapse" : "Expand"}
+          >
+            {detailWidth ? "⤡" : "⤢"}
+          </button>
+          <button
+            className="sheet-btn"
+            onClick={() => setSelectedId(null)}
+            aria-label="Close"
+            title="Close"
+          >
+            ✕
+          </button>
+        </div>
         {!selected ? (
           selectedId && detailLoading ? (
             <div className="empty-detail">
@@ -1233,8 +1324,6 @@ function Console({ user }: { user: User }) {
         ) : (
           <Detail
             opp={selected}
-            tab={tab}
-            setTab={setTab}
             capturing={capturing}
             isAdmin={isAdmin}
             members={members}
@@ -1290,13 +1379,6 @@ function Console({ user }: { user: User }) {
         />
       )}
 
-      {/* The list's own failure is derived, not stored: it clears itself the moment a retry
-          succeeds, where the old setError left it on screen until the next user action. */}
-      {(error ?? (listQuery.isError ? "Can't reach the backend — start it on :8000." : null)) && (
-        <div className="toast">
-          {error ?? "Can't reach the backend — start it on :8000."}
-        </div>
-      )}
     </main>
   );
 }
@@ -1678,28 +1760,27 @@ function DashCalendar({
 function CallPlanView() {
   const [calls, setCalls] = useState<CallPlanItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
+  const pushToast = useToastStore((s) => s.push);
 
   const load = useCallback(async () => {
     try {
       setCalls(await fetchCallPlan());
     } catch {
-      setErr("Couldn't load the call plan — is the backend running?");
+      pushToast("Couldn't load the call plan — is the backend running?");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pushToast]);
   useEffect(() => {
     load();
   }, [load]);
 
   const update = async (callId: string, status: string) => {
-    setErr(null);
     setCalls((prev) => prev.map((c) => (c.call_id === callId ? { ...c, status } : c))); // optimistic
     try {
       await setCallStatus(callId, status);
     } catch {
-      setErr("Couldn't update the call — reverting.");
+      pushToast("Couldn't update the call — reverting.");
       load();
     }
   };
@@ -1775,15 +1856,12 @@ function CallPlanView() {
           ))}
         </div>
       )}
-      {err && <div className="toast">{err}</div>}
     </div>
   );
 }
 
 function Detail({
   opp,
-  tab,
-  setTab,
   capturing,
   isAdmin,
   members,
@@ -1797,8 +1875,6 @@ function Detail({
   onContactsChange,
 }: {
   opp: Opportunity;
-  tab: TabKey;
-  setTab: (t: TabKey) => void;
   capturing: boolean;
   isAdmin: boolean;
   members: TeamMember[];
@@ -1811,6 +1887,8 @@ function Detail({
   onRunOutreachOne: (email: string) => void;
   onContactsChange: (contacts: RecommendedContact[]) => Promise<void>;
 }) {
+  const tab = useUiStore((s) => s.tab);
+  const setTab = useUiStore((s) => s.setTab);
   const captured = !!opp.captured_at;
   const docs = opp.documents ?? [];
   const calls = opp.calls ?? [];
@@ -2184,10 +2262,9 @@ function ContactsTab({
                     </button>
                   </div>
                 </div>
-                {/* What enrichment knows about this person, plus any open question, right
-                    where the rep is choosing who to contact. Renders nothing if we hold
-                    neither. */}
-                {c.email && <ContactFacts email={c.email} />}
+                {/* No enrichment SUGGESTIONS here: on an opportunity a rep wants the finished
+                    picture, not "is this right?" prompts. Confirming guesses lives in the
+                    Contacts view (Contacts → To review). */}
                 {c.email && (collisions[c.email.toLowerCase()]?.length ?? 0) > 0 && (
                   <div className="collision-warn">
                     ⚠{" "}
