@@ -122,7 +122,7 @@ def build_analyst_agent(organization_id: str | None = None) -> Agent:
     return Agent(
         name="Analyst",
         model=get_chat_llm_agno(model=settings.ANALYST_MODEL),
-        tools=[create_exa_web_search_tool(), create_reasoning_tool()],
+        tools=[create_exa_web_search_tool()],# create_reasoning_tool()],
         # Additive: the grounding + brief-writing rules are also stated inline below, and
         # stay there. The skills are the versioned reference the agent can pull in full
         # when it needs the detail. De-duplicating the two is a deliberate follow-up —

@@ -113,7 +113,7 @@ def build_mail_agent(
         model=get_chat_llm_agno(max_tokens=12000),
         tools=[
             search_sharepoint_tool,
-            create_reasoning_tool(),
+            # create_reasoning_tool(),
             # SharePoint READ tools run under THIS ORG's SharePoint connection.
             *load_sharepoint_tools(sharepoint_entity(organization_id or "")),
         ],

@@ -21,7 +21,7 @@ from app.settings import settings
 from client.graph_store import search_contacts_hybrid
 from client.llm_client import get_chat_llm_agno
 from models.contact import CRMResult
-from utils.agno_tools import create_exa_web_search_tool, create_reasoning_tool
+from utils.agno_tools import create_exa_web_search_tool,create_reasoning_tool
 from utils.doc_parse import document_context
 from utils.structured import coerce_output
 
@@ -90,7 +90,7 @@ def build_crm_agent(
     return Agent(
         name="CRM",
         model=get_chat_llm_agno(model=settings.ANALYST_MODEL),
-        tools=[search_network, create_exa_web_search_tool(), create_reasoning_tool()],
+        tools=[search_network, create_exa_web_search_tool()],# create_reasoning_tool()],
         # `identity-matching` and `company-research` are the two that earn their place
         # here: this agent judges who a contact is and whether their employer matters.
         skills=get_bd_skills(),

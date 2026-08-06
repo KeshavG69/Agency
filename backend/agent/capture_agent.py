@@ -290,7 +290,7 @@ def build_capture_agent(
         model=get_chat_llm_agno(max_tokens=60000),
         tools=[
             create_exa_web_search_tool(),
-            create_reasoning_tool(),
+            # create_reasoning_tool(),
             search_sharepoint_tool,
             fetch_sharepoint_image,
             generate_image,
