@@ -592,7 +592,10 @@ export async function getDocUrl(documentId: string): Promise<string> {
 
 // ---- Call plan (consolidated BD call sheet across the pipeline) ----
 export interface CallPlanItem {
-  call_id: string;
+  // null for a pursuit that reached capture but has no Analyst call row — it still appears
+  // (and preps calls), it just has nothing to mark Done/Dismiss.
+  call_id: string | null;
+  captured?: boolean;
   opportunity_id: string;
   opportunity_title?: string;
   agency?: string;
@@ -605,6 +608,7 @@ export interface CallPlanItem {
   talking_point?: string;
   status: string; // "Planned" | "Done" | "Dismissed"
   created_at?: string;
+  contacts?: CallContact[]; // everyone worth calling — the dialog's per-person tabs
 }
 
 export async function fetchCallPlan(): Promise<CallPlanItem[]> {
@@ -614,6 +618,65 @@ export async function fetchCallPlan(): Promise<CallPlanItem[]> {
 
 export async function setCallStatus(callId: string, status: string): Promise<void> {
   await apiClient.post(`/api/calls/${callId}/status`, { status });
+}
+
+// ---- Per-contact call briefs ("how do I talk to THIS person?") ----
+// The Call Plan dialog has one tab per contact on a pursuit; each tab is its own brief, run
+// on demand when the rep opens it. Every brief is grounded in that contact's WHOLE ORG — the
+// agent reads every thread in the rep's mailbox with anyone at their email domain.
+export interface CallContact {
+  name?: string | null;
+  email: string;
+  title?: string | null;
+  company?: string | null;
+  source?: string; // "poc" | "recommended" | "manual"
+}
+// No contact name/email here — the caller already knows who the brief is for (the tab they
+// clicked), and the stored doc carries `contact_email`.
+export interface CallBriefBody {
+  org_name: string;
+  summary: string;
+  relationship?: string | null;
+  org_context?: string | null;
+  approach: string; // THE line: how to talk to this person
+  talking_points: string[];
+  open_threads: string[];
+  suggested_ask: string;
+}
+export interface CallBriefDoc {
+  opportunity_id: string;
+  contact_email: string;
+  org_domain: string;
+  brief: CallBriefBody;
+  mail_count?: number;
+  refreshed_at?: string;
+}
+export interface CallBriefsResponse {
+  opportunity_id: string;
+  briefs: CallBriefDoc[];
+  pending: string[]; // contact emails currently being prepared in the background
+}
+
+// Kick off the brief for ONE contact (runs in the background). `queued` is false when one is
+// already being prepared — either way a brief is on its way.
+export async function prepCall(
+  opportunityId: string,
+  contactEmail: string,
+): Promise<{ opportunity_id: string; contact_email: string; queued: boolean; pending: boolean }> {
+  const { data } = await apiClient.post("/api/calls/brief", {
+    opportunity_id: opportunityId,
+    contact_email: contactEmail,
+  });
+  return data;
+}
+
+// Every contact-brief for one pursuit + which are still being prepared — one payload for the
+// whole dialog, so the tabs don't each poll separately.
+export async function fetchCallBriefs(opportunityId: string): Promise<CallBriefsResponse> {
+  const { data } = await apiClient.get(
+    `/api/calls/brief/${encodeURIComponent(opportunityId)}`,
+  );
+  return data;
 }
 
 // ---- Outreach collision ("someone's already talking to this contact") ----

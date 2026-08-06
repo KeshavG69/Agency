@@ -103,19 +103,10 @@ class FactsStore:
         client = MongoClient(settings.MONGODB_URL)
         self.db = client[settings.MONGODB_DATABASE]
         self.facts = self.db["contact_facts"]
-        # One row per distinct claim; re-recording merges into it rather than duplicating.
-        self.facts.create_index(
-            [("organization_id", 1), ("email", 1), ("field", 1), ("value", 1)], unique=True
-        )
-        # The read path: everything we hold on one contact, split by status.
-        self.facts.create_index([("organization_id", 1), ("email", 1), ("status", 1)])
-        # The org-wide review queue: filter (organization_id, status), sort by score desc.
-        # WITHOUT the third key Mongo must load every PROPOSED row in the org and sort it
-        # in memory — fine at fifty suggestions, a cliff once a mailbox sweep has produced
-        # thousands. With it, the index IS the sort order and the query stops at `limit`.
-        self.facts.create_index(
-            [("organization_id", 1), ("status", 1), ("score", -1)]
-        )
+        # Indexes live in utils/db_indexes.py: the unique (org, email, field, value) claim
+        # key, the per-contact read split by status, and the org-wide review queue's
+        # (org, status, score desc) — that third key is what keeps the queue's sort
+        # index-backed instead of an in-memory sort over every open suggestion.
 
     # --- write path ---------------------------------------------------------------
 

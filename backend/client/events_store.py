@@ -35,10 +35,8 @@ class EventsStore:
         client = MongoClient(settings.MONGODB_URL, tz_aware=True)
         self.db = client[settings.MONGODB_DATABASE]
         self.events = self.db["agent_events"]
-        # The only read that matters: the trail for one record, oldest first.
-        self.events.create_index(
-            [("organization_id", 1), ("subject.id", 1), ("created_at", 1)]
-        )
+        # Indexes live in utils/db_indexes.py: (org, subject.id, created_at) serves the only
+        # read that matters — the trail for one record, oldest first.
 
     def record(
         self,

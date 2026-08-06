@@ -528,43 +528,56 @@ def stats(organization_id: str) -> dict:
 
 
 def get_network(owner_email: str, organization_id: str) -> dict:
-    """Return ONE employee's contact graph as { nodes, edges } for the UI to render."""
+    """ONE employee's contacts, as { nodes, edges }, for the Contacts view.
+
+    DELIBERATELY ONE QUERY. This used to run three — the people, the Company nodes, and the
+    WORKS_AT edges — because it fed a force-directed graph. That view was removed (it pinned
+    the browser at this scale) and the List / By-company views render from the people alone,
+    so two of the three queries were pure waste: measured on a 3,219-contact mailbox they
+    cost ~1.2s of ~3.0s and put 2,015 Company nodes + 3,219 edges (about half of a 1.1 MB
+    payload) on the wire for nobody to read.
+
+    `external` is dropped from the projection for the same reason — no caller reads it.
+    `edges` stays in the response shape (always empty) so the client contract is unchanged.
+
+    THE COMPANY COMES FROM THE RELATIONSHIP, NOT `p.company`. The ingest writes employers as
+    `(:Person)-[:WORKS_AT]->(:Company)` and leaves `p.company` null on every node, so reading
+    the property gave every contact "Unknown company" in the By-company view. The OPTIONAL
+    MATCH folds the employer into this same single round trip; `coalesce` keeps the property
+    as a fallback for any node written the other way.
+
+    The label+property lookup is index-backed (`Person.owner_email`, see get_graph), so what
+    remains is row materialisation and transfer — hence the projection is kept to exactly the
+    fields the UI renders.
+    """
     owner = (owner_email or "").strip().lower()
     if not owner or not (organization_id or "").strip():
         return {"nodes": [], "edges": []}
     g = get_graph(organization_id)
-    nodes: list[dict] = []
-    edges: list[dict] = []
 
-    for email, name, title, company, external, corr, enriched in g.ro_query(
+    # Keyed by email so a contact carrying more than one WORKS_AT edge yields one row, not a
+    # duplicate per employer — the OPTIONAL MATCH would otherwise fan the person out.
+    by_email: dict[str, dict] = {}
+    for email, name, title, company, corr, enriched in g.ro_query(
         "MATCH (p:Person {owner_email: $owner}) "
-        "RETURN p.email, p.name, p.title, p.company, p.external, p.corr_count, p.enriched",
+        "OPTIONAL MATCH (p)-[:WORKS_AT]->(c:Company) "
+        "RETURN p.email, p.name, p.title, coalesce(c.name, p.company), "
+        "p.corr_count, p.enriched",
         params={"owner": owner},
     ).result_set:
-        nodes.append({
+        if email in by_email and not company:
+            continue  # keep the row that actually found an employer
+        by_email[email] = {
             "id": email,
             "label": name or email,
             "type": "Person",
             "email": email,
             "title": title,
             "company": company,
-            "external": external,
             "enriched": enriched,
             "weight": corr or 1,
-        })
-
-    for (cname,) in g.ro_query(
-        "MATCH (c:Company {owner_email: $owner}) RETURN c.name", params={"owner": owner}
-    ).result_set:
-        nodes.append({"id": f"company:{cname}", "label": cname, "type": "Company"})
-
-    for email, cname in g.ro_query(
-        "MATCH (p:Person {owner_email: $owner})-[:WORKS_AT]->(c:Company) RETURN p.email, c.name",
-        params={"owner": owner},
-    ).result_set:
-        edges.append({"source": email, "target": f"company:{cname}", "type": "WORKS_AT"})
-
-    return {"nodes": nodes, "edges": edges}
+        }
+    return {"nodes": list(by_email.values()), "edges": []}
 
 
 def get_contact_relationship(email: str, owner_email: str, organization_id: str) -> dict | None:

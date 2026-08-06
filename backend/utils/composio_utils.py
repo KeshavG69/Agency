@@ -491,6 +491,102 @@ def fetch_recent_messages(
     return out
 
 
+def fetch_messages_for_domain(
+    user_id: str, domain: str, limit: int = 80, page_size: int = 50,
+) -> list[dict]:
+    """Every message in the rep's mailbox involving ANYONE at `domain` — the whole-org mail
+    history behind a meeting, not one person's thread. Meeting Jane @ cbp.dhs.gov surfaces
+    every thread the rep has with anyone @cbp.dhs.gov, which is what the call brief reads to
+    know where things stand across the whole organisation.
+
+    Uses Outlook search (KQL `participants:` = from + to + cc + bcc), then re-checks each hit
+    in Python so a loose body-text match can't slip in a message that never involved the
+    domain. Falls back to filtering the recent-message window by domain if search is
+    unavailable, so a brief is never empty just because search hiccuped.
+    """
+    dom = (domain or "").strip().lower().lstrip("@")
+    if not dom:
+        return []
+
+    def _involves(sender: str, recips: list[str]) -> bool:
+        return any(
+            p and (p.endswith("@" + dom) or p.endswith("." + dom)) for p in [sender, *recips]
+        )
+
+    def _normalize(m: dict) -> dict:
+        sender_email, sender_name = _addr(m.get("from"))
+        recips = [
+            (a or "").strip().lower()
+            for a, _ in (
+                _addr(r)
+                for r in ((m.get("toRecipients") or []) + (m.get("ccRecipients") or []))
+            )
+            if a
+        ]
+        body = m.get("body")
+        if isinstance(body, dict):
+            content = body.get("content") or ""
+            is_html = (body.get("contentType") or "").lower() == "html"
+        else:
+            content, is_html = (body or ""), None
+        return {
+            "message_id": m.get("id"),
+            "sender_email": (sender_email or "").strip().lower(),
+            "sender_name": sender_name,
+            "recipients": recips,
+            "subject": m.get("subject") or "",
+            "body": content,
+            "body_is_html": is_html,
+            "received_at": m.get("receivedDateTime"),
+            "conversation_id": m.get("conversationId"),
+        }
+
+    select = ["subject", "from", "toRecipients", "ccRecipients", "body", "bodyPreview",
+              "receivedDateTime", "conversationId"]
+
+    # Primary: mailbox-wide search by domain.
+    out: list[dict] = []
+    client = get_composio_client()
+    skip = 0
+    try:
+        while len(out) < limit:
+            resp = client.tools.execute(
+                "OUTLOOK_SEARCH_MESSAGES",
+                {"user_id": "me", "query": f"participants:{dom}",
+                 "top": min(page_size, max(1, limit - len(out))), "skip": skip,
+                 "select": select},
+                user_id=user_id, dangerously_skip_version_check=True,
+            )
+            data = _resp_data(resp)
+            page = data.get("value") or data.get("messages") or data.get("items") or []
+            if not page:
+                break
+            for m in page:
+                nm = _normalize(m)
+                if _involves(nm["sender_email"], nm["recipients"]):
+                    out.append(nm)
+                    if len(out) >= limit:
+                        break
+            skip += len(page)
+            if not data.get("@odata.nextLink"):
+                break
+    except Exception as exc:  # noqa: BLE001 — search is best-effort; the fallback covers it
+        logger.warning(
+            "Domain mail search failed for %s (%s); falling back to recent window", dom, exc
+        )
+
+    if out:
+        return out
+
+    # Fallback: filter the recent window by domain. Bounded, but never worse than empty.
+    for nm in fetch_recent_messages(user_id, limit=400):
+        if _involves(nm["sender_email"], nm.get("recipients") or []):
+            out.append(nm)
+            if len(out) >= limit:
+                break
+    return out
+
+
 def fetch_outlook_message(message_id: str, user_id: str) -> dict:
     """One Outlook message's essentials for triage (sender, subject, snippet, ...).
 

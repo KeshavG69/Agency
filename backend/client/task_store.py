@@ -53,7 +53,7 @@ PRIORITY: dict[str, int] = {
 
 # Kinds that need an LLM (slow, costly, long lease) vs mechanical work (fast, no model).
 # Two lanes so a signature parse never queues behind a five-minute research run.
-LLM_KINDS: tuple[str, ...] = ("research_company", "recheck_opportunity")
+LLM_KINDS: tuple[str, ...] = ("research_company", "recheck_opportunity", "call_brief")
 DIRECT_KINDS: tuple[str, ...] = ("parse_signatures",)
 
 LEASE_LLM_MS = 30 * 60_000
@@ -84,14 +84,8 @@ class TaskStore:
         client = MongoClient(settings.MONGODB_URL, tz_aware=True)
         self.db = client[settings.MONGODB_DATABASE]
         self.tasks = self.db["agent_tasks"]
-        # De-dup lookups: "is this piece of work already queued or recently done?"
-        self.tasks.create_index(
-            [("organization_id", 1), ("kind", 1), ("subject.id", 1), ("finished_at", 1)]
-        )
-        # The claim query: open work, due, unleased, highest priority first.
-        self.tasks.create_index(
-            [("finished_at", 1), ("due_at", 1), ("lease_until", 1), ("priority", -1)]
-        )
+        # Indexes live in utils/db_indexes.py: the de-dup lookup ("already queued or recently
+        # done?") and the claim query (open, due, unleased, highest priority first).
 
     # --- putting work on the list ---------------------------------------------------
 
@@ -194,6 +188,29 @@ class TaskStore:
                 break
             claimed.append(_serialize(doc))  # type: ignore[arg-type]
         return claimed
+
+    def claim_one(self, task_id: str, lease_ms: int) -> Optional[dict]:
+        """Lease ONE specific row by id — for user-triggered work that should run immediately
+        instead of waiting for the next tick. Same atomic lease + attempt bump as `claim_due`,
+        so the tick can never also claim it, and a crash still self-heals when the lease
+        expires. Returns None if the row is gone, finished, exhausted, or already leased
+        (i.e. the tick beat us to it — which is fine, it will run there)."""
+        oid = _oid(task_id)
+        if not oid:
+            return None
+        now = _utc_now()
+        until = now + timedelta(milliseconds=lease_ms)
+        doc = self.tasks.find_one_and_update(
+            {
+                "_id": oid,
+                "finished_at": None,
+                "attempts": {"$lt": MAX_ATTEMPTS},
+                "$or": [{"lease_until": None}, {"lease_until": {"$lt": now}}],
+            },
+            {"$set": {"lease_until": until}, "$inc": {"attempts": 1}},
+            return_document=ReturnDocument.AFTER,
+        )
+        return _serialize(doc) if doc else None
 
     # --- finishing -------------------------------------------------------------------
 

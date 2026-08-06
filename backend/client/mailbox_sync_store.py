@@ -21,7 +21,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-from pymongo import ASCENDING, MongoClient
+from pymongo import MongoClient
 
 from app.settings import settings
 
@@ -37,10 +37,8 @@ class MailboxSyncStore:
         client = MongoClient(settings.MONGODB_URL, tz_aware=True)
         self.db = client[settings.MONGODB_DATABASE]
         self.rows = self.db["mailbox_sync"]
-        # One row per mailbox; the lookup and the uniqueness constraint are the same key.
-        self.rows.create_index(
-            [("owner_email", ASCENDING), ("organization_id", ASCENDING)], unique=True
-        )
+        # Indexes live in utils/db_indexes.py: one row per mailbox — the lookup and the
+        # uniqueness constraint are the same (owner_email, organization_id) key.
 
     @staticmethod
     def _key(owner_email: str, organization_id: str) -> dict:

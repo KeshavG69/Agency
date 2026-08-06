@@ -67,16 +67,28 @@ import SharePointFolderPicker from "./SharePointFolderPicker";
 import TopBar from "./TopBar";
 import { useUiStore, type ViewKey, type TabKey } from "@/lib/stores/uiStore";
 import { useToastStore } from "@/lib/stores/toastStore";
+import CallBriefDialog from "./CallBriefDialog";
+import CallPlanFilters, {
+  EMPTY_CALL_FILTERS,
+  type CallFilters,
+} from "./CallPlanFilters";
 import BidSidebar from "./BidSidebar";
 import FilterBar, { type Facets, EMPTY_FACETS, activeFacetCount } from "./FilterBar";
 import { DonutStat, type ChartConfig } from "@/components/dashboard-charts";
-import { bidsQuery, opportunityListQuery, opportunityQuery } from "@/lib/queries";
+import {
+  bidsQuery,
+  opportunityListQuery,
+  opportunityQuery,
+  organizationQuery,
+  queryKeys,
+  type OrgBundle,
+} from "@/lib/queries";
 import { useCollecctCache } from "@/lib/cache";
 import { usePrefetchOpportunity } from "@/lib/use-prefetch";
 import { dueLabel } from "@/lib/format";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useConnectionStore } from "@/lib/stores/connectionStore";
-import { organizationsApi, type Organization } from "@/lib/api/organizations";
+import { organizationsApi } from "@/lib/api/organizations";
 import { invitationsApi } from "@/lib/api/invitations";
 import type { User, TeamMember, Invitation } from "@/lib/types";
 
@@ -1760,6 +1772,8 @@ function DashCalendar({
 function CallPlanView() {
   const [calls, setCalls] = useState<CallPlanItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [prepOpp, setPrepOpp] = useState<string | null>(null);
+  const [filters, setFilters] = useState<CallFilters>(EMPTY_CALL_FILTERS);
   const pushToast = useToastStore((s) => s.push);
 
   const load = useCallback(async () => {
@@ -1786,30 +1800,105 @@ function CallPlanView() {
   };
 
   const active = calls.filter((c) => c.status === "Planned");
-  const resolved = calls.filter((c) => c.status !== "Planned");
-  const ordered = [...active, ...resolved];
+  // The pursuit whose call-prep dialog is open (one tab per contact).
+  const prepping = calls.find((c) => c.opportunity_id === prepOpp) ?? null;
+
+  // Every agency on the sheet, for the Agency picker.
+  const agencyOptions = useMemo(
+    () => Array.from(new Set(calls.map((c) => c.agency).filter(Boolean) as string[])).sort(),
+    [calls],
+  );
+
+  const counts = useMemo(
+    () => ({
+      planned: calls.filter((c) => c.status === "Planned").length,
+      done: calls.filter((c) => c.status === "Done").length,
+      dismissed: calls.filter((c) => c.status === "Dismissed").length,
+      all: calls.length,
+    }),
+    [calls],
+  );
+
+  const ordered = useMemo(() => {
+    const needle = filters.q.trim().toLowerCase();
+    const rows = calls.filter((c) => {
+      if (filters.status !== "all") {
+        const want = { planned: "Planned", done: "Done", dismissed: "Dismissed" }[filters.status];
+        if (c.status !== want) return false;
+      }
+      if (filters.agencies.length && !filters.agencies.includes(c.agency ?? "")) return false;
+      if (filters.due !== "any") {
+        const { days } = dueLabel(c.response_deadline);
+        if (days == null) return false;
+        if (filters.due === "overdue" ? days >= 0 : days < 0 || days > Number(filters.due))
+          return false;
+      }
+      if (needle) {
+        const hay = [
+          c.opportunity_title, c.agency, c.talking_point, c.poc_name, c.poc_email,
+          ...(c.contacts ?? []).flatMap((p) => [p.name, p.email, p.company]),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
+    });
+    // Unresolved first within the current selection — a done call shouldn't sit above a
+    // pursuit still waiting on a call.
+    return [
+      ...rows.filter((c) => c.status === "Planned"),
+      ...rows.filter((c) => c.status !== "Planned"),
+    ];
+  }, [calls, filters]);
 
   return (
     <div className="callplan">
       <div className="cp-head">
         <h2>
-          Call Plan <span className="c">{active.length}</span>
+          Call Plan{" "}
+          <span className="c" title={`${active.length} still to call`}>
+            {ordered.length}
+          </span>
         </h2>
         <div className="cp-sub">
-          Calls the Analyst recommends across your pipeline — your consolidated call sheet.
+          Every pursuit that has been through capture, plus the calls the Analyst recommends —
+          your consolidated call sheet.
         </div>
       </div>
+
+      {calls.length > 0 && (
+        <CallPlanFilters
+          filters={filters}
+          onChange={setFilters}
+          agencyOptions={agencyOptions}
+          counts={counts}
+          onClear={() => setFilters(EMPTY_CALL_FILTERS)}
+        />
+      )}
+
       {loading ? (
         <div className="cp-empty">Loading…</div>
       ) : calls.length === 0 ? (
         <div className="cp-empty">
-          No calls planned yet. The Analyst adds a call here whenever it marks an
-          opportunity <b>Bid</b> with a recommended outreach.
+          Nothing to call on yet. A pursuit lands here once capture has run on it, or when the
+          Analyst marks an opportunity <b>Bid</b> with a recommended outreach.
+        </div>
+      ) : ordered.length === 0 ? (
+        <div className="cp-empty">
+          No calls match these filters.{" "}
+          <button className="sel-link" onClick={() => setFilters(EMPTY_CALL_FILTERS)}>
+            Clear them
+          </button>
         </div>
       ) : (
         <div className="cp-list">
           {ordered.map((c) => (
-            <div className={`cp-card ${c.status !== "Planned" ? "muted" : ""}`} key={c.call_id}>
+            <div
+              className={`cp-card ${c.status !== "Planned" ? "muted" : ""}`}
+              key={c.opportunity_id}
+            >
               <div className="cp-top">
                 <div style={{ minWidth: 0 }}>
                   <div className="cp-title">{c.opportunity_title ?? "Opportunity"}</div>
@@ -1833,19 +1922,33 @@ function CallPlanView() {
                   {c.poc_email && c.poc_name ? ` · ${c.poc_email}` : ""}
                 </span>
                 <div className="cp-actions">
-                  {c.status === "Planned" ? (
+                  {(c.contacts?.length ?? 0) > 0 && (
+                    <button
+                      className="mini-btn"
+                      onClick={() => setPrepOpp(c.opportunity_id)}
+                      title="Open the call prep — one brief per person"
+                    >
+                      Prep calls
+                      <span className="cp-ct">{c.contacts!.length}</span>
+                    </button>
+                  )}
+                  {/* Done/Dismiss act on the Analyst's call row. A pursuit that reached
+                      capture without one has nothing to mark — it just preps calls. */}
+                  {!c.call_id ? (
+                    c.captured && <span className="cp-status done">Captured</span>
+                  ) : c.status === "Planned" ? (
                     <>
-                      <button className="mini-btn" onClick={() => update(c.call_id, "Done")}>
+                      <button className="mini-btn" onClick={() => update(c.call_id!, "Done")}>
                         Mark done
                       </button>
-                      <button className="sel-link" onClick={() => update(c.call_id, "Dismissed")}>
+                      <button className="sel-link" onClick={() => update(c.call_id!, "Dismissed")}>
                         Dismiss
                       </button>
                     </>
                   ) : (
                     <>
                       <span className={`cp-status ${c.status.toLowerCase()}`}>{c.status}</span>
-                      <button className="sel-link" onClick={() => update(c.call_id, "Planned")}>
+                      <button className="sel-link" onClick={() => update(c.call_id!, "Planned")}>
                         Reopen
                       </button>
                     </>
@@ -1855,6 +1958,15 @@ function CallPlanView() {
             </div>
           ))}
         </div>
+      )}
+
+      {prepping && (
+        <CallBriefDialog
+          opportunityId={prepping.opportunity_id}
+          title={prepping.opportunity_title ?? "Opportunity"}
+          contacts={prepping.contacts ?? []}
+          onClose={() => setPrepOpp(null)}
+        />
       )}
     </div>
   );
@@ -2731,15 +2843,12 @@ const orgLabel: React.CSSProperties = {
 };
 
 function OrgPanel({ meEmail }: { meEmail: string }) {
-  const [org, setOrg] = useState<Organization | null>(null);
+  const qc = useQueryClient();
   const [orgName, setOrgName] = useState("");
   const [uei, setUei] = useState("");
   const [savingOrg, setSavingOrg] = useState(false);
   const [orgMsg, setOrgMsg] = useState<string | null>(null);
   const [subTab, setSubTab] = useState<"settings" | "team">("settings");
-  const [members, setMembers] = useState<TeamMember[]>([]);
-  const [invites, setInvites] = useState<Invitation[]>([]);
-  const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -2747,31 +2856,27 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
   const [inviting, setInviting] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const [o, m, inv] = await Promise.all([
-        organizationsApi.getMyOrganization().catch(() => null),
-        organizationsApi.getMembers(),
-        invitationsApi.listInvitations("pending").catch(() => [] as Invitation[]),
-      ]);
-      if (o) {
-        setOrg(o);
-        setOrgName(o.name ?? "");
-        setUei(o.uei ?? "");
-      }
-      setMembers(m);
-      setInvites(inv);
-      setErr(null);
-    } catch (e) {
-      setErr(errText(e, "Couldn't load the organisation."));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Cached: the panel's three reads (org + members + pending invites) as one query, so
+  // re-opening Organisation is instant instead of re-fetching all three every time.
+  const orgQ = useQuery(organizationQuery());
+  const org = orgQ.data?.org ?? null;
+  const members = orgQ.data?.members ?? [];
+  const invites = orgQ.data?.invites ?? [];
+  const loading = orgQ.isPending;
 
+  // Mutations still say `load()`; it now invalidates the cache and lets the query refetch.
+  const load = useCallback(
+    () => qc.invalidateQueries({ queryKey: queryKeys.organization }),
+    [qc],
+  );
+
+  // Seed the editable fields from the org — keyed on its id so a background refetch can
+  // never overwrite what the user is currently typing.
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!org) return;
+    setOrgName(org.name ?? "");
+    setUei(org.uei ?? "");
+  }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Single action: save the name + UEI, then automatically pull the company's
   // details from SAM.gov (if a UEI is set).
@@ -2796,7 +2901,11 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
       } else {
         setOrgMsg("Saved.");
       }
-      setOrg(merged);
+      // Write the saved org straight into the cache — no refetch needed, and members/invites
+      // are untouched by this mutation.
+      qc.setQueryData(queryKeys.organization, (prev: OrgBundle | undefined) =>
+        prev ? { ...prev, org: merged } : prev,
+      );
     } catch (e) {
       setErr(errText(e, "Couldn't save the organisation."));
     } finally {

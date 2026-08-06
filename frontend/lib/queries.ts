@@ -13,15 +13,20 @@ import { queryOptions } from "@tanstack/react-query";
 
 import {
   fetchBids,
+  fetchContactGraph,
   fetchFacets,
   fetchOpportunity,
   fetchOpportunityCounts,
   fetchOpportunityPage,
   fetchOpportunitySharePointFiles,
   fetchPostedDates,
+  fetchSharePointGraph,
   type OpportunityPage,
   type PipelineParams,
 } from "@/lib/data";
+import { invitationsApi } from "@/lib/api/invitations";
+import { organizationsApi } from "@/lib/api/organizations";
+import type { Invitation, TeamMember } from "@/lib/types";
 import {
   fetchAgentEvents,
   fetchContactFacts,
@@ -57,6 +62,9 @@ export const queryKeys = {
   suggestions: (p: { offset?: number; limit?: number }) => ["suggestions", p] as const,
   agentEvents: (subjectId: string, limit: number) => ["agent-events", subjectId, limit] as const,
   queueHealth: ["queue-health"] as const,
+  contactGraph: ["contact-graph"] as const,
+  sharePointGraph: ["sharepoint-graph"] as const,
+  organization: ["organization"] as const,
 } as const;
 
 // ---- pipeline ----------------------------------------------------------------------
@@ -177,5 +185,64 @@ export function queueHealthQuery() {
     queryKey: queryKeys.queueHealth,
     queryFn: fetchQueueHealth,
     staleTime: 15_000,
+  });
+}
+
+// ---- graphs + organisation ----------------------------------------------------------
+
+/**
+ * The acting employee's contact graph (people / companies / relationships).
+ *
+ * Cached deliberately: this is the heavy FalkorDB read — a remote hop of a few hundred ms
+ * that can return thousands of nodes — and it used to be refetched from scratch on every
+ * mount, then polled unconditionally every 5s for five minutes. Switching to the Contacts
+ * tab and back now costs nothing until the data is actually stale.
+ *
+ * Callers drive live updates with `refetchInterval`, and only while an ingest is genuinely
+ * in flight (see the ui store's `contactsRefresh` signal) — not on every visit.
+ */
+export function contactGraphQuery() {
+  return queryOptions({
+    queryKey: queryKeys.contactGraph,
+    queryFn: fetchContactGraph,
+    staleTime: 2 * 60_000,
+  });
+}
+
+/** The org's SharePoint structure graph. Same shape and reasoning as the contact graph. */
+export function sharePointGraphQuery() {
+  return queryOptions({
+    queryKey: queryKeys.sharePointGraph,
+    queryFn: fetchSharePointGraph,
+    staleTime: 2 * 60_000,
+  });
+}
+
+/**
+ * The Organisation panel's three reads in one query: the org, its members, and its pending
+ * invitations. One cache entry because the panel always needs all three and they are
+ * invalidated together by the same mutations (save / invite / revoke / role change).
+ *
+ * The org read is tolerant of failure (a user with no org still gets the members list), so a
+ * missing org resolves to null rather than failing the whole panel.
+ */
+export interface OrgBundle {
+  org: Awaited<ReturnType<typeof organizationsApi.getMyOrganization>> | null;
+  members: TeamMember[];
+  invites: Invitation[];
+}
+
+export function organizationQuery() {
+  return queryOptions({
+    queryKey: queryKeys.organization,
+    queryFn: async (): Promise<OrgBundle> => {
+      const [org, members, invites] = await Promise.all([
+        organizationsApi.getMyOrganization().catch(() => null),
+        organizationsApi.getMembers(),
+        invitationsApi.listInvitations("pending").catch(() => [] as Invitation[]),
+      ]);
+      return { org, members: members as TeamMember[], invites: invites as Invitation[] };
+    },
+    staleTime: 60_000,
   });
 }

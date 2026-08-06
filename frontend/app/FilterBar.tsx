@@ -34,7 +34,8 @@ export function activeFacetCount(f: Facets): number {
 }
 
 // A dropdown of checkboxes for a single multi-select facet (Agency / NAICS / …).
-function MultiPicker({
+// Exported so the Call Plan's filter bar renders an identical Agency picker.
+export function MultiPicker({
   label,
   options,
   selected,

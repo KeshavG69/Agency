@@ -96,6 +96,7 @@ class Settings(BaseSettings):
     RESEARCH_MODEL: str = "openai/gpt-5.4-mini"  # company research
     CAPTURE_MODEL: str = "openai/gpt-5.6-terra"  # capture strategy + deliverables
     MAIL_MODEL: str = "openai/gpt-5.6-terra"     # outreach drafting
+    BRIEF_MODEL: str = "openai/gpt-5.6-terra"    # call brief (org-level meeting prep)
 
     # Manual opportunity upload — the small/fast model that digests big solicitation
     # packages. If the whole package fits (<= STUFF_MAX) it's kept verbatim with no

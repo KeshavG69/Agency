@@ -61,10 +61,9 @@ def tick() -> dict:
     return {"direct": len(direct), "llm": len(llm), "retired": len(retired)}
 
 
-@celery_app.task(bind=True, name="agent_tasks.run", max_retries=0)
-def run_agent_task(self, task: dict) -> dict:
-    """Run one leased row. No retry here: the LEASE is the retry mechanism — if this dies,
-    the lease expires and the tick picks the row up again with its attempt count intact."""
+def _run(task: dict) -> dict:
+    """Dispatch one leased row to its handler by kind. Plain function so both the tick's task
+    and the immediate 'run now' task share it without calling one Celery task from another."""
     kind = task.get("kind")
     handler = _HANDLERS.get(kind)
     if handler is None:
@@ -72,6 +71,26 @@ def run_agent_task(self, task: dict) -> dict:
         logger.warning("agent_tasks: no handler for kind %r", kind)
         return {"id": task.get("id"), "handled": False}
     return handler(task)
+
+
+@celery_app.task(name="agent_tasks.run_now")
+def run_task_now(task_id: str) -> dict:
+    """Run a specific queued row immediately, instead of waiting for the minute tick — for
+    user-triggered work (e.g. a rep clicking 'Prep this call') where a spinner is on screen.
+
+    Leases the row first (claim_one), so the tick can't also pick it up. If it's already
+    leased/finished, do nothing: the tick has it, or it's done."""
+    task = get_task_store().claim_one(task_id, LEASE_LLM_MS)
+    if not task:
+        return {"id": task_id, "ran": False}
+    return _run(task)
+
+
+@celery_app.task(bind=True, name="agent_tasks.run", max_retries=0)
+def run_agent_task(self, task: dict) -> dict:
+    """Run one leased row. No retry here: the LEASE is the retry mechanism — if this dies,
+    the lease expires and the tick picks the row up again with its attempt count intact."""
+    return _run(task)
 
 
 # --- handlers ----------------------------------------------------------------------
@@ -237,7 +256,70 @@ def _emails_on_domain(organization_id: str, domain: str) -> list[str]:
         return []
 
 
+def _domain_of(email: str | None) -> str:
+    return (email or "").strip().lower().rpartition("@")[2]
+
+
+def _call_brief(task: dict) -> dict:
+    """Prep a call with ONE person — grounded in their whole organisation's mail.
+
+    Subject id is `"{opportunity_id}::{contact_email}::{rep_email}"`: one brief per contact
+    (the Call Plan dialog's tabs), per rep (it reads THEIR mailbox). Takes the contact's own
+    email domain as the organisation, pulls every message the rep has with anyone there, and
+    has the Call-Brief agent turn it into "how to talk to this person".
+    """
+    from agent.brief_agent import run_call_brief
+    from client.crm_store import get_crm_store
+    from utils.composio_utils import fetch_messages_for_domain
+
+    store = get_task_store()
+    org = task["organization_id"]
+    parts = (task["subject"]["id"] or "").split("::")
+    if len(parts) != 3 or not all(parts):
+        store.complete_task(task["id"], "Malformed call-brief subject (need opp::contact::rep).")
+        return {"id": task["id"], "briefed": False}
+    opp_id, contact_email, employee_email = parts
+
+    crm = get_crm_store()
+    opp = crm.get_opportunity(opp_id, org)
+    if not opp:
+        store.complete_task(task["id"], "The opportunity this call names is gone.")
+        return {"id": task["id"], "briefed": False}
+
+    # Take the contact from the opportunity so we brief with their real name/title, not just
+    # an address. (An address we no longer recognise is still briefable — just thinner.)
+    contact = next(
+        (c for c in crm.call_contacts(opp) if c["email"] == contact_email),
+        {"email": contact_email},
+    )
+    org_domain = _domain_of(contact_email)
+    if not org_domain:
+        store.complete_task(task["id"], "No organisation domain to anchor this brief on.")
+        record_event(org, "call_brief", "opportunity", opp_id, "could not prep the call",
+                     f"{contact_email} has no usable email domain.", ok=False)
+        return {"id": task["id"], "briefed": False}
+
+    # The whole-org read: every thread with ANYONE at their domain, not just this person.
+    mail = fetch_messages_for_domain(employee_email, org_domain)
+    brief = run_call_brief(opp, contact, org_domain, mail)
+
+    crm.upsert_call_brief(
+        org, opp_id, contact_email, employee_email, org_domain, brief.model_dump(),
+        mail_count=len(mail),
+    )
+    outcome = (f"Prepped {contact.get('name') or contact_email} "
+               f"from {len(mail)} message(s) with {org_domain}.")
+    store.complete_task(task["id"], outcome)
+    record_event(org, "call_brief", "opportunity", opp_id,
+                 f"prepped the call with {contact.get('name') or contact_email}", outcome,
+                 tool="outlook_search")
+    logger.info("Call brief: opp %s / %s (%s): %s", opp_id, contact_email, org_domain, outcome)
+    return {"id": task["id"], "briefed": True, "contact": contact_email,
+            "org_domain": org_domain, "mail": len(mail)}
+
+
 _HANDLERS = {
     "research_company": _research_company,
     "recheck_opportunity": _recheck_opportunity,
+    "call_brief": _call_brief,
 }

@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { fetchContactGraph, type ContactGraph, type GraphNode } from "@/lib/data";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { type GraphNode } from "@/lib/data";
+import { contactGraphQuery } from "@/lib/queries";
 import { useUiStore } from "@/lib/stores/uiStore";
 import SuggestionsReview from "./SuggestionsReview";
 
 // The force-directed graph view was removed: at ~3,000 contacts its physics loop pinned the
 // browser. The List and By-company views (kept below) render the same data as fast tables.
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type ViewMode = "list" | "company" | "review";
 type SortKey = "name" | "company" | "title" | "weight";
@@ -102,8 +102,16 @@ function ContactsList({ people }: { people: GraphNode[] }) {
   );
 }
 
+// How many company cards to mount at once. A real mailbox groups into ~2,000 employers, and
+// mounting every card (each carrying its whole member list) is ~20k DOM nodes in one
+// synchronous render — the same thing that made the old force graph unusable. Cards stream in
+// as the user scrolls instead.
+const COMPANY_PAGE = 40;
+
 function ContactsByCompany({ people }: { people: GraphNode[] }) {
   const [q, setQ] = useState("");
+  const [shown, setShown] = useState(COMPANY_PAGE);
+  const sentinel = useRef<HTMLDivElement | null>(null);
 
   const groups = useMemo(() => {
     const by = new Map<string, GraphNode[]>();
@@ -130,6 +138,28 @@ function ContactsByCompany({ people }: { people: GraphNode[] }) {
     return out;
   }, [people, q]);
 
+  // A new search is a new list — start from the top of it.
+  useEffect(() => {
+    setShown(COMPANY_PAGE);
+  }, [q]);
+
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setShown((s) => (s >= groups.length ? s : s + COMPANY_PAGE));
+        }
+      },
+      { rootMargin: "400px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [groups.length]);
+
+  const visible = groups.slice(0, shown);
+
   return (
     <div className="view-list">
       <div className="view-toolbar">
@@ -142,7 +172,7 @@ function ContactsByCompany({ people }: { people: GraphNode[] }) {
         <div className="view-count">{groups.length} companies</div>
       </div>
       <div className="view-companies">
-        {groups.map((g) => (
+        {visible.map((g) => (
           <details key={g.name} className="company-card" open={groups.length <= 8}>
             <summary>
               <span className="cc-name">{g.name}</span>
@@ -153,10 +183,14 @@ function ContactsByCompany({ people }: { people: GraphNode[] }) {
                 .slice()
                 .sort((a, b) => (b.weight || 0) - (a.weight || 0))
                 .map((m) => (
+                  // Every cell is rendered even when empty. Skipping the title span
+                  // collapsed the row's only flexible slot, so a contact with no title had
+                  // its email slide left into the title column while everyone else's stayed
+                  // right — the columns stopped lining up down the list.
                   <li key={m.id}>
                     <span className="vt-name">{m.label}</span>
-                    {m.title && <span className="cc-title">{m.title}</span>}
-                    {m.email && <span className="cc-email mono">{m.email}</span>}
+                    <span className="cc-title">{m.title || ""}</span>
+                    <span className="cc-email mono">{m.email || ""}</span>
                     <span className={`gc-tag ${m.enriched ? "on" : ""}`}>
                       {m.enriched ? "enriched" : "unenriched"}
                     </span>
@@ -166,53 +200,49 @@ function ContactsByCompany({ people }: { people: GraphNode[] }) {
           </details>
         ))}
         {groups.length === 0 && <div className="view-empty-row">No matches.</div>}
+        <div ref={sentinel} className="cl-sentinel" />
+        {visible.length < groups.length && (
+          <div className="cl-foot">
+            Showing {visible.length.toLocaleString()} of {groups.length.toLocaleString()}{" "}
+            companies — scroll for more
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
+// How long to keep watching after an ingest/disconnect kicks off. The background task takes
+// a couple of minutes; past this we stop asking rather than polling into the void.
+const WATCH_MS = 5 * 60_000;
+
 export default function ContactsGraph() {
   const contactsRefresh = useUiStore((s) => s.contactsRefresh);
-  const [data, setData] = useState<ContactGraph | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>("list");
 
-  // Contact ingestion (and disconnect's purge) runs/completes in the background — rather
-  // than making the user manually reload the page to see it land, poll for a while and
-  // pick it up automatically. Re-fetches on mount and every time the ui store's
-  // `contactsRefresh` bumps (on ingest / disconnect). Mirrors SharePointGraph's polling.
+  // Watch ONLY while an ingest is actually in flight. This used to poll every 5s for five
+  // minutes on every single mount — a heavy FalkorDB read repeated ~60 times whether or not
+  // anything was happening. Now the cached query serves revisits instantly, and the poll runs
+  // only after `contactsRefresh` bumps (ingest / disconnect purge).
+  const watchUntil = useRef(0);
+  const first = useRef(true);
   useEffect(() => {
-    let cancelled = false;
-    let attempt = 0;
-    const maxAttempts = 60; // ~5 min at 5s intervals
-
-    const tick = async () => {
-      try {
-        const fresh = await fetchContactGraph();
-        if (cancelled) return;
-        setErr(null);
-        setData((prev) =>
-          prev && prev.nodes.length === fresh.nodes.length && prev.edges.length === fresh.edges.length
-            ? prev
-            : fresh,
-        );
-      } catch {
-        if (!cancelled) setErr("Couldn't load the graph — is the backend + FalkorDB up?");
-      }
-      attempt++;
-      if (!cancelled && attempt < maxAttempts) {
-        await sleep(5000);
-        if (!cancelled) tick();
-      }
-    };
-
-    tick();
-    return () => {
-      cancelled = true;
-    };
+    if (first.current) {
+      first.current = false; // a plain visit is not a reason to watch
+      return;
+    }
+    watchUntil.current = Date.now() + WATCH_MS;
   }, [contactsRefresh]);
 
-  if (err) return <div className="graph-empty">{err}</div>;
+  const q = useQuery({
+    ...contactGraphQuery(),
+    // Evaluated per tick, so watching stops on its own once the window closes.
+    refetchInterval: () => (Date.now() < watchUntil.current ? 5000 : false),
+  });
+  const data = q.data ?? null;
+
+  if (q.isError && !data)
+    return <div className="graph-empty">Couldn&apos;t load the graph — is the backend + FalkorDB up?</div>;
   if (!data) return <div className="graph-empty">Loading network…</div>;
   if (data.nodes.length === 0)
     return (
@@ -223,7 +253,9 @@ export default function ContactsGraph() {
     );
 
   const people = data.nodes.filter((n) => n.type === "Person");
-  const companies = data.nodes.filter((n) => n.type === "Company").length;
+  // Counted from the people themselves. The API used to ship a Company node per employer
+  // purely so this line could count them — thousands of extra nodes for one number.
+  const companies = new Set(people.map((p) => p.company).filter(Boolean)).size;
 
   const tabs: { key: ViewMode; label: string }[] = [
     { key: "list", label: "List" },
