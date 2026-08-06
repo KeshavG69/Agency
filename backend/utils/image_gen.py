@@ -17,6 +17,7 @@ import logging
 import httpx
 
 from app.settings import settings
+from client.langfuse_client import observe
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ _EXT_BY_MIME = {
 }
 
 
+@observe(name="image-gen", as_type="generation")
 def generate_image(
     prompt: str,
     *,

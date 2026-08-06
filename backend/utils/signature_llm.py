@@ -26,6 +26,7 @@ from typing import Optional
 import httpx
 
 from app.settings import settings
+from client.langfuse_client import observe
 from utils.signature import (
     derive_function,
     derive_seniority,
@@ -73,6 +74,7 @@ def _clean(value) -> Optional[str]:
     return v[:200]
 
 
+@observe(name="signature-llm", as_type="generation")
 def extract_signature_llm(
     body: Optional[str],
     sender_email: str,

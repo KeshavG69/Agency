@@ -16,6 +16,14 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from app.settings import settings
 
+# Turn on LLM tracing as a side effect of importing the LLM client. Agno agents and LangChain
+# both build their models through here and both call the openai SDK underneath, so this single
+# import instruments that SDK once and every model call downstream lands in Langfuse. No-op
+# when Langfuse keys aren't set. See client/langfuse_client.py.
+from client.langfuse_client import init_langfuse  # noqa: E402
+
+init_langfuse()
+
 _DEFAULT_MODEL = "openai/gpt-5.4-mini"
 
 

@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     # OpenAI — embeddings (optional, used by the cached LLM client)
     OPENAI_API_KEY: str = ""
 
+    # Langfuse — LLM observability. When both keys are set, client/langfuse_client.py
+    # instruments the openai SDK (which Agno agents and LangChain both use) so every model
+    # call is traced. Empty keys => tracing is a silent no-op.
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_BASE_URL: str = "https://us.cloud.langfuse.com"
+
     # iDrive e2 — S3-compatible storage for generated documents
     IDRIVE_E2_ENDPOINT: str = ""
     IDRIVE_E2_ACCESS_KEY: str = ""
