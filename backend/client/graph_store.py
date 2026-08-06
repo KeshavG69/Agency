@@ -274,7 +274,13 @@ def _upsert_chunk(g, rows: list[dict]) -> None:
               p.title = row.title,
               p.department = row.department,
               p.prospect_id = row.prospect_id,
-              p.enriched = row.enriched,
+              // STICKY, never blind-overwritten — the same trap `industry` below documents.
+              // A re-sync carries row.enriched = false for every domain the dataset still
+              // cannot resolve, which is exactly the set the research agent was paid to
+              // answer. Writing that false straight in would un-enrich every researched
+              // company on the next sync, silently throwing the research away.
+              p.enriched = CASE
+                  WHEN row.enriched THEN true ELSE coalesce(p.enriched, false) END,
               // NEVER blind-overwrite enrichment. A re-sync carries row.industry = NULL for
               // any domain the free dataset still cannot resolve — which is exactly the set
               // the research agent was paid to answer. Writing that NULL straight in erased
@@ -452,13 +458,114 @@ def update_company_for_domain(
         SET p.industry = coalesce(row.industry, p.industry),
             p.company_website = coalesce(row.company_website, p.company_website),
             p.company_linkedin = coalesce(row.company_linkedin, p.company_linkedin),
-            p.company_needs_research = false
+            p.company_needs_research = false,
+            // We now know who this company is, so the record IS enriched — however we
+            // learned it. Without this the agent could research a company in full and the
+            // contact still displayed "unenriched" forever, because the flag was only ever
+            // set by a dataset hit at ingest.
+            p.enriched = true
         FOREACH (_ IN CASE WHEN row.embedding IS NULL THEN [] ELSE [1] END |
           SET p.embedding = vecf32(row.embedding)
         )
         """,
         params={"rows": rows},
     )
+    return len(rows)
+
+
+# Which settled fact fields land on a Person node, and under which property. `phone` and
+# `function` have no counterpart in the Outlook sync, so they simply appear on the node.
+_FACT_TO_NODE_PROP = {
+    "title": "title",
+    "phone": "phone",
+    "seniority": "seniority",
+    "function": "function",
+}
+# The two that feed `_contact_text`, so changing either makes the stored embedding stale.
+_EMBEDDED_FACT_FIELDS = ("title", "seniority")
+
+
+def apply_facts_to_contacts(organization_id: str, facts_by_email: dict[str, dict]) -> int:
+    """Write SETTLED facts onto the contacts they describe. Returns contacts updated.
+
+    THE MISSING HALF OF THE ENRICHMENT LOOP. The daily mail sweep reads job titles out of
+    signature blocks and the review queue lets a rep accept them, but both only ever wrote to
+    `contact_facts` — a store nothing on the Contacts list reads. So the sweep could learn a
+    title, the rep could accept it, and the contact row still showed whatever Outlook's
+    address book said (or nothing). This is what closes that loop.
+
+    Applies across EVERY owner's slice in the org graph, like `update_company_for_domain`: the
+    person's job title is the same fact whoever happens to know them.
+
+    `facts_by_email` is {email: {field: value}} using FACT_FIELDS names; unknown fields are
+    ignored. Values are only ever written, never blanked — a missing key leaves the node's
+    existing value alone.
+    """
+    org = (organization_id or "").strip()
+    rows = [
+        {"email": (email or "").strip().lower(),
+         **{prop: fields.get(f) for f, prop in _FACT_TO_NODE_PROP.items()}}
+        for email, fields in (facts_by_email or {}).items()
+        if email and any(fields.get(f) for f in _FACT_TO_NODE_PROP)
+    ]
+    if not org or not rows:
+        return 0
+
+    g = get_graph(org)
+    _wake(g)  # this can run long after the last query; reap a stale socket first
+    g.query(
+        """
+        UNWIND $rows AS row
+        MATCH (p:Person {email: row.email})
+        SET p.title = coalesce(row.title, p.title),
+            p.phone = coalesce(row.phone, p.phone),
+            p.seniority = coalesce(row.seniority, p.seniority),
+            p.function = coalesce(row.function, p.function)
+        """,
+        params={"rows": rows},
+    )
+
+    # Re-embed only when a field that feeds `_contact_text` actually changed — a settled title
+    # is exactly what lets the Relation agent's semantic search find "contracting officer"
+    # rather than only literal keyword hits. Best-effort: never lose the fact over an
+    # embedding blip (same posture as update_company_for_domain).
+    touched = [
+        r["email"] for r in rows
+        if any(r.get(_FACT_TO_NODE_PROP[f]) for f in _EMBEDDED_FACT_FIELDS)
+    ]
+    if touched and settings.OPENAI_API_KEY:
+        try:
+            found = g.ro_query(
+                """
+                MATCH (p:Person) WHERE p.email IN $emails
+                OPTIONAL MATCH (p)-[:WORKS_AT]->(c:Company)
+                RETURN p.email, p.owner_email, p.name, p.title, p.seniority,
+                       p.department, c.name, p.industry, p.domain, p.skills
+                """,
+                params={"emails": touched},
+            ).result_set
+            docs = [
+                {"email": e, "owner_email": o, "name": n, "title": t, "seniority": s,
+                 "department": d, "company": co, "industry": ind, "domain": dom,
+                 "skills": sk or []}
+                for e, o, n, t, s, d, co, ind, dom, sk in found
+            ]
+            if docs:
+                embs = _embedder().embed_documents([_contact_text(x) for x in docs])
+                for doc, emb in zip(docs, embs):
+                    doc["embedding"] = emb
+                g.query(
+                    """
+                    UNWIND $rows AS row
+                    MATCH (p:Person {email: row.email, owner_email: row.owner_email})
+                    SET p.embedding = vecf32(row.embedding)
+                    """,
+                    params={"rows": [{"email": d["email"], "owner_email": d["owner_email"],
+                                      "embedding": d["embedding"]} for d in docs]},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("re-embedding after fact writeback failed: %s", exc)
+
     return len(rows)
 
 

@@ -294,6 +294,20 @@ class FactsStore:
                 self.facts.bulk_write(ops, ordered=False)
             except BulkWriteError as exc:  # noqa: BLE001 — report, do not lose the batch
                 logger.warning("record_bulk: %d write error(s)", len(exc.details.get("writeErrors", [])))
+
+        # Push whatever SETTLED onto the contacts themselves, so the Contacts list reflects
+        # what the sweep learned instead of only the review queue. One bulk graph write for
+        # the whole batch; never let a graph hiccup lose facts that are already committed.
+        if supersede:
+            settled: dict[str, dict] = {}
+            for addr, field, val in supersede:
+                settled.setdefault(addr, {})[field] = val
+            try:
+                from client.graph_store import apply_facts_to_contacts
+
+                apply_facts_to_contacts(org, settled)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("record_bulk: writing settled facts to the graph failed: %s", exc)
         return tally
 
     def record_many(
@@ -346,6 +360,17 @@ class FactsStore:
                 },
                 {"$set": {"status": SUPERSEDED, "updated_at": now}},
             )
+            # Put it on the contact itself — accepting a suggestion used to change only this
+            # collection, so the rep saw nothing change on the Contacts list and the value
+            # never reached the agents that read the graph.
+            try:
+                from client.graph_store import apply_facts_to_contacts
+
+                apply_facts_to_contacts(
+                    doc["organization_id"], {doc["email"]: {doc["field"]: doc["value"]}}
+                )
+            except Exception as exc:  # noqa: BLE001 — the decision is already committed
+                logger.warning("decide_fact: writing the accepted fact to the graph failed: %s", exc)
         return _serialize(self.facts.find_one({"_id": oid}) or {})
 
     # --- read path ------------------------------------------------------------------

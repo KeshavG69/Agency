@@ -186,29 +186,6 @@ def _recheck_opportunity(task: dict) -> dict:
     return {"id": task["id"], "rechecked": True, "opportunity_id": opp_id}
 
 
-# Suffixes where the registrable name is the THIRD label from the right, not the second.
-# A short list, not the full Public Suffix List: govcon contacts are overwhelmingly .com /
-# .gov / .mil / .org, and pulling in a PSL dependency to serve a handful of edge cases is a
-# poor trade. An unlisted multi-part suffix simply falls back to the stricter comparison,
-# which errs toward "not their own site" — the safe direction.
-_MULTI_SUFFIXES = frozenset({
-    "co.uk", "org.uk", "gov.uk", "ac.uk", "co.jp", "com.au", "net.au", "org.au",
-    "co.nz", "co.za", "com.br", "com.mx", "co.in", "com.sg",
-})
-
-
-def _registrable(host: str) -> str:
-    """The company-owned part of a hostname: aai.textron.com -> textron.com.
-
-    Approximate by design (see _MULTI_SUFFIXES). Returns the host unchanged when it is
-    already short enough to be registrable.
-    """
-    labels = [x for x in (host or "").split(".") if x]
-    if len(labels) < 3:
-        return ".".join(labels)
-    return ".".join(labels[-3:] if ".".join(labels[-2:]) in _MULTI_SUFFIXES else labels[-2:])
-
-
 def _is_own_site(source_url: str | None, domain: str) -> bool:
     """True when the page read was published by the company that owns `domain`.
 
@@ -227,6 +204,8 @@ def _is_own_site(source_url: str | None, domain: str) -> bool:
     than asserting it — the right failure direction.
     """
     from urllib.parse import urlparse
+
+    from utils.company_enrich import registrable_domain as _registrable
 
     host = urlparse((source_url or "").strip()).netloc.lower().split(":")[0]
     host = host[4:] if host.startswith("www.") else host

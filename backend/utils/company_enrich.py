@@ -65,6 +65,28 @@ def domain_of(contact: dict) -> str:
     return norm_domain(d)
 
 
+# Suffixes where the registrable name is the THIRD label from the right, not the second.
+# A short list, not the full Public Suffix List: govcon contacts are overwhelmingly .com /
+# .gov / .mil / .org, and pulling in a PSL dependency to serve a handful of edge cases is a
+# poor trade. An unlisted multi-part suffix simply falls back to the stricter comparison.
+_MULTI_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "co.jp", "com.au", "net.au", "org.au",
+    "co.nz", "co.za", "com.br", "com.mx", "co.in", "com.sg",
+})
+
+
+def registrable_domain(host: str) -> str:
+    """The company-owned part of a hostname: aai.textron.com -> textron.com.
+
+    Approximate by design (see _MULTI_SUFFIXES). Returns the host unchanged when it is
+    already short enough to be registrable.
+    """
+    labels = [x for x in (host or "").split(".") if x]
+    if len(labels) < 3:
+        return ".".join(labels)
+    return ".".join(labels[-3:] if ".".join(labels[-2:]) in _MULTI_SUFFIXES else labels[-2:])
+
+
 def company_name_from_domain(domain: str) -> str:
     """A human-ish company name from a domain — the fallback when the dataset has no match.
     e.g. 'raytheon.com' -> 'Raytheon', 'general-dynamics.com' -> 'General Dynamics'."""
@@ -131,12 +153,21 @@ def lookup_companies(domains: set[str]) -> dict[str, dict]:
     wanted = {d for d in domains if d and d not in _PERSONAL_DOMAINS}
     if not wanted:
         return {}
+    # FALL BACK TO THE REGISTRABLE DOMAIN. The dataset is keyed on the company's own domain,
+    # so a regional or divisional subdomain misses: `ibm.com` is present, `us.ibm.com` is not,
+    # and ten IBM employees were being marked unenriched and queued for paid research to
+    # rediscover that IBM is IBM. Same company, so the parent's record is the right answer.
+    reg = {d: registrable_domain(d) for d in wanted}
     try:
-        cur = _companies().find({"domain": {"$in": list(wanted)}})
-        return {r["domain"]: r for r in cur}
+        cur = _companies().find(
+            {"domain": {"$in": list(wanted | {r for r in reg.values() if r})}}
+        )
+        found = {r["domain"]: r for r in cur}
     except Exception as exc:  # noqa: BLE001 — no dataset / mongo hiccup -> derive-name fallback
         logger.warning("company dataset lookup failed (falling back to derived names): %s", exc)
         return {}
+    # Exact match wins; the parent domain is only consulted when the exact one missed.
+    return {d: rec for d in wanted if (rec := found.get(d) or found.get(reg[d]))}
 
 
 def _evidence(kind: str, detail: str, existing: str = "") -> list[dict]:
