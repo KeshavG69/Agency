@@ -1,17 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AgentTrail } from "@/components/agent/AgentTrail";
+import { PageTransition, switchView } from "@/components/PageTransition";
+import { useQueryState, useQueryStates, parseAsString, debounce } from "nuqs";
+import { pipelineParsers } from "@/lib/pipeline-params";
 import {
   fetchOpportunityPage,
   fetchOpportunityCounts,
   fetchFacets,
   fetchPostedDates,
   fetchOpportunity,
-  fetchBids,
   pullFromSam,
   analyzeSelected,
   setDecision,
   assignOpportunity,
+  updateOpportunityContacts,
+  type RecommendedContact,
   getDocUrl,
   fetchOpportunitySharePointFiles,
   type SharePointFile,
@@ -44,19 +58,37 @@ import {
 import ContactsGraph from "./ContactsGraph";
 import SharePointGraph from "./SharePointGraph";
 import MailTriagePanel from "./MailTriage";
-import CalendarStrip, { toLocalIso } from "./CalendarStrip";
+import { toLocalIso } from "./CalendarStrip";
 import FilePreview from "./FilePreview";
 import AddOpportunityModal from "./AddOpportunityModal";
 import AssignModal from "./AssignModal";
 import ContactReviewModal from "./ContactReviewModal";
 import SharePointFolderPicker from "./SharePointFolderPicker";
-import TopBar, { type ViewKey } from "./TopBar";
+import TopBar from "./TopBar";
+import { useUiStore, type ViewKey, type TabKey } from "@/lib/stores/uiStore";
+import { useToastStore } from "@/lib/stores/toastStore";
+import CallBriefDialog from "./CallBriefDialog";
+import CallPlanFilters, {
+  EMPTY_CALL_FILTERS,
+  type CallFilters,
+} from "./CallPlanFilters";
 import BidSidebar from "./BidSidebar";
 import FilterBar, { type Facets, EMPTY_FACETS, activeFacetCount } from "./FilterBar";
+import { DonutStat, type ChartConfig } from "@/components/dashboard-charts";
+import {
+  bidsQuery,
+  opportunityListQuery,
+  opportunityQuery,
+  organizationQuery,
+  queryKeys,
+  type OrgBundle,
+} from "@/lib/queries";
+import { useCollecctCache } from "@/lib/cache";
+import { usePrefetchOpportunity } from "@/lib/use-prefetch";
 import { dueLabel } from "@/lib/format";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useConnectionStore } from "@/lib/stores/connectionStore";
-import { organizationsApi, type Organization } from "@/lib/api/organizations";
+import { organizationsApi } from "@/lib/api/organizations";
 import { invitationsApi } from "@/lib/api/invitations";
 import type { User, TeamMember, Invitation } from "@/lib/types";
 
@@ -102,6 +134,24 @@ const fmtDate = (s?: string | null) => {
 };
 
 
+// Slice colours for the deadline donut. Declared once, at module scope and in a fixed order,
+// because that is what pins a colour to a BUCKET rather than to its rank: a week with no
+// deadlines drops out of the chart without recolouring the buckets that remain.
+// Deadline urgency is ORDINAL, so it gets a sequential teal ramp (dark = this week / urgent
+// → light = later) plus a neutral slate for "no deadline" (off the urgency scale) — not four
+// rainbow hues. Tokens defined in legacy.css so light/dark each get their own steps.
+const DEADLINE_SLICES: ChartConfig = {
+  week: { label: "This week", color: "var(--deadline-week)" },
+  month: { label: "This month", color: "var(--deadline-month)" },
+  later: { label: "Later", color: "var(--deadline-later)" },
+  none: { label: "No deadline", color: "var(--deadline-none)" },
+};
+
+// One shared empty array, so `query.data ?? NO_OPPS` keeps a stable identity while a query
+// is still pending. A fresh `[]` per render would re-trigger every useMemo/useDeferredValue
+// downstream of it on every commit.
+const NO_OPPS: Opportunity[] = [];
+
 // Pipeline stages shown as the portfolio nav. "All" first.
 const FILTERS: { key: string; label: string; match: (o: Opportunity) => boolean }[] = [
   { key: "all", label: "All opportunities", match: () => true },
@@ -114,8 +164,6 @@ const FILTERS: { key: string; label: string; match: (o: Opportunity) => boolean 
   // Awaiting analysis = no verdict yet AND not still ingesting (those live in Ingesting).
   { key: "new", label: "Awaiting analysis", match: (o) => !o.bid_decision && !isIngesting(o) },
 ];
-
-type TabKey = "info" | "contacts" | "documents" | "activity";
 
 // Auth gate: the whole console is behind login. While auth initializes we show a
 // splash; if there's no session we bounce to /auth/login. Console only mounts
@@ -152,14 +200,79 @@ function Console({ user }: { user: User }) {
     await logout();
     if (typeof window !== "undefined") window.location.href = "/auth/login";
   };
-  const [opps, setOpps] = useState<Opportunity[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState("all");
-  const [query, setQuery] = useState("");
-  const [facets, setFacets] = useState<Facets>(EMPTY_FACETS);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabKey>("info");
+  const qc = useQueryClient();
+  const cache = useCollecctCache();
+  const prefetchOpp = usePrefetchOpportunity();
+  const pushToast = useToastStore((s) => s.push);
+  // Thin shim over the toast store: existing handlers call setError("msg") / setError(null).
+  // A message becomes a toast; the null-clear is a no-op now that toasts auto-dismiss.
+  const setError = (msg: string | null) => {
+    if (msg) pushToast(msg);
+  };
+  // Filter state lives in the URL, so a filtered pipeline is shareable and the back button
+  // works. `q` is separate from the group because it carries a debounce — folding a debounced
+  // key into useQueryStates would debounce every filter with it.
+  const [urlParams, setUrlParams] = useQueryStates(pipelineParsers);
+  const filter = urlParams.status;
+  const setFilter = useCallback(
+    (v: string) => void setUrlParams({ status: v }),
+    [setUrlParams],
+  );
+  const [query, setQuery] = useQueryState(
+    "q",
+    // The input stays instant; only the URL write waits for the pause.
+    parseAsString.withDefault("").withOptions({ limitUrlUpdates: debounce(300) }),
+  );
+  // FilterBar still speaks the `Facets` shape; the URL uses the BACKEND's key names so the
+  // query string can be forwarded as-is. This adapts between the two.
+  const facets: Facets = useMemo(
+    () => ({
+      agencies: urlParams.agency,
+      naics: urlParams.naics,
+      setAsides: urlParams.set_aside,
+      source: urlParams.source,
+      value: urlParams.value,
+      due: urlParams.due,
+    }),
+    [urlParams],
+  );
+  const setFacets = useCallback(
+    (f: Facets) =>
+      void setUrlParams({
+        agency: f.agencies,
+        naics: f.naics,
+        set_aside: f.setAsides,
+        source: f.source,
+        value: f.value,
+        due: f.due,
+      }),
+    [setUrlParams],
+  );
+  const selectedId = useUiStore((s) => s.selectedId);
+  const setSelectedId = useUiStore((s) => s.setSelectedId);
+  // Detail sheet width: null = the CSS default. The expand button sets a wide preset; dragging
+  // the sheet's left edge sets a custom px width. Both write here so there's one source of truth.
+  const detailWidth = useUiStore((s) => s.detailWidth);
+  const setDetailWidth = useUiStore((s) => s.setDetailWidth);
+  const startDetailResize = useCallback((e: ReactMouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      // The sheet is anchored to the right, so its width is the distance from the pointer to
+      // the right edge. Clamp between a readable minimum and (nearly) the full window.
+      const w = Math.min(Math.max(window.innerWidth - ev.clientX, 380), window.innerWidth - 48);
+      setDetailWidth(w);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+    };
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+  const tab = useUiStore((s) => s.tab);
+  const setTab = useUiStore((s) => s.setTab);
   const [pulling, setPulling] = useState(false);
   const [analyzingSel, setAnalyzingSel] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -194,34 +307,35 @@ function Console({ user }: { user: User }) {
   const [spConnecting, setSpConnecting] = useState(false);
   const [resyncing, setResyncing] = useState(false);
   const [spResyncing, setSpResyncing] = useState(false);
-  // Bumped whenever a SharePoint sync starts (manual resync, or the post-connect OAuth
-  // landing) so the Library graph knows to start polling for the background crawl's
-  // result — the user shouldn't have to reload the page to see it appear.
-  const [spGraphRefresh, setSpGraphRefresh] = useState(0);
-  // Same idea for the Contacts graph — bumped after an ingest completes (background task)
-  // or Outlook is disconnected (which purges the graph server-side), so the graph
-  // re-fetches instead of showing stale data until a manual reload.
-  const [contactsGraphRefresh, setContactsGraphRefresh] = useState(0);
-  const [spPickerOpen, setSpPickerOpen] = useState(false);
-  const [addOppOpen, setAddOppOpen] = useState(false);
+  // "Go refetch" signals for the graph views, now in the ui store so the graph components
+  // subscribe directly instead of taking a refreshSignal prop. Bumped when a sync starts
+  // (SharePoint) / an ingest completes (Contacts) / a disconnect purges the graph server-side.
+  const bumpSharePointRefresh = useUiStore((s) => s.bumpSharePointRefresh);
+  const bumpContactsRefresh = useUiStore((s) => s.bumpContactsRefresh);
+  const spPickerOpen = useUiStore((s) => s.spPickerOpen);
+  const setSpPickerOpen = useUiStore((s) => s.setSpPickerOpen);
+  const addOppOpen = useUiStore((s) => s.addOppOpen);
+  const setAddOppOpen = useUiStore((s) => s.setAddOppOpen);
   // Outlook contact-review dialog (pick which contacts to ingest).
-  const [reviewOpen, setReviewOpen] = useState(false);
+  const reviewOpen = useUiStore((s) => s.reviewOpen);
+  const setReviewOpen = useUiStore((s) => s.setReviewOpen);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewContacts, setReviewContacts] = useState<ContactCandidate[]>([]);
-  const [view, setView] = useState<ViewKey>("dashboard");
+  const view = useUiStore((s) => s.view);
+  const setView = useUiStore((s) => s.setView);
+  // Every view change goes through here so the swap animates. Sibling tabs imply no
+  // hierarchy, so the transition is "lateral": a fade and a 12px rise, no directional slide.
+  const navigate = useCallback((v: ViewKey) => switchView(() => setView(v)), []);
 
   // --- server-side pagination state (replaces "load every opp") ---
   const PAGE = 50;
-  const [total, setTotal] = useState(0); // total opps matching the current filter (server)
-  const [loadingMore, setLoadingMore] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({}); // filter-pill counts (server)
   const [inFlight, setInFlight] = useState(0); // ingesting+processing (arms the poll)
   const [facetOptions, setFacetOptions] = useState<{ agencies: string[]; naics: string[]; setAsides: string[] }>(
     { agencies: [], naics: [], setAsides: [] },
   );
   const [availableDates, setAvailableDates] = useState<string[]>([]); // calendar dots (server)
-  const [bidOpps, setBidOpps] = useState<Opportunity[]>([]); // Bid set for sidebar + dashboard
   const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null); // enriched, lazy-loaded
   const [detailLoading, setDetailLoading] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState(""); // search, debounced ~300ms
@@ -248,34 +362,70 @@ function Console({ user }: { user: User }) {
     [filter, facets, debouncedQuery, viewingDate],
   );
 
-  // Load page 1 for the current filters (REPLACES the list). Used on mount and on any
-  // filter/search/status/calendar change.
-  const loadPage = useCallback(async () => {
-    try {
-      const page = await fetchOpportunityPage({ ...params, offset: 0, limit: PAGE });
-      setOpps(page.items);
-      setTotal(page.total);
-      setError(null);
-    } catch {
-      setError("Can't reach the backend — start it on :8000.");
-    } finally {
-      setLoading(false);
-    }
-  }, [params]);
+  // "Load more" grows ONE query's window rather than appending a second query's result.
+  // The window is part of the query key, so the bigger page is fetched while the smaller
+  // one stays on screen (placeholderData) — no accumulator state to keep in step with the
+  // filters, and a refetch/poll can never interleave two offsets into a duplicated list.
+  //
+  // The window is stored WITH the params it was opened against, so the reset on a filter
+  // change is a pure derivation rather than a second piece of state to keep in sync. An
+  // effect that reset it would commit one render at {new params, old window} and fire a
+  // request for a page nobody asked for.
+  const [listWindow, setListWindow] = useState({ params, extra: 0 });
+  const extra = listWindow.params === params ? listWindow.extra : 0;
+  const limit = PAGE + extra;
 
-  // Append the next page (the "Load more" button). Uses the count already loaded as the offset.
-  const loadMore = useCallback(async () => {
-    setLoadingMore(true);
-    try {
-      const page = await fetchOpportunityPage({ ...params, offset: opps.length, limit: PAGE });
-      setOpps((prev) => [...prev, ...page.items]);
-      setTotal(page.total);
-    } catch {
-      /* keep what we have */
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [params, opps.length]);
+  const listOptions = useMemo(
+    () => opportunityListQuery({ ...params, offset: 0, limit }),
+    [params, limit],
+  );
+
+  // THE LOADING RULE (plan 5.2). `placeholderData: previous` lives in opportunityListQuery,
+  // so a filter change, a keystroke or the 5s poll keeps the current rows painted and only
+  // flips isFetching. Nothing below may gate rendering on isFetching — only on isPending.
+  const listQuery = useQuery(listOptions);
+
+  const rows = listQuery.data?.items ?? NO_OPPS;
+  const total = listQuery.data?.total ?? 0;
+
+  // The list failing to reach the backend is its own toast. Fires on the false→true edge, so
+  // a retry that stays failed doesn't re-toast on every poll.
+  useEffect(() => {
+    if (listQuery.isError) pushToast("Can't reach the backend — start it on :8000.");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listQuery.isError]);
+
+  // Reload the pipeline list + the Bid set. Both live under the "opportunities" key prefix,
+  // so one invalidation covers what used to be loadPage() + loadBids(). Awaitable: the SAM
+  // pull and the analyst poll below want the refreshed rows before they continue.
+  const reload = useCallback(() => cache.opportunities(), [cache]);
+
+  // Display-only optimism for a verdict/assignment the user just clicked: patch the row in
+  // the page currently on screen so the badge flips under their finger. There is nothing to
+  // roll back — the server stays the authority and the invalidation that follows re-reads
+  // it. Deliberately NOT in lib/cache.ts, which is an invalidation layer by design.
+  const patchRow = useCallback(
+    (id: string, patch: Partial<Opportunity>) => {
+      qc.setQueryData(listOptions.queryKey, (page) =>
+        page
+          ? { ...page, items: page.items.map((o) => (o.id === id ? { ...o, ...patch } : o)) }
+          : page,
+      );
+    },
+    [qc, listOptions.queryKey],
+  );
+
+  // Write a freshly-fetched record through to BOTH the open pane and the cache. The
+  // long-poll handlers below (capture, outreach, analyse) already hold the server's answer,
+  // so writing it through is a fact, not optimism — and it stops the row's hover prefetch
+  // from later handing the detail pane the pre-run copy it cached minutes ago.
+  const putOpp = useCallback(
+    (fresh: Opportunity) => {
+      qc.setQueryData(opportunityQuery(fresh.id).queryKey, fresh);
+      setSelectedOpp((prev) => (prev && prev.id === fresh.id ? fresh : prev));
+    },
+    [qc],
+  );
 
   // Per-status pill counts + in-flight total (for the poll) — recomputed when filters change.
   const loadCounts = useCallback(async () => {
@@ -297,30 +447,24 @@ function Console({ user }: { user: User }) {
     }
   }, [params]);
 
-  // The Bid set for the sidebar + dashboard — loaded separately from the paged list.
-  const loadBids = useCallback(async () => {
-    try {
-      setBidOpps(await fetchBids());
-    } catch {
-      /* leave last bids */
-    }
-  }, []);
+  // The Bid set for the sidebar + dashboard — loaded separately from the paged list, and
+  // independent of the pipeline filters (a Watch filter must not empty the sidebar).
+  const bidsQ = useQuery(bidsQuery());
+  const bidOpps = bidsQ.data ?? NO_OPPS;
 
-  // On any filter/search/status/calendar change: reset to page 1 + refresh counts + dots.
+  // On any filter/search/status/calendar change: refresh counts + dots. The rows themselves
+  // need no effect — `params` is part of the query key, so changing it IS the refetch.
   useEffect(() => {
-    setLoading(true);
-    loadPage();
     loadCounts();
     loadDates();
-  }, [loadPage, loadCounts, loadDates]);
+  }, [loadCounts, loadDates]);
 
-  // Facet dropdown options + the Bid set load once on mount (bids also refresh after decisions).
+  // Facet dropdown options load once on mount.
   useEffect(() => {
     fetchFacets()
       .then((f) => setFacetOptions({ agencies: f.agencies, naics: f.naics, setAsides: f.set_asides }))
       .catch(() => {});
-    loadBids();
-  }, [loadBids]);
+  }, []);
 
   // While anything is mid-flight (ingesting / a capture run), poll so the Ingesting/Processing
   // sections self-empty as workers finish — even for items not on the current page. Armed by the
@@ -328,14 +472,16 @@ function Console({ user }: { user: User }) {
   useEffect(() => {
     if (inFlight <= 0) return;
     const t = setInterval(() => {
-      loadPage();
+      void reload();
       loadCounts();
-      loadBids();
     }, 5000);
     return () => clearInterval(t);
-  }, [inFlight, loadPage, loadCounts, loadBids]);
+  }, [inFlight, reload, loadCounts]);
 
   // The detail pane lazy-loads the FULL (enriched) opportunity when a row is opened.
+  // Through the query cache, not a bare fetch: that is what makes the row's hover/focus
+  // prefetch pay off — an already-warm record resolves without a round trip, so the
+  // "Loading…" state below never gets a chance to render.
   useEffect(() => {
     if (!selectedId) {
       setSelectedOpp(null);
@@ -343,43 +489,23 @@ function Console({ user }: { user: User }) {
     }
     let alive = true;
     setDetailLoading(true);
-    fetchOpportunity(selectedId)
+    qc.fetchQuery(opportunityQuery(selectedId))
       .then((o) => alive && setSelectedOpp(o))
       .catch(() => alive && setSelectedOpp(null))
       .finally(() => alive && setDetailLoading(false));
     return () => {
       alive = false;
     };
-  }, [selectedId]);
+  }, [selectedId, qc]);
 
-  // Restore this user's saved filters (decision + facets) once on mount.
-  const filtersKey = `collecct:filters:${user.email}`;
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(filtersKey);
-      if (raw) {
-        const p = JSON.parse(raw);
-        if (p.facets) setFacets({ ...EMPTY_FACETS, ...p.facets });
-        if (typeof p.filter === "string") setFilter(p.filter);
-      }
-    } catch {
-      /* ignore malformed cache */
-    }
-  }, [filtersKey]);
-
-  // Persist filters whenever they change.
-  useEffect(() => {
-    try {
-      localStorage.setItem(filtersKey, JSON.stringify({ facets, filter }));
-    } catch {
-      /* storage may be unavailable */
-    }
-  }, [filtersKey, facets, filter]);
+  // NOTE: the localStorage filter cache that used to live here is gone. Filters are in the
+  // URL now (see lib/pipeline-params.ts), which is both shareable and survives a reload — and
+  // a localStorage restore running on mount would immediately fight the URL for control.
 
   // Keep non-admins out of the admin-only views (e.g. if demoted mid-session).
   useEffect(() => {
     if (!isAdmin && (view === "documents" || view === "org")) {
-      setView("pipeline");
+      navigate("pipeline");
     }
   }, [isAdmin, view]);
 
@@ -391,13 +517,37 @@ function Console({ user }: { user: User }) {
   // Assign an opportunity to members (admin). Optimistic; reverts on failure.
   const onAssign = async (id: string, userIds: string[]) => {
     setError(null);
-    setOpps((prev) => prev.map((o) => (o.id === id ? { ...o, assigned_to: userIds } : o)));
+    patchRow(id, { assigned_to: userIds });
     setSelectedOpp((prev) => (prev && prev.id === id ? { ...prev, assigned_to: userIds } : prev));
     try {
       await assignOpportunity(id, userIds);
+      void cache.opportunity(id);
     } catch {
       setError("Couldn't update the assignment — reverting.");
-      loadPage();
+      void reload();
+    }
+  };
+
+  // Manual add/remove of contacts on the Contacts tab. The tab always sends the FULL list it
+  // wants to keep, so add and remove are one code path. Optimistic: patch the open opp now,
+  // reconcile with the server's echo, revert by refetch on failure.
+  const onContactsChange = async (id: string, contacts: RecommendedContact[]) => {
+    setError(null);
+    const patch = (o: Opportunity): Opportunity => ({
+      ...o,
+      recommended_contacts: contacts,
+      contacts_searched_at: o.contacts_searched_at ?? new Date().toISOString(),
+    });
+    setSelectedOpp((prev) => (prev && prev.id === id ? patch(prev) : prev));
+    qc.setQueryData(opportunityQuery(id).queryKey, (o?: Opportunity) => (o ? patch(o) : o));
+    try {
+      const saved = await updateOpportunityContacts(id, contacts);
+      const apply = (o: Opportunity): Opportunity => ({ ...o, recommended_contacts: saved });
+      setSelectedOpp((prev) => (prev && prev.id === id ? apply(prev) : prev));
+      qc.setQueryData(opportunityQuery(id).queryKey, (o?: Opportunity) => (o ? apply(o) : o));
+    } catch {
+      setError("Couldn't update the contact list — reverting.");
+      void cache.opportunity(id);
     }
   };
 
@@ -455,7 +605,7 @@ function Console({ user }: { user: User }) {
       // real backend status per stage, so this never causes a stage to be skipped. But if a
       // stage's delete call itself errored, tell the admin rather than implying full success.
       setConnection("sharepoint", false, null);
-      setSpGraphRefresh((n) => n + 1); // disconnect purges the graph server-side — re-fetch to reflect it
+      bumpSharePointRefresh(); // disconnect purges the graph server-side — re-fetch to reflect it
       if (result.failed.length > 0) {
         setError(
           `SharePoint disconnect was incomplete (${result.failed.join(", ")} still connected) — try again.`,
@@ -475,7 +625,7 @@ function Console({ user }: { user: User }) {
     try {
       await disconnectOutlook(outlookAccount);
       setConnection("outlook", false, null);
-      setContactsGraphRefresh((n) => n + 1); // disconnect purges the graph server-side — re-fetch to reflect it
+      bumpContactsRefresh(); // disconnect purges the graph server-side — re-fetch to reflect it
     } catch {
       setError("Couldn't disconnect Outlook.");
     } finally {
@@ -511,7 +661,7 @@ function Console({ user }: { user: User }) {
     try {
       await ingestOutlookContacts(selected);
       setError(`Importing ${selected.length} contact${selected.length === 1 ? "" : "s"} — this runs in the background.`);
-      setContactsGraphRefresh((n) => n + 1);
+      bumpContactsRefresh();
     } catch {
       setError("Couldn't import the selected contacts.");
     } finally {
@@ -521,8 +671,8 @@ function Console({ user }: { user: User }) {
 
   // Returning from the Outlook OAuth round-trip lands on /?review=outlook — open the
   // review dialog automatically, then strip the param so a refresh doesn't re-open it.
-  // Landing on /?connected=sharepoint (after the Graph+REST OAuth chain) bumps
-  // spGraphRefresh so the Library graph starts polling for the background crawl's
+  // Landing on /?connected=sharepoint (after the Graph+REST OAuth chain) bumps the
+  // SharePoint refresh signal so the Library graph starts polling for the background crawl's
   // result automatically — the user shouldn't have to manually reload the page.
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -531,8 +681,8 @@ function Console({ user }: { user: User }) {
       openContactReview();
     }
     if (p.get("connected") === "sharepoint") {
-      setView("documents");         // land on Library tab
-      setSpGraphRefresh((n) => n + 1);
+      navigate("documents");        // land on Library tab
+      bumpSharePointRefresh();
       setSpPickerOpen(true);        // open folder picker immediately
     }
     if (p.has("review") || p.has("connected")) {
@@ -550,7 +700,7 @@ function Console({ user }: { user: User }) {
     try {
       await syncSharePointStructure();
       setError("SharePoint resync started — it runs in the background.");
-      setSpGraphRefresh((n) => n + 1);
+      bumpSharePointRefresh();
     } catch {
       setError("Couldn't start the SharePoint resync.");
     } finally {
@@ -562,7 +712,7 @@ function Console({ user }: { user: User }) {
     setPulling(true);
     setError(null);
     setPicked(new Set());
-    setView("pipeline"); // jump to the list so the incoming notices are actually visible
+    navigate("pipeline"); // jump to the list so the incoming notices are actually visible
     const before = total;
     try {
       await pullFromSam(1); // only TODAY's new still-open notices (fresh-per-day)
@@ -574,7 +724,7 @@ function Console({ user }: { user: User }) {
         await loadCounts();
         const { total: t } = await fetchOpportunityPage({ ...params, status: "new", offset: 0, limit: PAGE });
         if (t > before) {
-          await loadPage();
+          await reload();
           break; // new arrivals landed
         }
       }
@@ -607,15 +757,21 @@ function Console({ user }: { user: User }) {
         await sleep(4000);
         // Poll each picked opp by id (it may not be on the current page).
         const verdicts = await Promise.all(
-          ids.map((id) => fetchOpportunity(id).then((o) => !!o.bid_decision).catch(() => false)),
+          ids.map((id) =>
+            fetchOpportunity(id)
+              .then((o) => {
+                putOpp(o);
+                return !!o.bid_decision;
+              })
+              .catch(() => false),
+          ),
         );
         if (verdicts.every(Boolean)) break;
       }
-      await loadPage();
+      await reload();
       await loadCounts();
-      await loadBids();
     },
-    [loadPage, loadCounts, loadBids],
+    [reload, loadCounts, putOpp],
   );
 
   // Send only the hand-picked opportunities to the Analyst, then poll for their verdicts.
@@ -639,38 +795,32 @@ function Console({ user }: { user: User }) {
   const openOpp = (id: string) => {
     setSelectedId(id);
     setTab("info");
-    setView("pipeline");
+    navigate("pipeline");
   };
 
   // Refetch the open opp's full record (after a mutation completes server-side).
   const refreshSelected = useCallback(
     (id: string) => {
-      fetchOpportunity(id)
-        .then((o) => setSelectedOpp((prev) => (prev && prev.id === id ? o : prev)))
-        .catch(() => {});
+      fetchOpportunity(id).then(putOpp).catch(() => {});
     },
-    [],
+    [putOpp],
   );
 
   // Human override of the Analyst verdict (Bid / Watch / No-Bid).
   const onSetDecision = async (id: string, decision: BidDecision) => {
     setError(null);
     // Optimistic: reflect the new verdict on the UI immediately; persist in the background.
-    setOpps((prev) =>
-      prev.map((o) =>
-        o.id === id ? { ...o, bid_decision: decision, decision_overridden: true } : o,
-      ),
-    );
+    patchRow(id, { bid_decision: decision, decision_overridden: true });
     setSelectedOpp((prev) =>
       prev && prev.id === id ? { ...prev, bid_decision: decision, decision_overridden: true } : prev,
     );
     try {
       await setDecision(id, decision);
       loadCounts(); // the verdict moves it between pills
-      loadBids(); // ...and in/out of the Bid set
+      void cache.opportunity(id); // ...and the record, the list and in/out of the Bid set
     } catch {
       setError("Couldn't save the decision — reverting.");
-      await loadPage();
+      await reload();
       refreshSelected(id);
     }
   };
@@ -685,12 +835,12 @@ function Console({ user }: { user: User }) {
         await sleep(5000);
         const fresh = await fetchOpportunity(id);
         if (fresh.captured_at) {
-          setSelectedOpp((p) => (p && p.id === id ? fresh : p));
+          putOpp(fresh);
           break;
         }
       }
       loadCounts();
-      loadBids();
+      void reload();
     } catch {
       setError("Capture failed — is the backend + worker running?");
     } finally {
@@ -708,7 +858,7 @@ function Console({ user }: { user: User }) {
         await sleep(5000);
         const fresh = await fetchOpportunity(id);
         if (fresh.outreach_drafted_at && fresh.outreach_drafted_at !== before) {
-          setSelectedOpp((p) => (p && p.id === id ? fresh : p));
+          putOpp(fresh);
           break;
         }
       }
@@ -733,7 +883,7 @@ function Console({ user }: { user: User }) {
         const fresh = await fetchOpportunity(id);
         const d = fresh.outreach_drafts?.find((x) => (x.to ?? "").toLowerCase() === email.toLowerCase());
         if (d && d.body !== draftBefore) {
-          setSelectedOpp((p) => (p && p.id === id ? fresh : p));
+          putOpp(fresh);
           break;
         }
       }
@@ -746,30 +896,96 @@ function Console({ user }: { user: User }) {
 
   // The server already applied the status filter + facets + search + calendar day, so the
   // loaded page IS the visible list. (`availableDates` and `counts` come from the server too.)
-  const visible = opps;
+  //
+  // Deferred, per plan 5.2: React paints the *previous* list while it renders the next one
+  // at low priority, so a keystroke never blocks on reconciling 50 rows — and everything
+  // derived below is derived from the same snapshot that is actually on screen, instead of
+  // disagreeing with it for a frame.
+  const deferredRows = useDeferredValue(rows);
+
+  // Column sort for the pipeline TABLE. Client-side over the loaded window (the server
+  // already applied filters/search); clicking a header cycles asc → desc, clicking another
+  // column starts fresh. `null` key = server order (priority-ish), which is the default.
+  type SortKey = "title" | "agency" | "response_deadline" | "priority_score";
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const onSort = useCallback((key: SortKey) => {
+    setSortKey((prevKey) => {
+      setSortDir((prevDir) => (prevKey === key && prevDir === "asc" ? "desc" : "asc"));
+      return key;
+    });
+  }, []);
+
+  const visible = useMemo(() => {
+    if (!sortKey) return deferredRows;
+    const dir = sortDir === "asc" ? 1 : -1;
+    const val = (o: Opportunity): number | string => {
+      if (sortKey === "response_deadline") {
+        const d = o.response_deadline ? new Date(o.response_deadline).getTime() : NaN;
+        return isNaN(d) ? 8.64e15 : d; // undated rows sort to the end
+      }
+      if (sortKey === "priority_score") return o.priority_score ?? -1;
+      return ((o[sortKey] as string) ?? "").toLowerCase();
+    };
+    return [...deferredRows].sort((a, b) => {
+      const av = val(a), bv = val(b);
+      return av < bv ? -dir : av > bv ? dir : 0;
+    });
+  }, [deferredRows, sortKey, sortDir]);
+
+  // Rows still awaiting a verdict — the "Select all / Analyze N" bar's population.
+  const pickable = useMemo(() => visible.filter((o) => !o.bid_decision), [visible]);
+
+  // A bigger window is in flight while the rendered page is still the smaller one. Note this
+  // is NOT plain `isFetching`: a background poll refetch must not turn the button into a
+  // progress state.
+  const loadingMore = listQuery.isFetching && visible.length < limit && visible.length < total;
+
+  // Infinite scroll: widen the window as the sentinel nears the viewport, so the pipeline
+  // grows on scroll instead of a "Load more" click. Same `setListWindow` the button used.
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !loadingMore && visible.length < total) {
+          setListWindow({ params, extra: extra + PAGE });
+        }
+      },
+      { rootMargin: "400px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [loadingMore, visible.length, total, params, extra]);
 
   // The open opp's full record (enriched, lazy-loaded). Falls back to the slim list row while
   // the detail fetch is in flight, so the header/title don't flash empty.
-  const selected = selectedOpp ?? opps.find((o) => o.id === selectedId) ?? null;
+  const selected = selectedOpp ?? rows.find((o) => o.id === selectedId) ?? null;
   return (
     <main className="console">
       <TopBar
         user={user}
         isAdmin={isAdmin}
         view={view}
-        onNavigate={setView}
+        onNavigate={navigate}
         onPull={onPullSam}
         pulling={pulling}
         onSignOut={onSignOut}
       />
-      <div className={`workspace ${view === "dashboard" || view === "callplan" ? "" : "no-bidbar"}`}>
-        {(view === "dashboard" || view === "callplan") && (
+      <div className={`workspace ${view === "callplan" ? "" : "no-bidbar"}`}>
+        {view === "callplan" && (
           <BidSidebar bids={bidOpps} selectedId={selectedId} onOpen={openOpp} />
         )}
         <div className="main">
+        {/* Wraps ONLY the swapping content — not the shell — so the top bar and Bid sidebar
+            stay put while the view morphs. Fired by switchView(); an unrouted update
+            renders instantly. */}
+        <PageTransition>
       {view === "dashboard" ? (
         <section className="graph-pane">
-          <DashboardView opps={bidOpps} loading={loading} onOpen={openOpp} />
+          {/* isPending, never isFetching: the 5s poll must not blank the agenda. */}
+          <DashboardView opps={bidOpps} loading={bidsQ.isPending} onOpen={openOpp} />
         </section>
       ) : view === "callplan" ? (
         <section className="graph-pane">
@@ -788,7 +1004,7 @@ function Console({ user }: { user: User }) {
             onDisconnect={onDisconnectOutlook}
             onResync={onResyncContacts}
           />
-          <ContactsGraph refreshSignal={contactsGraphRefresh} />
+          <ContactsGraph />
         </section>
       ) : view === "documents" ? (
         <section className="graph-pane">
@@ -806,7 +1022,7 @@ function Console({ user }: { user: User }) {
               extraAction={{ label: "Select folders", onClick: () => setSpPickerOpen(true) }}
             />
           )}
-          <SharePointGraph refreshSignal={spGraphRefresh} />
+          <SharePointGraph />
         </section>
       ) : view === "org" ? (
         <section className="graph-pane">
@@ -844,7 +1060,6 @@ function Console({ user }: { user: User }) {
             onChange={(e) => setQuery(e.target.value)}
           />
           {(() => {
-            const pickable = visible.filter((o) => !o.bid_decision);
             if (pickable.length === 0) return null;
             const allOn = pickable.every((o) => picked.has(o.id));
             return (
@@ -872,95 +1087,241 @@ function Console({ user }: { user: User }) {
               </div>
             );
           })()}
-          <div className="cal-wrap">
-            <CalendarStrip
-              selectedDate={viewingDate}
-              availableDates={availableDates}
-              onSelect={setViewingDate}
-            />
+          <div className="sort-wrap">
+            <label className="sort-label" htmlFor="opp-sort">Sort</label>
+            <select
+              id="opp-sort"
+              className="sort-select"
+              value={sortKey ?? ""}
+              onChange={(e) => setSortKey((e.target.value || null) as SortKey | null)}
+            >
+              <option value="">Default</option>
+              <option value="priority_score">Priority</option>
+              <option value="response_deadline">Deadline</option>
+              <option value="title">Opportunity</option>
+              <option value="agency">Agency</option>
+            </select>
+            <button
+              type="button"
+              className="sort-dir"
+              disabled={!sortKey}
+              title={sortDir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
+              onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+            >
+              {sortDir === "asc" ? "↑" : "↓"}
+            </button>
           </div>
         </div>
         <div className="rows">
-          {loading && <div style={{ padding: 24, color: "var(--faint)" }}>Loading…</div>}
-          {!loading && visible.length === 0 && (
-            <div style={{ padding: 24, color: "var(--faint)", fontSize: 13 }}>
-              {opps.length === 0 ? (
-                "No opportunities yet — pull from SAM.gov or upload an Excel to begin."
-              ) : viewingDate ? (
-                `No fresh opportunities posted on ${fmtDate(viewingDate)}.`
-              ) : activeFacetCount(facets) > 0 ? (
-                <>
-                  No opportunities match your filters.{" "}
-                  <button className="sel-link" onClick={() => setFacets(EMPTY_FACETS)}>
-                    Clear filters
-                  </button>
-                </>
-              ) : (
-                "Nothing in this view."
-              )}
-            </div>
-          )}
-          {visible.map((o, i) => (
-            <button
-              key={o.id}
-              className={`row ${o.id === selectedId ? "sel" : ""}`}
-              style={{ animationDelay: `${Math.min(i, 12) * 35}ms` }}
-              onClick={() => {
-                setSelectedId(o.id);
-                setTab("info");
-              }}
-            >
-              <div className="row-top">
-                {!o.bid_decision && !isIngesting(o) && (
-                  <span
-                    className={`chk ${picked.has(o.id) ? "on" : ""}`}
-                    role="checkbox"
-                    aria-checked={picked.has(o.id)}
-                    title="Select for analysis"
-                    onClick={(e) => toggleSelect(o.id, e)}
+          <table className="opp-table">
+            <thead>
+              <tr>
+                <th className="col-chk" aria-hidden />
+                {([
+                  ["title", "Opportunity"],
+                  ["agency", "Agency"],
+                ] as [SortKey, string][]).map(([k, label]) => (
+                  <th
+                    key={k}
+                    className={`sortable ${sortKey === k ? "sorted" : ""}`}
+                    onClick={() => onSort(k)}
                   >
-                    {picked.has(o.id) ? "✓" : ""}
-                  </span>
-                )}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="row-title">{o.title}</div>
-                  {o.agency && <div className="row-agency">{o.agency}</div>}
-                </div>
-                {(() => {
+                    {label}
+                    <span className="sort-caret">{sortKey === k ? (sortDir === "asc" ? "↑" : "↓") : ""}</span>
+                  </th>
+                ))}
+                <th>Stage</th>
+                {([
+                  ["response_deadline", "Deadline"],
+                  ["priority_score", "Priority"],
+                ] as [SortKey, string][]).map(([k, label]) => (
+                  <th
+                    key={k}
+                    className={`sortable num ${sortKey === k ? "sorted" : ""}`}
+                    onClick={() => onSort(k)}
+                  >
+                    {label}
+                    <span className="sort-caret">{sortKey === k ? (sortDir === "asc" ? "↑" : "↓") : ""}</span>
+                  </th>
+                ))}
+                <th>Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {/* THE LOADING RULE. The single empty branch is reachable only when there is
+                  nothing to show; a refetch keeps the rows it has and reports in the footer. */}
+              {visible.length === 0 ? (
+                <tr className="opp-empty">
+                  <td colSpan={7}>
+                    {listQuery.isFetching ? (
+                      "Loading…"
+                    ) : filter === "all" &&
+                      activeFacetCount(facets) === 0 &&
+                      !viewingDate &&
+                      !debouncedQuery ? (
+                      "No opportunities yet — pull from SAM.gov or upload an Excel to begin."
+                    ) : viewingDate ? (
+                      `No fresh opportunities posted on ${fmtDate(viewingDate)}.`
+                    ) : activeFacetCount(facets) > 0 ? (
+                      <>
+                        No opportunities match your filters.{" "}
+                        <button className="sel-link" onClick={() => setFacets(EMPTY_FACETS)}>
+                          Clear filters
+                        </button>
+                      </>
+                    ) : (
+                      "Nothing in this view."
+                    )}
+                  </td>
+                </tr>
+              ) : (
+                visible.map((o) => {
                   const chip = activityChip(o);
-                  return chip ? (
-                    <span className={`badge ${chip.cls}`}>{chip.label}</span>
-                  ) : (
-                    <span className={`badge ${badgeClass(o.bid_decision)}`}>
-                      {o.bid_decision ?? "New"}
-                    </span>
+                  const overdue =
+                    o.response_deadline && new Date(o.response_deadline).getTime() < Date.now();
+                  const selectable = !o.bid_decision && !isIngesting(o);
+                  return (
+                    <tr
+                      key={o.id}
+                      className={`opp-row ${o.id === selectedId ? "sel" : ""}`}
+                      tabIndex={0}
+                      // Warm the full record before the click lands — hover AND focus, so
+                      // keyboard users get the same instant open. prefetchQuery honours
+                      // staleTime, so sweeping the list is not 50 requests.
+                      onMouseEnter={() => prefetchOpp(o.id)}
+                      onFocus={() => prefetchOpp(o.id)}
+                      onClick={() => {
+                        setSelectedId(o.id);
+                        setTab("info");
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelectedId(o.id);
+                          setTab("info");
+                        }
+                      }}
+                    >
+                      <td className="col-chk" onClick={(e) => e.stopPropagation()}>
+                        {selectable && (
+                          <span
+                            className={`chk ${picked.has(o.id) ? "on" : ""}`}
+                            role="checkbox"
+                            aria-checked={picked.has(o.id)}
+                            title="Select for analysis"
+                            onClick={(e) => toggleSelect(o.id, e)}
+                          >
+                            {picked.has(o.id) ? "✓" : ""}
+                          </span>
+                        )}
+                      </td>
+                      <td className="col-title">
+                        <div className="ot-title">{o.title}</div>
+                        {o.solicitation_number && (
+                          <div className="ot-sub">{o.solicitation_number}</div>
+                        )}
+                      </td>
+                      <td className="col-agency">{o.agency || "—"}</td>
+                      <td className="col-stage">
+                        <span className={`badge ${chip ? chip.cls : badgeClass(o.bid_decision)}`}>
+                          {chip ? chip.label : o.bid_decision ?? "New"}
+                        </span>
+                      </td>
+                      <td className={`col-deadline num ${overdue ? "overdue" : ""}`}>
+                        {fmtDate(o.response_deadline)}
+                      </td>
+                      <td className="col-pri num">
+                        <span className="pri-dot" style={{ background: priColor(o.priority_score) }} />
+                        {o.priority_score != null ? o.priority_score : "—"}
+                      </td>
+                      <td className="col-source">
+                        {o.source === "sam.gov" ? (
+                          <span className="src-tag">SAM.gov</span>
+                        ) : o.source === "manual" ? (
+                          <span className="src-tag manual">Manual</span>
+                        ) : null}
+                      </td>
+                    </tr>
                   );
-                })()}
-              </div>
-              <div className="row-meta">
-                <span className="pri-dot" style={{ background: priColor(o.priority_score) }} />
-                {o.priority_score != null && (
-                  <span className="pscore">
-                    P<b>{o.priority_score}</b>
-                  </span>
-                )}
-                {o.solicitation_number && <span className="sol">{o.solicitation_number}</span>}
-                <span className="val">{money(o.estimated_value)}</span>
-                {o.source === "sam.gov" && <span className="src-tag">SAM.gov</span>}
-                {o.source === "manual" && <span className="src-tag manual">Manual</span>}
-              </div>
-            </button>
-          ))}
-          {!loading && opps.length < total && (
-            <button className="load-more" onClick={loadMore} disabled={loadingMore}>
-              {loadingMore ? "Loading…" : `Load more · ${opps.length} of ${total}`}
-            </button>
+                })
+              )}
+            </tbody>
+          </table>
+          {/* Infinite-scroll sentinel: the observer above widens the window as this nears the
+              viewport. Only mounted while there's more to load. */}
+          {visible.length > 0 && visible.length < total && (
+            <div ref={loadMoreRef} className="load-sentinel" aria-hidden />
           )}
+        </div>
+        {/* The footer is the ONLY thing that moves during a refetch. It is always mounted at
+            a fixed height so the rows above it never shift when a fetch starts or ends. */}
+        {/* aria-hidden, not aria-live: the in-flight poll re-enters this state every 5s while
+            anything is ingesting, and a screen reader announcing "Updating…" twelve times a
+            minute is worse than silence. The rows themselves are the accessible signal. */}
+        <div
+          className="flex h-6 shrink-0 items-center justify-center gap-2 text-[11px] text-muted-foreground"
+          aria-hidden
+        >
+          {loadingMore ? (
+            <>
+              <span className="size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              Loading more…
+            </>
+          ) : listQuery.isFetching && visible.length > 0 ? (
+            <>
+              <span className="size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              Updating…
+            </>
+          ) : total > 0 ? (
+            `${visible.length} of ${total}`
+          ) : null}
         </div>
       </section>
 
-      {/* ---------------- detail ---------------- */}
-      <section className="detail">
+      {/* ---------------- detail (slide-over sheet) ---------------- */}
+      {/* Scrim: click-away closes the sheet. Present only while a row is open, so it never
+          eats clicks on the table behind it. */}
+      <div
+        className={`detail-scrim ${selectedId ? "open" : ""}`}
+        onClick={() => setSelectedId(null)}
+        aria-hidden
+      />
+      <section
+        className={`detail ${selectedId ? "open" : ""}`}
+        style={detailWidth ? { width: `${detailWidth}px` } : undefined}
+        role="dialog"
+        aria-modal="true"
+      >
+        {/* Drag the left edge to resize. */}
+        <div
+          className="detail-resize"
+          onMouseDown={startDetailResize}
+          role="separator"
+          aria-orientation="vertical"
+          title="Drag to resize"
+        />
+        <div className="sheet-actions">
+          <button
+            className="sheet-btn"
+            onClick={() =>
+              setDetailWidth(
+                detailWidth ? null : Math.min(1180, Math.round(window.innerWidth * 0.94)),
+              )
+            }
+            aria-label={detailWidth ? "Collapse" : "Expand"}
+            title={detailWidth ? "Collapse" : "Expand"}
+          >
+            {detailWidth ? "⤡" : "⤢"}
+          </button>
+          <button
+            className="sheet-btn"
+            onClick={() => setSelectedId(null)}
+            aria-label="Close"
+            title="Close"
+          >
+            ✕
+          </button>
+        </div>
         {!selected ? (
           selectedId && detailLoading ? (
             <div className="empty-detail">
@@ -975,8 +1336,6 @@ function Console({ user }: { user: User }) {
         ) : (
           <Detail
             opp={selected}
-            tab={tab}
-            setTab={setTab}
             capturing={capturing}
             isAdmin={isAdmin}
             members={members}
@@ -987,12 +1346,14 @@ function Console({ user }: { user: User }) {
             onRunOutreach={() => onRunOutreach(selected.id)}
             outreachOne={outreachOne}
             onRunOutreachOne={(email) => onRunOutreachOne(selected.id, email)}
+            onContactsChange={(contacts) => onContactsChange(selected.id, contacts)}
           />
         )}
       </section>
           </div>
         </div>
       )}
+        </PageTransition>
         </div>
       </div>
 
@@ -1023,14 +1384,13 @@ function Console({ user }: { user: User }) {
             setAddOppOpen(false);
             // The new manual opp starts "ingesting" → refresh the list + counts (which arms the
             // in-flight poll), then open it so its docs/verdict land as they finish.
-            loadPage();
+            void reload();
             loadCounts();
             setSelectedId(r.opportunity_id);
           }}
         />
       )}
 
-      {error && <div className="toast">{error}</div>}
     </main>
   );
 }
@@ -1135,8 +1495,20 @@ function DashboardView({
   );
   const capturedBids = useMemo(() => bids.filter((o) => !!o.captured_at).length, [bids]);
 
-  // Calendar day the user clicked (YYYY-MM-DD, local) — filters the right-hand panel.
+  // Two ways to narrow the right-hand panel, mutually exclusive so the header never lies:
+  //   selectedDay    — a calendar day was clicked (YYYY-MM-DD, local)
+  //   selectedBucket — a donut slice was clicked (week/month/later/none)
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [selectedBucket, setSelectedBucket] = useState<string | null>(null);
+  // Picking a day clears a bucket and vice versa — only one filter drives the panel at a time.
+  const pickDay = (day: string | null) => {
+    setSelectedBucket(null);
+    setSelectedDay(day);
+  };
+  const pickBucket = (key: string) => {
+    setSelectedDay(null);
+    setSelectedBucket((prev) => (prev === key ? null : key)); // click the active slice to clear
+  };
   const selectedDayBids = useMemo(
     () =>
       !selectedDay
@@ -1162,6 +1534,14 @@ function DashboardView({
     [opps],
   );
 
+  // Part-to-whole over the SAME buckets the agenda below is grouped by, so the ring and the
+  // list can never tell different stories. Reusing `agenda` also inherits its rule that
+  // overdue is not a bucket — hence "upcoming" on the centre figure rather than a bare total.
+  const deadlineMix = useMemo(
+    () => agenda.map((g) => ({ key: g.key, value: g.rows.length })),
+    [agenda],
+  );
+
   return (
     <div className="dash">
       <div className="dash-head">
@@ -1173,19 +1553,35 @@ function DashboardView({
         </div>
       </div>
 
-      <div className="dash-stats dash-stats-3">
-        {stats.map((s) => (
-          <div className="dash-stat" key={s.label}>
-            <div className={`ds-n ${s.tone ?? ""}`}>{s.value}</div>
-            <div className="ds-l">{s.label}</div>
-          </div>
-        ))}
+      <div className="dash-top">
+        <div className="dash-stats dash-stats-3">
+          {stats.map((s) => (
+            <div className="dash-stat" key={s.label}>
+              <div className={`ds-n ${s.tone ?? ""}`}>{s.value}</div>
+              <div className="ds-l">{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {deadlineMix.length > 0 && (
+          <section className="dash-chart-card rounded-lg border border-border bg-card p-4">
+            <h2 className="mb-1 text-[13px] font-medium">Pursuit load by deadline</h2>
+            <DonutStat
+              data={deadlineMix}
+              config={DEADLINE_SLICES}
+              totalLabel="upcoming"
+              height={188}
+              onSelect={pickBucket}
+              activeKey={selectedBucket}
+            />
+          </section>
+        )}
       </div>
 
       <MailTriagePanel opportunityTitles={opportunityTitles} onOpenOpportunity={onOpen} />
 
       <div className="dash-cal2">
-        <DashCalendar bids={bids} selectedDay={selectedDay} onSelectDay={setSelectedDay} />
+        <DashCalendar bids={bids} selectedDay={selectedDay} onSelectDay={pickDay} />
 
         <div className="dash-col">
           {selectedDay ? (
@@ -1217,7 +1613,17 @@ function DashboardView({
           ) : (
             <>
               <div className="dash-col-head">
-                <span>Active pursuits · by deadline</span>
+                <span>
+                  {selectedBucket
+                    ? agenda.find((g) => g.key === selectedBucket)?.label ??
+                      "Active pursuits · by deadline"
+                    : "Active pursuits · by deadline"}
+                </span>
+                {selectedBucket && (
+                  <button className="sel-link" onClick={() => setSelectedBucket(null)}>
+                    Clear
+                  </button>
+                )}
               </div>
               {loading ? (
                 <div className="dash-empty">Loading…</div>
@@ -1229,7 +1635,10 @@ function DashboardView({
                 <div className="dash-empty">No upcoming deadlines on your active pursuits.</div>
               ) : (
                 <div className="dash-agenda">
-                  {agenda.map((g) => (
+                  {(selectedBucket
+                    ? agenda.filter((g) => g.key === selectedBucket)
+                    : agenda
+                  ).map((g) => (
                     <div className="agenda-group" key={g.key}>
                       <div className={`agenda-label ${g.key}`}>
                         {g.label} <span className="c">{g.rows.length}</span>
@@ -1363,57 +1772,133 @@ function DashCalendar({
 function CallPlanView() {
   const [calls, setCalls] = useState<CallPlanItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
+  const [prepOpp, setPrepOpp] = useState<string | null>(null);
+  const [filters, setFilters] = useState<CallFilters>(EMPTY_CALL_FILTERS);
+  const pushToast = useToastStore((s) => s.push);
 
   const load = useCallback(async () => {
     try {
       setCalls(await fetchCallPlan());
     } catch {
-      setErr("Couldn't load the call plan — is the backend running?");
+      pushToast("Couldn't load the call plan — is the backend running?");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pushToast]);
   useEffect(() => {
     load();
   }, [load]);
 
   const update = async (callId: string, status: string) => {
-    setErr(null);
     setCalls((prev) => prev.map((c) => (c.call_id === callId ? { ...c, status } : c))); // optimistic
     try {
       await setCallStatus(callId, status);
     } catch {
-      setErr("Couldn't update the call — reverting.");
+      pushToast("Couldn't update the call — reverting.");
       load();
     }
   };
 
   const active = calls.filter((c) => c.status === "Planned");
-  const resolved = calls.filter((c) => c.status !== "Planned");
-  const ordered = [...active, ...resolved];
+  // The pursuit whose call-prep dialog is open (one tab per contact).
+  const prepping = calls.find((c) => c.opportunity_id === prepOpp) ?? null;
+
+  // Every agency on the sheet, for the Agency picker.
+  const agencyOptions = useMemo(
+    () => Array.from(new Set(calls.map((c) => c.agency).filter(Boolean) as string[])).sort(),
+    [calls],
+  );
+
+  const counts = useMemo(
+    () => ({
+      planned: calls.filter((c) => c.status === "Planned").length,
+      done: calls.filter((c) => c.status === "Done").length,
+      dismissed: calls.filter((c) => c.status === "Dismissed").length,
+      all: calls.length,
+    }),
+    [calls],
+  );
+
+  const ordered = useMemo(() => {
+    const needle = filters.q.trim().toLowerCase();
+    const rows = calls.filter((c) => {
+      if (filters.status !== "all") {
+        const want = { planned: "Planned", done: "Done", dismissed: "Dismissed" }[filters.status];
+        if (c.status !== want) return false;
+      }
+      if (filters.agencies.length && !filters.agencies.includes(c.agency ?? "")) return false;
+      if (filters.due !== "any") {
+        const { days } = dueLabel(c.response_deadline);
+        if (days == null) return false;
+        if (filters.due === "overdue" ? days >= 0 : days < 0 || days > Number(filters.due))
+          return false;
+      }
+      if (needle) {
+        const hay = [
+          c.opportunity_title, c.agency, c.talking_point, c.poc_name, c.poc_email,
+          ...(c.contacts ?? []).flatMap((p) => [p.name, p.email, p.company]),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
+    });
+    // Unresolved first within the current selection — a done call shouldn't sit above a
+    // pursuit still waiting on a call.
+    return [
+      ...rows.filter((c) => c.status === "Planned"),
+      ...rows.filter((c) => c.status !== "Planned"),
+    ];
+  }, [calls, filters]);
 
   return (
     <div className="callplan">
       <div className="cp-head">
         <h2>
-          Call Plan <span className="c">{active.length}</span>
+          Call Plan{" "}
+          <span className="c" title={`${active.length} still to call`}>
+            {ordered.length}
+          </span>
         </h2>
         <div className="cp-sub">
-          Calls the Analyst recommends across your pipeline — your consolidated call sheet.
+          Every pursuit that has been through capture, plus the calls the Analyst recommends —
+          your consolidated call sheet.
         </div>
       </div>
+
+      {calls.length > 0 && (
+        <CallPlanFilters
+          filters={filters}
+          onChange={setFilters}
+          agencyOptions={agencyOptions}
+          counts={counts}
+          onClear={() => setFilters(EMPTY_CALL_FILTERS)}
+        />
+      )}
+
       {loading ? (
         <div className="cp-empty">Loading…</div>
       ) : calls.length === 0 ? (
         <div className="cp-empty">
-          No calls planned yet. The Analyst adds a call here whenever it marks an
-          opportunity <b>Bid</b> with a recommended outreach.
+          Nothing to call on yet. A pursuit lands here once capture has run on it, or when the
+          Analyst marks an opportunity <b>Bid</b> with a recommended outreach.
+        </div>
+      ) : ordered.length === 0 ? (
+        <div className="cp-empty">
+          No calls match these filters.{" "}
+          <button className="sel-link" onClick={() => setFilters(EMPTY_CALL_FILTERS)}>
+            Clear them
+          </button>
         </div>
       ) : (
         <div className="cp-list">
           {ordered.map((c) => (
-            <div className={`cp-card ${c.status !== "Planned" ? "muted" : ""}`} key={c.call_id}>
+            <div
+              className={`cp-card ${c.status !== "Planned" ? "muted" : ""}`}
+              key={c.opportunity_id}
+            >
               <div className="cp-top">
                 <div style={{ minWidth: 0 }}>
                   <div className="cp-title">{c.opportunity_title ?? "Opportunity"}</div>
@@ -1437,19 +1922,33 @@ function CallPlanView() {
                   {c.poc_email && c.poc_name ? ` · ${c.poc_email}` : ""}
                 </span>
                 <div className="cp-actions">
-                  {c.status === "Planned" ? (
+                  {(c.contacts?.length ?? 0) > 0 && (
+                    <button
+                      className="mini-btn"
+                      onClick={() => setPrepOpp(c.opportunity_id)}
+                      title="Open the call prep — one brief per person"
+                    >
+                      Prep calls
+                      <span className="cp-ct">{c.contacts!.length}</span>
+                    </button>
+                  )}
+                  {/* Done/Dismiss act on the Analyst's call row. A pursuit that reached
+                      capture without one has nothing to mark — it just preps calls. */}
+                  {!c.call_id ? (
+                    c.captured && <span className="cp-status done">Captured</span>
+                  ) : c.status === "Planned" ? (
                     <>
-                      <button className="mini-btn" onClick={() => update(c.call_id, "Done")}>
+                      <button className="mini-btn" onClick={() => update(c.call_id!, "Done")}>
                         Mark done
                       </button>
-                      <button className="sel-link" onClick={() => update(c.call_id, "Dismissed")}>
+                      <button className="sel-link" onClick={() => update(c.call_id!, "Dismissed")}>
                         Dismiss
                       </button>
                     </>
                   ) : (
                     <>
                       <span className={`cp-status ${c.status.toLowerCase()}`}>{c.status}</span>
-                      <button className="sel-link" onClick={() => update(c.call_id, "Planned")}>
+                      <button className="sel-link" onClick={() => update(c.call_id!, "Planned")}>
                         Reopen
                       </button>
                     </>
@@ -1460,15 +1959,21 @@ function CallPlanView() {
           ))}
         </div>
       )}
-      {err && <div className="toast">{err}</div>}
+
+      {prepping && (
+        <CallBriefDialog
+          opportunityId={prepping.opportunity_id}
+          title={prepping.opportunity_title ?? "Opportunity"}
+          contacts={prepping.contacts ?? []}
+          onClose={() => setPrepOpp(null)}
+        />
+      )}
     </div>
   );
 }
 
 function Detail({
   opp,
-  tab,
-  setTab,
   capturing,
   isAdmin,
   members,
@@ -1479,10 +1984,9 @@ function Detail({
   onRunOutreach,
   outreachOne,
   onRunOutreachOne,
+  onContactsChange,
 }: {
   opp: Opportunity;
-  tab: TabKey;
-  setTab: (t: TabKey) => void;
   capturing: boolean;
   isAdmin: boolean;
   members: TeamMember[];
@@ -1493,7 +1997,10 @@ function Detail({
   onRunOutreach: () => void;
   outreachOne: string | null;
   onRunOutreachOne: (email: string) => void;
+  onContactsChange: (contacts: RecommendedContact[]) => Promise<void>;
 }) {
+  const tab = useUiStore((s) => s.tab);
+  const setTab = useUiStore((s) => s.setTab);
   const captured = !!opp.captured_at;
   const docs = opp.documents ?? [];
   const calls = opp.calls ?? [];
@@ -1506,6 +2013,8 @@ function Detail({
     { key: "contacts", label: "Contacts", count: opp.recommended_contacts?.length ?? 0 },
     { key: "documents", label: "Documents", count: docs.length },
     { key: "activity", label: "Activity", count: tasks.length },
+    // No count: the trail's length is not a to-do, and a number here would read as one.
+    { key: "agent", label: "Agent" },
   ];
 
   return (
@@ -1608,10 +2117,15 @@ function Detail({
             onRunOutreach={onRunOutreach}
             outreachOne={outreachOne}
             onRunOutreachOne={onRunOutreachOne}
+            onContactsChange={onContactsChange}
           />
         )}
         {tab === "documents" && <DocumentsTab opp={opp} />}
         {tab === "activity" && <ActivityTab opp={opp} tasks={tasks} calls={calls} />}
+        {/* What the agents did to this opportunity and WHY — reasoning that was previously
+            generated and thrown away. Mounted only when selected, so its 3s poll never runs
+            behind another tab. */}
+        {tab === "agent" && <AgentTrail subjectId={opp.id} />}
       </div>
 
       <div className="detail-foot">
@@ -1722,18 +2236,41 @@ function ContactsTab({
   onRunOutreach,
   outreachOne,
   onRunOutreachOne,
+  onContactsChange,
 }: {
   opp: Opportunity;
   outreachBusy: boolean;
   onRunOutreach: () => void;
   outreachOne: string | null;
   onRunOutreachOne: (email: string) => void;
+  onContactsChange: (contacts: RecommendedContact[]) => Promise<void>;
 }) {
   const relevant = opp.recommended_contacts ?? [];
   const searched = !!opp.contacts_searched_at;
   const drafts = opp.outreach_drafts ?? [];
   const drafted = !!opp.outreach_drafted_at;
   const emailable = relevant.filter((c) => c.email).length;
+
+  // Manual add/remove. `onContactsChange` persists the whole list; the two helpers just
+  // build the next list and hand it over.
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ name: "", email: "", company: "", title: "" });
+  const removeContact = (idx: number) =>
+    onContactsChange(relevant.filter((_, i) => i !== idx));
+  const submitAdd = () => {
+    const name = form.name.trim();
+    if (!name) return;
+    const added: RecommendedContact = {
+      name,
+      email: form.email.trim() || null,
+      company: form.company.trim() || null,
+      title: form.title.trim() || null,
+      source: "manual",
+    };
+    void onContactsChange([...relevant, added]);
+    setForm({ name: "", email: "", company: "", title: "" });
+    setAdding(false);
+  };
 
   // Collision check: which contacts a teammate is already engaging. Keyed on the
   // actual contact emails (not just opp.id) so it refetches when a background reload
@@ -1761,16 +2298,44 @@ function ContactsTab({
     <>
       <div className="sec-title first sec-row">
         <span>Relevant contacts · from your network</span>
-        {emailable > 0 && (
-          <button className="mini-btn" onClick={onRunOutreach} disabled={outreachBusy}>
-            {outreachBusy
-              ? "Drafting…"
-              : drafted
-                ? "Regenerate emails"
-                : `Draft ${emailable} email${emailable > 1 ? "s" : ""}`}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="mini-btn" onClick={() => setAdding((v) => !v)}>
+            {adding ? "Cancel" : "+ Add contact"}
           </button>
-        )}
+          {emailable > 0 && (
+            <button className="mini-btn" onClick={onRunOutreach} disabled={outreachBusy}>
+              {outreachBusy
+                ? "Drafting…"
+                : drafted
+                  ? "Regenerate emails"
+                  : `Draft ${emailable} email${emailable > 1 ? "s" : ""}`}
+            </button>
+          )}
+        </div>
       </div>
+      {adding && (
+        <div className="rec add-contact">
+          <div className="ac-grid">
+            <input className="ac-in" placeholder="Name *" value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && submitAdd()} autoFocus />
+            <input className="ac-in" placeholder="Email" value={form.email}
+              onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
+            <input className="ac-in" placeholder="Company" value={form.company}
+              onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
+            <input className="ac-in" placeholder="Title" value={form.title}
+              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <button className="mini-btn" onClick={submitAdd} disabled={!form.name.trim()}>
+              Add
+            </button>
+          </div>
+        </div>
+      )}
       {relevant.length > 0 ? (
         <div className="card-list">
           {relevant.map((c, i) => {
@@ -1787,17 +2352,31 @@ function ContactsTab({
                       {c.company && (
                         <span style={{ color: "var(--muted)", fontWeight: 400 }}> · {c.company}</span>
                       )}
+                      {c.source === "manual" && <span className="rec-manual">added</span>}
                     </div>
                     {c.title && (
                       <div style={{ fontSize: 12, color: "var(--faint)", marginTop: 2 }}>{c.title}</div>
                     )}
                   </div>
-                  {c.relevance_score != null && (
-                    <span className="pscore">
-                      P<b>{c.relevance_score}</b>
-                    </span>
-                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {c.relevance_score != null && (
+                      <span className="pscore">
+                        P<b>{c.relevance_score}</b>
+                      </span>
+                    )}
+                    <button
+                      className="rec-remove"
+                      title="Remove from this opportunity"
+                      aria-label={`Remove ${c.name}`}
+                      onClick={() => removeContact(i)}
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
+                {/* No enrichment SUGGESTIONS here: on an opportunity a rep wants the finished
+                    picture, not "is this right?" prompts. Confirming guesses lives in the
+                    Contacts view (Contacts → To review). */}
                 {c.email && (collisions[c.email.toLowerCase()]?.length ?? 0) > 0 && (
                   <div className="collision-warn">
                     ⚠{" "}
@@ -2264,15 +2843,14 @@ const orgLabel: React.CSSProperties = {
 };
 
 function OrgPanel({ meEmail }: { meEmail: string }) {
-  const [org, setOrg] = useState<Organization | null>(null);
+  const qc = useQueryClient();
   const [orgName, setOrgName] = useState("");
   const [uei, setUei] = useState("");
+  // Held as the raw comma-separated string the admin types; split server-side on save.
+  const [keywords, setKeywords] = useState("");
   const [savingOrg, setSavingOrg] = useState(false);
   const [orgMsg, setOrgMsg] = useState<string | null>(null);
   const [subTab, setSubTab] = useState<"settings" | "team">("settings");
-  const [members, setMembers] = useState<TeamMember[]>([]);
-  const [invites, setInvites] = useState<Invitation[]>([]);
-  const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -2280,31 +2858,28 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
   const [inviting, setInviting] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const [o, m, inv] = await Promise.all([
-        organizationsApi.getMyOrganization().catch(() => null),
-        organizationsApi.getMembers(),
-        invitationsApi.listInvitations("pending").catch(() => [] as Invitation[]),
-      ]);
-      if (o) {
-        setOrg(o);
-        setOrgName(o.name ?? "");
-        setUei(o.uei ?? "");
-      }
-      setMembers(m);
-      setInvites(inv);
-      setErr(null);
-    } catch (e) {
-      setErr(errText(e, "Couldn't load the organisation."));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Cached: the panel's three reads (org + members + pending invites) as one query, so
+  // re-opening Organisation is instant instead of re-fetching all three every time.
+  const orgQ = useQuery(organizationQuery());
+  const org = orgQ.data?.org ?? null;
+  const members = orgQ.data?.members ?? [];
+  const invites = orgQ.data?.invites ?? [];
+  const loading = orgQ.isPending;
 
+  // Mutations still say `load()`; it now invalidates the cache and lets the query refetch.
+  const load = useCallback(
+    () => qc.invalidateQueries({ queryKey: queryKeys.organization }),
+    [qc],
+  );
+
+  // Seed the editable fields from the org — keyed on its id so a background refetch can
+  // never overwrite what the user is currently typing.
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!org) return;
+    setOrgName(org.name ?? "");
+    setUei(org.uei ?? "");
+    setKeywords((org.keywords ?? []).join(", "));
+  }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Single action: save the name + UEI, then automatically pull the company's
   // details from SAM.gov (if a UEI is set).
@@ -2316,6 +2891,7 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
       const updated = await organizationsApi.updateOrganization({
         name: orgName.trim(),
         uei: uei.trim(),
+        keywords: keywords, // raw comma-separated; the server splits + de-dupes
       });
       let merged = updated;
       if (uei.trim()) {
@@ -2329,7 +2905,11 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
       } else {
         setOrgMsg("Saved.");
       }
-      setOrg(merged);
+      // Write the saved org straight into the cache — no refetch needed, and members/invites
+      // are untouched by this mutation.
+      qc.setQueryData(queryKeys.organization, (prev: OrgBundle | undefined) =>
+        prev ? { ...prev, org: merged } : prev,
+      );
     } catch (e) {
       setErr(errText(e, "Couldn't save the organisation."));
     } finally {
@@ -2414,6 +2994,21 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
                 />
                 <div style={{ fontSize: 11.5, color: "var(--faint)" }}>
                   On save we pull your company&apos;s registration (legal name, CAGE, NAICS, status) from SAM.gov.
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <label style={orgLabel}>Focus areas · what you&apos;re actively pursuing</label>
+                <input
+                  className="search"
+                  value={keywords}
+                  onChange={(e) => setKeywords(e.target.value)}
+                  placeholder="DevSecOps, AI engineering, zero trust, cloud migration"
+                />
+                <div style={{ fontSize: 11.5, color: "var(--faint)" }}>
+                  Comma-separated. Your SAM.gov registration says what you&apos;re <i>eligible</i> for;
+                  this says what you&apos;re <i>good at</i>. The agents rank matching opportunities
+                  higher — nothing is ever filtered out for not matching, and they match on meaning
+                  (&ldquo;secure software factory&rdquo; counts as DevSecOps).
                 </div>
               </div>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>

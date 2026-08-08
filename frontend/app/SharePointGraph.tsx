@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { fetchSharePointGraph, type SPGraph, type SPNode } from "@/lib/data";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { type SPNode } from "@/lib/data";
+import { sharePointGraphQuery } from "@/lib/queries";
+import { useUiStore } from "@/lib/stores/uiStore";
 import ForceGraph, { type NodeVisual } from "./ForceGraph";
 
 const TYPE: Record<string, { color: string; r: number; square?: boolean }> = {
@@ -39,7 +42,6 @@ const card = (n: SPNode) => (
   </>
 );
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type ViewMode = "graph" | "list" | "site";
 type SortKey = "name" | "type" | "path" | "items";
@@ -226,50 +228,40 @@ function SPBySite({ nodes, edges }: { nodes: SPNode[]; edges: { source: string; 
   );
 }
 
-export default function SharePointGraph({ refreshSignal }: { refreshSignal?: number } = {}) {
-  const [data, setData] = useState<SPGraph | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+// A real structure crawl (one Composio call to Microsoft per item) takes a few minutes;
+// past this we stop watching rather than polling into the void.
+const WATCH_MS = 5 * 60_000;
+
+export default function SharePointGraph() {
+  const sharePointRefresh = useUiStore((s) => s.sharePointRefresh);
   const [view, setView] = useState<ViewMode>("graph");
 
-  // The structure crawl runs in the background (Composio calls to Microsoft, one per
-  // item — a real sync takes a few minutes) and can be triggered by a resync click OR
-  // by landing back here right after connecting. Rather than making the user manually
-  // reload the page once it's done, poll for a while and pick it up automatically —
-  // re-fetching on mount and every time `refreshSignal` changes (bumped by the parent
-  // on resync / post-connect).
+  // Watch ONLY while a crawl is actually in flight (a resync click, or landing back here
+  // right after connecting — both bump `sharePointRefresh`). This used to poll every 5s for
+  // five minutes on every mount regardless; the cached query now serves revisits instantly.
+  const watchUntil = useRef(0);
+  const first = useRef(true);
   useEffect(() => {
-    let cancelled = false;
-    let attempt = 0;
-    const maxAttempts = 60; // ~5 min at 5s intervals — covers a real-world crawl (~3 min) with buffer
+    if (first.current) {
+      first.current = false; // a plain visit is not a reason to watch
+      return;
+    }
+    watchUntil.current = Date.now() + WATCH_MS;
+  }, [sharePointRefresh]);
 
-    const tick = async () => {
-      try {
-        const fresh = await fetchSharePointGraph();
-        if (cancelled) return;
-        setErr(null);
-        setData((prev) =>
-          // Skip the state update (and the graph's re-layout) when nothing changed.
-          prev && prev.nodes.length === fresh.nodes.length && prev.edges.length === fresh.edges.length
-            ? prev
-            : fresh,
-        );
-      } catch {
-        if (!cancelled) setErr("Couldn't load the SharePoint graph — connect SharePoint and sync first.");
-      }
-      attempt++;
-      if (!cancelled && attempt < maxAttempts) {
-        await sleep(5000);
-        if (!cancelled) tick();
-      }
-    };
+  const q = useQuery({
+    ...sharePointGraphQuery(),
+    // Evaluated per tick, so watching stops on its own once the window closes.
+    refetchInterval: () => (Date.now() < watchUntil.current ? 5000 : false),
+  });
+  const data = q.data ?? null;
 
-    tick();
-    return () => {
-      cancelled = true;
-    };
-  }, [refreshSignal]);
-
-  if (err) return <div className="graph-empty">{err}</div>;
+  if (q.isError && !data)
+    return (
+      <div className="graph-empty">
+        Couldn&apos;t load the SharePoint graph — connect SharePoint and sync first.
+      </div>
+    );
   if (!data) return <div className="graph-empty">Loading structure…</div>;
   if (data.nodes.length === 0)
     return (

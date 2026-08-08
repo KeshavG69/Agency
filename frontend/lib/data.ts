@@ -46,6 +46,7 @@ export interface RecommendedContact {
   relevance_score?: number | null;
   reason?: string;
   suggested_outreach?: string;
+  source?: string | null; // "manual" when a rep added the contact from the Contacts tab
 }
 // One outreach email the Mail Agent drafted — shaped for the artifact + send tool.
 export interface OutreachDraft {
@@ -186,10 +187,9 @@ export async function createOutlookDraft(
 // The pipeline board columns.
 export const STAGES = ["Discover", "Qualify", "Capture", "Pursue", "Submitted"];
 
-export async function fetchOpportunities(): Promise<Opportunity[]> {
-  const { data } = await apiClient.get("/api/opportunities");
-  return data.opportunities ?? [];
-}
+// REMOVED: fetchOpportunities() — it hit GET /api/opportunities, which returned the whole
+// org enriched in one payload (~10 MB / 9.5 s on a large org). It had no callers left; the
+// pipeline uses fetchOpportunityPage() and the detail pane fetches one record at a time.
 
 // ---- Paginated pipeline (server-side filter/search/calendar + slim rows) ----
 // List rows are SLIM: no documents/calls/tasks/recommended_contacts/outreach_drafts/
@@ -225,13 +225,20 @@ export interface OpportunityPage {
   total: number;
   offset: number;
   limit: number;
+  // Present unless the caller asked for withCounts: false — see fetchOpportunityPage.
+  counts?: Record<string, number>;
+  in_flight?: number;
 }
 export async function fetchOpportunityPage(
-  p: PipelineParams & { offset?: number; limit?: number },
+  p: PipelineParams & { offset?: number; limit?: number; withCounts?: boolean },
 ): Promise<OpportunityPage> {
   const qs = pipelineQuery(p);
   qs.set("offset", String(p.offset ?? 0));
   qs.set("limit", String(p.limit ?? 50));
+  // The status pill counts now ride along with the page — rows, total and counts are
+  // fetched concurrently server-side, so one request replaces two. Pass false where the
+  // caller does not render the pills (e.g. the Bid sidebar).
+  if (p.withCounts === false) qs.set("with_counts", "false");
   const { data } = await apiClient.get(`/api/opportunities/page?${qs.toString()}`);
   return data;
 }
@@ -260,13 +267,33 @@ export async function fetchOpportunity(id: string): Promise<Opportunity> {
 }
 
 // The org's Bid set (few) for the left sidebar + dashboard — independent of the paged list.
+//
+// Pages through rather than asking for one huge response. The API caps a page at 100, and
+// the previous single `limit: 500` call had two problems: it would now be rejected, and it
+// SILENTLY TRUNCATED at 500 — an org with more active pursuits than that simply lost the
+// rest from its sidebar with no error anywhere. Looping is both correct and bounded: it
+// stops as soon as a short page comes back.
 export async function fetchBids(): Promise<Opportunity[]> {
-  const page = await fetchOpportunityPage({ status: "Bid", limit: 500 });
-  return page.items;
+  const PAGE_SIZE = 100;
+  const MAX_PAGES = 20; // 2,000 active bids is far beyond real; a guard against a bad total
+  const all: Opportunity[] = [];
+
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const page = await fetchOpportunityPage({
+      status: "Bid",
+      offset: all.length,
+      limit: PAGE_SIZE,
+      // The sidebar never renders the status pills, so skip computing them per page.
+      withCounts: false,
+    });
+    all.push(...page.items);
+    if (page.items.length < PAGE_SIZE || all.length >= page.total) break;
+  }
+  return all;
 }
 
 // Trigger an on-demand SAM.gov pull for this org (NAICS-filtered, still-open notices).
-// Runs in the background (download + ingest + Analyst); the UI polls fetchOpportunities.
+// Runs in the background (download + ingest + Analyst); the UI polls fetchOpportunityPage.
 export interface SamScanResult {
   scan_started?: boolean;
   task_id?: string;
@@ -341,6 +368,30 @@ export interface ContactGraph {
 
 export async function fetchContactGraph(): Promise<ContactGraph> {
   const { data } = await apiClient.get("/api/contacts/graph");
+  return data;
+}
+
+// ---- Contacts LIST (the graph is too heavy at ~3k nodes) ----
+export interface ContactRow {
+  name: string;
+  email?: string | null;
+  company?: string | null;
+  title?: string | null;
+  corr_count?: number;
+  industry?: string | null;
+  last_contact?: string | null;
+}
+// `total` is present only on the first page (offset 0); the client keeps it and pages the rest.
+export interface ContactsPage {
+  items: ContactRow[];
+  total: number | null;
+}
+export async function fetchContactsPage(
+  offset: number,
+  limit: number,
+  q: string,
+): Promise<ContactsPage> {
+  const { data } = await apiClient.get("/api/contacts", { params: { offset, limit, q } });
   return data;
 }
 
@@ -522,6 +573,17 @@ export async function assignOpportunity(id: string, userIds: string[]): Promise<
   await apiClient.post(`/api/opportunities/${id}/assign`, { user_ids: userIds });
 }
 
+// Replace an opportunity's contact list (manual add/remove from the Contacts tab). The UI
+// sends the whole list it wants to keep, so add and remove are the same call. Returns the
+// stored list echoed back by the server.
+export async function updateOpportunityContacts(
+  id: string,
+  contacts: RecommendedContact[],
+): Promise<RecommendedContact[]> {
+  const { data } = await apiClient.put(`/api/opportunities/${id}/contacts`, { contacts });
+  return data.recommended_contacts ?? contacts;
+}
+
 // Mint a FRESH presigned URL for a generated document (the stored one expires).
 export async function getDocUrl(documentId: string): Promise<string> {
   const { data } = await apiClient.get(`/api/documents/${documentId}/url`);
@@ -530,7 +592,10 @@ export async function getDocUrl(documentId: string): Promise<string> {
 
 // ---- Call plan (consolidated BD call sheet across the pipeline) ----
 export interface CallPlanItem {
-  call_id: string;
+  // null for a pursuit that reached capture but has no Analyst call row — it still appears
+  // (and preps calls), it just has nothing to mark Done/Dismiss.
+  call_id: string | null;
+  captured?: boolean;
   opportunity_id: string;
   opportunity_title?: string;
   agency?: string;
@@ -543,6 +608,7 @@ export interface CallPlanItem {
   talking_point?: string;
   status: string; // "Planned" | "Done" | "Dismissed"
   created_at?: string;
+  contacts?: CallContact[]; // everyone worth calling — the dialog's per-person tabs
 }
 
 export async function fetchCallPlan(): Promise<CallPlanItem[]> {
@@ -552,6 +618,65 @@ export async function fetchCallPlan(): Promise<CallPlanItem[]> {
 
 export async function setCallStatus(callId: string, status: string): Promise<void> {
   await apiClient.post(`/api/calls/${callId}/status`, { status });
+}
+
+// ---- Per-contact call briefs ("how do I talk to THIS person?") ----
+// The Call Plan dialog has one tab per contact on a pursuit; each tab is its own brief, run
+// on demand when the rep opens it. Every brief is grounded in that contact's WHOLE ORG — the
+// agent reads every thread in the rep's mailbox with anyone at their email domain.
+export interface CallContact {
+  name?: string | null;
+  email: string;
+  title?: string | null;
+  company?: string | null;
+  source?: string; // "poc" | "recommended" | "manual"
+}
+// No contact name/email here — the caller already knows who the brief is for (the tab they
+// clicked), and the stored doc carries `contact_email`.
+export interface CallBriefBody {
+  org_name: string;
+  summary: string;
+  relationship?: string | null;
+  org_context?: string | null;
+  approach: string; // THE line: how to talk to this person
+  talking_points: string[];
+  open_threads: string[];
+  suggested_ask: string;
+}
+export interface CallBriefDoc {
+  opportunity_id: string;
+  contact_email: string;
+  org_domain: string;
+  brief: CallBriefBody;
+  mail_count?: number;
+  refreshed_at?: string;
+}
+export interface CallBriefsResponse {
+  opportunity_id: string;
+  briefs: CallBriefDoc[];
+  pending: string[]; // contact emails currently being prepared in the background
+}
+
+// Kick off the brief for ONE contact (runs in the background). `queued` is false when one is
+// already being prepared — either way a brief is on its way.
+export async function prepCall(
+  opportunityId: string,
+  contactEmail: string,
+): Promise<{ opportunity_id: string; contact_email: string; queued: boolean; pending: boolean }> {
+  const { data } = await apiClient.post("/api/calls/brief", {
+    opportunity_id: opportunityId,
+    contact_email: contactEmail,
+  });
+  return data;
+}
+
+// Every contact-brief for one pursuit + which are still being prepared — one payload for the
+// whole dialog, so the tabs don't each poll separately.
+export async function fetchCallBriefs(opportunityId: string): Promise<CallBriefsResponse> {
+  const { data } = await apiClient.get(
+    `/api/calls/brief/${encodeURIComponent(opportunityId)}`,
+  );
+  return data;
 }
 
 // ---- Outreach collision ("someone's already talking to this contact") ----

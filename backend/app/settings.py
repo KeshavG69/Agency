@@ -13,9 +13,21 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     EXTRACTION_MODEL: str = "google/gemini-3.1-flash-lite"
+     # The mail sweep reads signatures with this model (one call per sender per sweep). Gemma 4
+    # 26B MoE (~4B active) is the pick: A/B'd against gemma-4-31b and nemotron-3-super-120b on
+    # real signatures, all three gave identical titles/phones — so the small, cheap, highly
+    # parallel MoE wins. Reading a 5-line signature needs no bigger or reasoning model.
+    SIGNATURE_MODEL: str = "google/gemma-4-26b-a4b-it"
 
     # OpenAI — embeddings (optional, used by the cached LLM client)
     OPENAI_API_KEY: str = ""
+
+    # Langfuse — LLM observability. When both keys are set, client/langfuse_client.py
+    # instruments the openai SDK (which Agno agents and LangChain both use) so every model
+    # call is traced. Empty keys => tracing is a silent no-op.
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_BASE_URL: str = "https://us.cloud.langfuse.com"
 
     # iDrive e2 — S3-compatible storage for generated documents
     IDRIVE_E2_ENDPOINT: str = ""
@@ -26,9 +38,6 @@ class Settings(BaseSettings):
     # Exa — web search tool for agents
     EXA_API_KEY: str = ""
 
-    # Explorium — resolve a contact's name / title / company from their email
-    EXPLORIUM_API_KEY: str = ""
-    EXPLORIUM_BASE_URL: str = "https://api.explorium.ai/v1"
 
     # SAM.gov Entity API — fetch a company's registration details from its UEI
     # (free key from api.data.gov / sam.gov). Used by the Organisation settings.
@@ -81,7 +90,13 @@ class Settings(BaseSettings):
     SHAREPOINT_GRAPH_NAME: str = "sharepoint_structure"
     
     
-    ANALYST_MODEL: str = "openai/gpt-5.4-mini"
+    # ---- Agent models — one per agent, so each can be tuned independently ----
+    ANALYST_MODEL: str = "openai/gpt-5.4-mini"   # bid / no-bid analyst
+    CRM_MODEL: str = "openai/gpt-5.6-terra"      # relation / contact-finding agent
+    RESEARCH_MODEL: str = "openai/gpt-5.4-mini"  # company research
+    CAPTURE_MODEL: str = "openai/gpt-5.6-terra"  # capture strategy + deliverables
+    MAIL_MODEL: str = "openai/gpt-5.6-terra"     # outreach drafting
+    BRIEF_MODEL: str = "openai/gpt-5.6-terra"    # call brief (org-level meeting prep)
 
     # Manual opportunity upload — the small/fast model that digests big solicitation
     # packages. If the whole package fits (<= STUFF_MAX) it's kept verbatim with no

@@ -27,14 +27,41 @@ def _org(organization_id: str) -> dict | None:
         return db["organizations"].find_one({"_id": organization_id})
 
 
-def _format(name: str | None, uei: str | None, d: dict | None) -> str:
+def _focus_block(keywords: list[str] | None) -> str:
+    """The admin's capability focus areas, as the SECOND half of the fit lens.
+
+    SAM.gov tells an agent what the company is ELIGIBLE for (NAICS, set-asides). It says
+    nothing about what they are actually good at or currently chasing. That is what these
+    are for.
+
+    They are deliberately a RANKING signal, never a filter: the ingestion never drops a
+    notice for missing them, and an agent must not reject on them either — otherwise a
+    strong opportunity phrased in different words would be lost. Match them by MEANING
+    ("secure software factory" is DevSecOps; "LLM integration" is AI engineering), which is
+    exactly what a keyword search cannot do.
+    """
+    if not keywords:
+        return ""
+    return (
+        f"\nPRIORITY FOCUS AREAS (what {'the company'} is actively pursuing): "
+        + ", ".join(keywords)
+        + ".\nTreat these as a RANKING signal only: an opportunity matching one is more "
+        "valuable and should score HIGHER, but never reject an otherwise strong opportunity "
+        "for not matching. Match on meaning, not literal wording."
+    )
+
+
+def _format(name: str | None, uei: str | None, d: dict | None,
+            keywords: list[str] | None = None) -> str:
+    focus = _focus_block(keywords)
     if not d:
         if name:
             return (
                 f"Company: {name}. (No SAM.gov profile on file — set the company's UEI in "
                 "Organisation settings to ground judgments in its real registration data.)"
+                + focus
             )
-        return "Company: (no company profile configured yet)."
+        return "Company: (no company profile configured yet)." + focus
     addr = d.get("physical_address") or {}
     loc = ", ".join(x for x in [addr.get("city"), addr.get("state"), addr.get("zip")] if x)
     naics = ", ".join(d.get("naics") or []) or "—"
@@ -50,6 +77,7 @@ def _format(name: str | None, uei: str | None, d: dict | None) -> str:
         "Use the NAICS codes + set-aside eligibility + registration as the capability / "
         "fit lens; do not assume capabilities or certifications beyond these and any "
         "provided documents."
+        + focus
     )
 
 
@@ -72,4 +100,7 @@ def company_context(organization_id: str) -> tuple[str, str]:
     if not details:
         details = org.get("company_details")  # last snapshot saved by the UEI lookup
     display_name = (details or {}).get("legal_business_name") or name or "the company"
-    return display_name, _format(name, uei, details)
+    # Focus areas are org-owned (admin-entered), not SAM.gov data — so they survive even
+    # when the entity lookup fails, and every agent reading this lens gets them.
+    keywords = [str(k).strip() for k in (org.get("keywords") or []) if str(k).strip()]
+    return display_name, _format(name, uei, details, keywords)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 from bson import ObjectId
@@ -38,6 +39,12 @@ def _serialize(doc: dict) -> dict:
 # ONLY those. Heavy fields (document_text, analyst_rationale, extra, description, and the
 # documents/calls/tasks joins) are deliberately omitted; they load lazily in the detail pane via
 # get_opportunity_enriched(). Keeps a list page tiny (~a few hundred bytes/opp) instead of ~4KB.
+# A hard ceiling on any single page. Nothing in the product needs more, and an
+# unbounded `limit` is how a list endpoint becomes a 10 MB response on the one customer
+# with the most data — which is exactly what the deprecated list-everything endpoint
+# above did (~10 MB / 9.5 s). Enforced in the store so no caller can opt out.
+MAX_PAGE_SIZE = 100
+
 SLIM_PROJECTION: dict[str, int] = {f: 1 for f in (
     "title", "solicitation_number", "notice_id", "agency", "naics", "psc_code", "set_aside",
     "opp_type", "posted_date", "response_deadline", "estimated_value", "place_of_performance",
@@ -57,30 +64,17 @@ class CRMStore:
         self.tasks = self.db["tasks"]
         self.documents = self.db["documents"]
         self.mail_triage = self.db["mail_triage"]
-        # Per-ORG uniqueness on solicitation number — two orgs may legitimately
-        # track the same solicitation, so uniqueness is (organization_id, sol#).
+        # Org-level call briefs, one per (org, opportunity, requesting rep) — the rep's own
+        # mailbox is the source, so two reps prepping the same call get their own brief.
+        self.call_briefs = self.db["call_briefs"]
+        # Indexes live in utils/db_indexes.py (the single source of truth) — applied on app
+        # startup and by `python -m utils.db_indexes`. Note the per-ORG uniqueness on
+        # solicitation number: two orgs may legitimately track the same solicitation.
         # Drop the legacy GLOBAL unique index if it's still present from before.
         try:
             self.opps.drop_index("solicitation_number_1")
         except Exception:
             pass
-        self.opps.create_index(
-            [("organization_id", 1), ("solicitation_number", 1)],
-            unique=True,
-            partialFilterExpression={"solicitation_number": {"$type": "string"}},
-        )
-        self.opps.create_index("organization_id")
-        self.opps.create_index("notice_id")
-        self.opps.create_index("analyzed_at")
-        # Serve the paginated list's sort (priority desc) with a stable _id tiebreak
-        # (many opps share priority_score=null), and the member-visibility assigned_to filter.
-        self.opps.create_index([("organization_id", 1), ("priority_score", -1), ("_id", -1)])
-        self.opps.create_index([("organization_id", 1), ("assigned_to", 1)])
-        # Fetch all calls/tasks/documents for an opportunity without scanning.
-        self.calls.create_index("opportunity_id")
-        self.tasks.create_index("opportunity_id")
-        self.documents.create_index("opportunity_id")
-        self.documents.create_index([("opportunity_id", 1), ("type", 1)])
 
     # --- ingestion --------------------------------------------------------
     def upsert_opportunity(self, opp: Opportunity, organization_id: str) -> tuple[str, str]:
@@ -425,32 +419,11 @@ class CRMStore:
         cursor = self.opps.find(q).sort("priority_score", -1)
         return [_serialize(d) for d in cursor]
 
-    def list_all_enriched(
-        self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True
-    ) -> list[dict]:
-        """list_all + each opp's documents/calls/tasks attached — but BATCHED into a
-        handful of queries (not 3-per-opp), so it scales to a large SAM.gov pull instead
-        of firing thousands of round-trips at the DB."""
-        from collections import defaultdict
-
-        opps = self.list_all(organization_id, viewer_id=viewer_id, is_admin=is_admin)
-        ids = [o["id"] for o in opps]
-        if not ids:
-            return opps
-        docs: dict[str, list] = defaultdict(list)
-        calls: dict[str, list] = defaultdict(list)
-        tasks: dict[str, list] = defaultdict(list)
-        for d in self.documents.find({"opportunity_id": {"$in": ids}}).sort("created_at", -1):
-            docs[d["opportunity_id"]].append(_serialize(d))
-        for c in self.calls.find({"opportunity_id": {"$in": ids}}):
-            calls[c["opportunity_id"]].append(_serialize(c))
-        for t in self.tasks.find({"opportunity_id": {"$in": ids}}):
-            tasks[t["opportunity_id"]].append(_serialize(t))
-        for o in opps:
-            o["documents"] = docs.get(o["id"], [])
-            o["calls"] = calls.get(o["id"], [])
-            o["tasks"] = tasks.get(o["id"], [])
-        return opps
+    # NOTE: `list_all_enriched` lived here — every opportunity in the org with its
+    # documents/calls/tasks attached. It was well written (batched `$in` reads, not
+    # 3-per-opp) but it was still the whole org in one payload: ~10 MB / 9.5 s on a large
+    # org. Removed along with its only caller, GET /api/opportunities. The list now uses
+    # /page (SLIM + paged) and the detail pane loads children lazily via /{id}.
 
     # --- paginated + filtered reads (server-side) -------------------------
     @staticmethod
@@ -531,20 +504,52 @@ class CRMStore:
 
     def list_page(
         self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True, *,
-        offset: int = 0, limit: int = 50, **filters,
-    ) -> tuple[list[dict], int]:
-        """One SLIM page of opportunities for the pipeline list + the total matching count.
+        offset: int = 0, limit: int = 50, with_counts: bool = False, **filters,
+    ) -> tuple[list[dict], int, dict | None]:
+        """One SLIM page of opportunities, the total match count, and (optionally) the
+        status pill counts — all fetched CONCURRENTLY.
+
         Sorted priority desc with a stable _id tiebreak (many share priority_score=null).
-        No documents/calls/tasks — the detail pane loads those lazily."""
+        No documents/calls/tasks — the detail pane loads those lazily.
+
+        WHY THREADS. These are three independent, network-bound queries; run serially the
+        page waits for the sum of them. pymongo releases the GIL while waiting on a
+        socket, so a thread per query genuinely overlaps them and the page costs the
+        SLOWEST query rather than all three added up. (This is the sync equivalent of a
+        `Promise.all` in a Node service.) An async driver would do the same job, but this
+        store is shared with nine Celery task modules that are synchronous — threads keep
+        one code path for both callers.
+
+        WHY NOT `$facet` FOR THE ROWS. It looks tempting to fetch rows+total+counts in a
+        single aggregation, but a `$facet` sub-pipeline CANNOT use an index: the sort
+        would become a blocking in-memory sort of every matching document. The find()
+        below uses the (organization_id, priority_score, _id) index and stops after
+        `limit` rows. Counting and faceting are index-friendly; sorting is not.
+        """
         q = self._filter_query(organization_id, viewer_id, is_admin, **filters)
-        total = self.opps.count_documents(q)
-        cursor = (
-            self.opps.find(q, SLIM_PROJECTION)
-            .sort([("priority_score", -1), ("_id", -1)])
-            .skip(max(0, int(offset)))
-            .limit(max(1, min(int(limit), 1000)))
-        )
-        return [_serialize(d) for d in cursor], total
+        take = max(1, min(int(limit), MAX_PAGE_SIZE))
+        skip = max(0, int(offset))
+
+        def _rows() -> list[dict]:
+            cursor = (
+                self.opps.find(q, SLIM_PROJECTION)
+                .sort([("priority_score", -1), ("_id", -1)])
+                .skip(skip)
+                .limit(take)
+            )
+            return [_serialize(d) for d in cursor]
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            rows_f = pool.submit(_rows)
+            total_f = pool.submit(self.opps.count_documents, q)
+            counts_f = (
+                pool.submit(self.status_counts, organization_id, viewer_id, is_admin, **filters)
+                if with_counts
+                else None
+            )
+            rows, total = rows_f.result(), total_f.result()
+            counts = counts_f.result() if counts_f else None
+        return rows, total, counts
 
     def status_counts(
         self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True, **filters,
@@ -600,37 +605,146 @@ class CRMStore:
         cursor = self.tasks.find({"opportunity_id": opportunity_id})
         return [_serialize(d) for d in cursor]
 
+    # Addresses that are machines, not people — nobody can take a call at one, so they never
+    # earn a brief. Kept to unambiguous no-reply patterns ONLY. A shared/role mailbox is NOT
+    # in here: `dibbsbsm@dla.mil` (the DLA DIBBS bid board) is monitored and reps genuinely
+    # email it with solicitation questions. Filtering it removed the sole contact on those
+    # pursuits, which hid the Prep-calls button and stranded briefs already written.
+    _NO_REPLY = ("noreply", "no-reply", "no_reply", "donotreply", "do-not-reply")
+
+    @staticmethod
+    def _person_name(raw: str | None) -> str | None:
+        """A POC 'name' only if it plausibly IS one.
+
+        SAM.gov routinely stuffs instructions into this field — "Questions regarding this
+        solicitation should be emailed to the buyer listed in block 5… https://dibbs…". Passed
+        through, that blob lands in the brief prompt several times over, costing tokens and
+        telling the model a paragraph is a person. Anything sentence-shaped is dropped and the
+        caller falls back to the email address.
+        """
+        name = " ".join((raw or "").split())
+        if not name or len(name) > 60 or len(name.split()) > 5:
+            return None
+        if any(ch in name for ch in ("http", "@", ".com", "/")):
+            return None
+        return name
+
+    @classmethod
+    def call_contacts(cls, opp: dict) -> list[dict]:
+        """Who a rep would call on this pursuit — the POC first, then the Relation agent's
+        recommended contacts. These become the per-person tabs in the Call Plan dialog, so the
+        list is de-duplicated by email and only ever includes people we can identify by address
+        (the brief is built by searching the mailbox for their org's domain)."""
+        out: list[dict] = []
+        seen: set[str] = set()
+
+        def _add(name, email, title=None, company=None, source="contact"):
+            addr = (email or "").strip().lower()
+            if not addr or "@" not in addr or addr in seen:
+                return
+            if any(bot in addr.split("@", 1)[0] for bot in cls._NO_REPLY):
+                return
+            seen.add(addr)
+            out.append({"name": cls._person_name(name), "email": addr, "title": title or None,
+                        "company": company or None, "source": source})
+
+        _add(opp.get("poc_name"), opp.get("poc_email"), source="poc")
+        for c in opp.get("recommended_contacts") or []:
+            _add(c.get("name"), c.get("email"), c.get("title"), c.get("company"),
+                 source=c.get("source") or "recommended")
+        return out
+
     # --- consolidated call plan (across the whole pipeline) ----------------
     def call_plan(self, organization_id: str) -> list[dict]:
-        """Every planned call across this org's opportunities, joined with opportunity
-        context — the consolidated BD call sheet, sorted by priority (then nearest deadline)."""
+        """One row per PURSUIT worth calling on — the consolidated BD call sheet, sorted by
+        priority (then nearest deadline).
+
+        A pursuit belongs here when EITHER:
+          * it has been through capture (`captured_at`) — the work is done, calling the
+            customer is the next move, whether or not the Analyst raised a call; or
+          * the Analyst raised a call action for it (a "Bid" verdict).
+
+        One row per OPPORTUNITY, not per call row: the card opens a dialog with a tab per
+        contact, so a second call row on the same pursuit would just duplicate the card. When
+        several calls exist, the newest supplies the talking point and the Done/Dismiss state.
+        """
         opps = {o["id"]: o for o in self.list_all(organization_id)}
         if not opps:
             return []
-        rows: list[dict] = []
+
+        # Newest call per opportunity (the one whose status the card reflects).
+        latest: dict[str, dict] = {}
         for c in self.calls.find({"opportunity_id": {"$in": list(opps.keys())}}):
             sc = _serialize(c)
-            opp = opps.get(c["opportunity_id"], {})
+            oid = c["opportunity_id"]
+            prev = latest.get(oid)
+            if prev is None or (sc.get("created_at") or "") >= (prev.get("created_at") or ""):
+                latest[oid] = sc
+
+        rows: list[dict] = []
+        for oid, opp in opps.items():
+            call = latest.get(oid)
+            captured = bool(opp.get("captured_at"))
+            if call is None and not captured:
+                continue  # nothing has happened on this pursuit yet
             rows.append({
-                "call_id": sc["id"],
-                "opportunity_id": c["opportunity_id"],
+                # None for a captured pursuit the Analyst never raised a call for — the card
+                # still preps calls, it just has no call row to mark Done/Dismiss.
+                "call_id": call["id"] if call else None,
+                "opportunity_id": oid,
                 "opportunity_title": opp.get("title"),
                 "agency": opp.get("agency"),
                 "priority_score": opp.get("priority_score"),
                 "bid_decision": opp.get("bid_decision"),
                 "response_deadline": opp.get("response_deadline"),
-                "poc_name": opp.get("poc_name"),
+                # Sanitised: SAM.gov stuffs instruction paragraphs into poc_name, which used
+                # to render as the card's contact line.
+                "poc_name": self._person_name(opp.get("poc_name")),
                 "poc_email": opp.get("poc_email"),
-                "name": sc.get("name"),
-                "talking_point": sc.get("talking_point"),
-                "status": sc.get("status") or "Planned",
-                "created_at": sc.get("created_at"),
+                "name": (call or {}).get("name"),
+                "talking_point": (call or {}).get("talking_point"),
+                "status": (call or {}).get("status") or "Planned",
+                "created_at": (call or {}).get("created_at") or opp.get("captured_at"),
+                "captured": captured,
+                # The dialog's tabs: everyone worth calling on this pursuit.
+                "contacts": self.call_contacts(opp),
             })
         rows.sort(
             key=lambda r: (r.get("priority_score") or -1, r.get("response_deadline") or "9999"),
             reverse=True,
         )
         return rows
+
+    # --- call briefs (per-contact meeting prep) ---------------------------
+    # One brief per (opportunity, contact, rep): the Call Plan dialog has a tab per person,
+    # and each tab is its own brief. Keyed to the rep because it is built from THEIR mailbox.
+    def upsert_call_brief(
+        self, organization_id: str, opportunity_id: str, contact_email: str,
+        employee_email: str, org_domain: str, brief: dict, *, mail_count: int = 0,
+    ) -> None:
+        key = {
+            "organization_id": organization_id,
+            "opportunity_id": opportunity_id,
+            "contact_email": (contact_email or "").strip().lower(),
+            "employee_email": (employee_email or "").strip().lower(),
+        }
+        self.call_briefs.update_one(
+            key,
+            {"$set": {**key, "org_domain": org_domain, "brief": brief,
+                      "mail_count": int(mail_count), "refreshed_at": _utc_now()}},
+            upsert=True,
+        )
+
+    def list_call_briefs(
+        self, organization_id: str, opportunity_id: str, employee_email: str,
+    ) -> list[dict]:
+        """Every contact-brief this rep holds for one opportunity — the dialog's tabs."""
+        cursor = self.call_briefs.find({
+            "organization_id": organization_id,
+            "opportunity_id": opportunity_id,
+            "employee_email": (employee_email or "").strip().lower(),
+        })
+        return [_serialize(d) for d in cursor]
 
     # --- outreach log (collision detection) -------------------------------
     def log_outreach(

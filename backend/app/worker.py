@@ -12,10 +12,13 @@ celery_app = Celery(
 )
 
 # Explicitly import task modules so they register (more reliable than autodiscovery).
+import tasks.agent_tasks  # noqa: E402,F401
 import tasks.analyst_tasks  # noqa: E402,F401
+import tasks.backfill_tasks  # noqa: E402,F401
 import tasks.capture_tasks  # noqa: E402,F401
 import tasks.contacts_tasks  # noqa: E402,F401
 import tasks.crm_tasks  # noqa: E402,F401
+import tasks.mail_sweep_tasks  # noqa: E402,F401
 import tasks.mail_tasks  # noqa: E402,F401
 import tasks.manual_upload_tasks  # noqa: E402,F401
 import tasks.notify_tasks  # noqa: E402,F401
@@ -68,5 +71,22 @@ celery_app.conf.beat_schedule = {
     "daily-resync": {
         "task": "resync.daily",
         "schedule": crontab(hour=8, minute=0),
+    },
+    # The agent to-do list: lease whatever is DUE and run it. This is the third way work
+    # starts (besides the daily clock and a human clicking) — it is what lets the system
+    # finish things it noticed earlier: research a company the free dataset didn't know,
+    # re-judge a "Watch" opportunity when its recheck date arrives. Usually a no-op; the
+    # cost of a tick with an empty queue is one indexed Mongo query.
+    "agent-task-tick": {
+        "task": "agent_tasks.tick",
+        "schedule": crontab(minute="*"),
+    },
+    # One pass over each mailbox's recent tail. Yields signature blocks (job titles and
+    # phone numbers, free) AND the corr_count / last_contact signal the Relation agent is
+    # already instructed to rank on but which is currently always zero. 07:00, before the
+    # SharePoint resync and well before the SAM.gov scan.
+    "mail-sweep-daily": {
+        "task": "mail_sweep.daily",
+        "schedule": crontab(hour=7, minute=0),
     },
 }

@@ -20,6 +20,7 @@ import httpx
 from openpyxl import load_workbook
 
 from app.settings import settings
+from client.langfuse_client import observe
 from models.opportunity import Opportunity
 
 # Our target fields (name -> hint), used to guide the LLM's column mapping.
@@ -56,6 +57,7 @@ def _read_sheet(path: str | Path) -> tuple[list[str], list[tuple]]:
     return headers, rows[1:]
 
 
+@observe(name="excel-column-map", as_type="generation")
 def _map_columns_via_llm(headers: list[str], sample_rows: list[tuple]) -> dict[str, str | None]:
     """Ask the LLM to map each spreadsheet header to one of our fields (or null).
 

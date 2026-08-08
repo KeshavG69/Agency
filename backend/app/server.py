@@ -13,6 +13,7 @@ from routers import (
     contacts,
     documents,
     ingestion,
+    intelligence,
     invitations,
     mail,
     mail_triage,
@@ -69,6 +70,7 @@ app.include_router(documents.router)
 app.include_router(calls.router)
 app.include_router(composio.router)
 app.include_router(contacts.router)
+app.include_router(intelligence.router)
 app.include_router(sharepoint.router)
 app.include_router(mail.router)
 app.include_router(mail_triage.router)

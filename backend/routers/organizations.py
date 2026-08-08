@@ -50,6 +50,11 @@ def _membership(target: dict, org_id: ObjectId) -> dict | None:
 class OrgUpdateRequest(BaseModel):
     name: str | None = None
     uei: str | None = None  # SAM.gov Unique Entity ID (govcon identifier)
+    # Capability focus areas ("DevSecOps, AI engineering, zero trust"). Entered comma-
+    # separated by an admin and stored as a list. These do NOT filter ingestion — they are
+    # given to the agents as the second half of the fit lens, so a matching opportunity is
+    # ranked HIGHER rather than a non-matching one being dropped.
+    keywords: str | list[str] | None = None
 
 
 @router.get("/me")
@@ -72,6 +77,15 @@ async def update_organization(body: OrgUpdateRequest, current_user: dict = Depen
         updates["name"] = name
     if body.uei is not None:
         updates["uei"] = body.uei.strip().upper()
+    if body.keywords is not None:
+        # Accept the raw comma-separated string the form sends, or an already-split list.
+        raw = body.keywords.split(",") if isinstance(body.keywords, str) else body.keywords
+        seen: dict[str, None] = {}  # de-dupe case-insensitively, keep the admin's order/casing
+        for k in raw:
+            k = str(k).strip()
+            if k and k.lower() not in {s.lower() for s in seen}:
+                seen[k] = None
+        updates["keywords"] = list(seen)
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nothing to update")
     updates["updated_at"] = datetime.utcnow()

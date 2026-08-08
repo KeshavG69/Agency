@@ -14,6 +14,45 @@ from client.crm_store import get_crm_store
 logger = logging.getLogger(__name__)
 
 
+def _record_signature_facts(organization_id: str, msg: dict) -> int:
+    """Pull the signature block out of a message we already downloaded, and record what
+    it states about the sender. No AI, no extra API call, no network.
+
+    Best-effort by design: mail triage must never fail because a signature would not
+    parse. A missing signature is the common case and a perfectly good outcome — most
+    short replies carry none, and a blank field beats a guess.
+    """
+    from client.facts_store import get_facts_store
+    from utils.signature import derive_function, derive_seniority, evidence_detail, extract_signature
+
+    sender = (msg.get("sender_email") or "").strip().lower()
+    if not organization_id or not sender:
+        return 0
+    try:
+        sig = extract_signature(msg.get("body"), sender, is_html=msg.get("body_is_html"))
+        if not sig:
+            return 0
+        received = (msg.get("received_at") or "")[:10]  # YYYY-MM-DD reads fine in a tooltip
+        evidence = [{
+            "kind": "outlook.signature-block",
+            "detail": evidence_detail(sig, received or None),
+        }]
+        outcomes = get_facts_store().record_many(
+            organization_id, sender,
+            [("title", sig.title), ("phone", sig.phone),
+             ("seniority", derive_seniority(sig.title)),
+             ("function", derive_function(sig.title))],
+            evidence,
+        )
+        stored = sum(1 for o in outcomes.values() if o.stored)
+        if stored:
+            logger.info("Signature facts from %s: %s", sender, sig.title or sig.phone)
+        return stored
+    except Exception as exc:  # noqa: BLE001 — never break triage over a parse
+        logger.warning("Signature parse failed for %s: %s", sender, exc)
+        return 0
+
+
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=15)
 def process_outlook_message_task(self, employee_email: str, message_id: str) -> dict:
     """Fetch a newly-arrived Outlook message and, if its sender is a known contact on an
@@ -36,6 +75,12 @@ def process_outlook_message_task(self, employee_email: str, message_id: str) -> 
             "Mail triage: fetching message %s for %s failed: %s", message_id, employee_email, exc
         )
         raise self.retry(exc=exc)
+
+    # Read the signature block before deciding whether to keep the mail. This is free
+    # data — the message is already downloaded — and it is worth having even for a sender
+    # whose mail we then drop, because the job title is what lets the Relation agent tell
+    # a Capture Manager from a junior developer next time they come up on a bid.
+    _record_signature_facts(user.organization_id, msg)
 
     crm = get_crm_store()
     opp = crm.find_active_bid_by_contact(user.organization_id, msg["sender_email"])

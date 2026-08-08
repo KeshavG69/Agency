@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { User } from "@/lib/types";
-
-export type ViewKey = "dashboard" | "pipeline" | "callplan" | "contacts" | "documents" | "org";
+import type { ViewKey } from "@/lib/stores/uiStore";
 
 const NAV: { key: ViewKey; label: string; admin?: boolean }[] = [
   { key: "dashboard", label: "Dashboard" },
@@ -69,21 +68,6 @@ export default function TopBar({
       </nav>
 
       <div className="tb-right">
-        <button
-          className="tb-sam"
-          onClick={onPull}
-          disabled={pulling}
-          title="Fetch today's open SAM.gov notices matching your company's NAICS"
-        >
-          {pulling ? (
-            <>
-              <span className="spin" /> Pulling…
-            </>
-          ) : (
-            <>⟳ Pull from SAM.gov</>
-          )}
-        </button>
-
         <div className="tb-user" ref={ref}>
           <button className="tb-userbtn" onClick={() => setMenuOpen((v) => !v)}>
             <span className="tb-avatar">{initials}</span>

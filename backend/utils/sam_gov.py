@@ -11,9 +11,11 @@ import csv
 import json
 import logging
 import os
+import re
 import tempfile
 from collections import defaultdict
-from datetime import date, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 import redis
@@ -218,7 +220,7 @@ def search_opportunities(
             "SAM_GOV_API_KEY is not configured — add a SAM.gov / api.data.gov key to "
             "pull opportunities."
         )
-    today = date.today()
+    today = _utc_today()
     pf = posted_from or (today - timedelta(days=lookback_days)).strftime("%m/%d/%Y")
     pt = posted_to or today.strftime("%m/%d/%Y")
     url = f"{settings.SAM_GOV_BASE_URL}{_OPP_SEARCH_URL}"
@@ -268,6 +270,68 @@ SAMGOV_BULK_CSV_URL = (
 _BULK_DOWNLOAD_TIMEOUT = 600.0  # 10 min — large download
 _BULK_MIN_BYTES = 1_000_000     # a valid file is way bigger; guards against truncated cache
 
+# Notice types whose outcome is ALREADY DECIDED — there is nothing left to bid on, so they
+# never enter the pipeline and never cost an Analyst run.
+#   Award Notice  — someone else already won it.
+#   Justification — a J&A: the agency is explaining why it is NOT competing the work.
+#   Consolidate/(Substantially) Bundle — a bundling determination, not a solicitation.
+#
+# Measured on live data before this filter existed: 1,488 Award Notices had been through the
+# Analyst, and it had recommended "Bid" on 10 contracts that were already awarded. On a normal
+# day this drops ~24% of notices (yesterday: 4 of 17).
+#
+# Special Notice is deliberately KEPT: it is a mixed bag (industry days and RFIs have real
+# early-capture value, even though some are intent-to-sole-source), so the Analyst judges it
+# rather than a hard rule discarding it.
+NON_BIDDABLE_TYPES = frozenset({
+    "award notice",
+    "justification",
+    "consolidate/(substantially) bundle",
+})
+
+# SECOND NET — the TYPE field is not sufficient on its own.
+#
+# An agency announcing it has already chosen a vendor files that as a **Special Notice**, not
+# an Award Notice: "Notice of Intent to Sole Source Chenega Enterprise Systems". The award is
+# decided; there is nothing to compete for. Type-only filtering let those straight through —
+# 2 of 13 notices on 2026-08-08 were exactly this.
+#
+# So the title is checked too, across EVERY type (a Solicitation titled "Intent to Award"
+# would be caught as well). Anchored on the distinctive phrases only: a notice that merely
+# mentions competition or discusses sole-source policy in its body is untouched, because this
+# matches the TITLE, not the description.
+# Widened after testing a SECOND day (2026-08-07): the first pass was tuned to one day's
+# phrasings and leaked three real ones — "Sole Source Resources Planning…", "Notice of Intent
+# to Single Source to AB SCIEX LLC", "INTENT TO SOLICIT ONLY ONE SOURCE". Agencies word this
+# many ways, so match the CONCEPT (one pre-chosen source) rather than a fixed phrase.
+#
+# "Brand Name Only" is deliberately NOT here: a brand-name requirement still gets competed
+# among resellers of that brand, so it is a real opportunity.
+#
+# Accepted trade-off: a genuinely competitive notice whose TITLE contains "sole source"
+# (e.g. "Competitive follow-on to sole source contract N00024") would be dropped. That is
+# rare, and showing an already-decided award is the worse failure here.
+_DECIDED_TITLE_RE = re.compile(
+    r"sole.?source"
+    r"|single.?source"
+    r"|only one (responsible )?source"
+    r"|intent to (award|solicit)"
+    r"|notice of award",
+    re.IGNORECASE,
+)
+
+
+def _is_biddable(notice_type: str | None, title: str | None = None) -> bool:
+    """False when the outcome is already decided — by notice TYPE or by an award-intent TITLE.
+
+    Deliberately conservative in the other direction: an unrecognised type is treated as
+    biddable, so a new SAM.gov notice type surfaces for a human to judge rather than being
+    silently dropped.
+    """
+    if (notice_type or "").strip().lower() in NON_BIDDABLE_TYPES:
+        return False
+    return not _DECIDED_TITLE_RE.search(title or "")
+
 
 def _csv_row_to_opportunity(row: dict) -> Opportunity:
     """Map one bulk-CSV row → our canonical Opportunity. Unlike the v2 API, the CSV
@@ -315,7 +379,7 @@ def download_bulk_csv(force: bool = False) -> str:
     The first caller of the day downloads (~217 MB); later callers (e.g. an on-demand
     pull after the scheduled scan) reuse the same file — so we download at most once/day.
     """
-    cache = os.path.join(tempfile.gettempdir(), f"samgov_bulk_{date.today().isoformat()}.csv")
+    cache = os.path.join(tempfile.gettempdir(), f"samgov_bulk_{_utc_today().isoformat()}.csv")
     if not force and os.path.exists(cache) and os.path.getsize(cache) >= _BULK_MIN_BYTES:
         logger.info("SAM.gov bulk CSV: reusing today's cached file %s", cache)
         return cache
@@ -382,15 +446,33 @@ def bulk_opportunities_by_naics(
     if not wanted_naics:
         return {}
     path = download_bulk_csv()
-    today_iso = date.today().isoformat()
-    cutoff = date.today() - timedelta(days=posted_within_days) if posted_within_days > 0 else None
+
+    # THE GUARD THIS PIPELINE WAS MISSING. GSA can publish a well-formed but EMPTY
+    # export (header line, zero rows) — it downloads with a clean 200 and parses to
+    # nothing, which reads downstream as "a quiet day". That is exactly how ingestion
+    # sat dead from 2026-07-23 for 16 days. Fail over to the public search API instead,
+    # and say so at ERROR level so it is visible rather than inferred.
+    if not _csv_has_data_rows(path):
+        logger.error(
+            "SAM.gov bulk CSV is EMPTY (header-only) — GSA is publishing no rows. "
+            "Falling back to the public search API for this run."
+        )
+        return public_opportunities_by_naics(
+            wanted_naics, posted_within_days=posted_within_days, open_only=open_only
+        )
+
+    today_iso = _utc_today().isoformat()
+    cutoff = _utc_today() - timedelta(days=posted_within_days) if posted_within_days > 0 else None
     buckets: dict[str, list[Opportunity]] = defaultdict(list)
-    scanned = kept = expired = 0
+    scanned = kept = expired = decided = 0
     with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
         for row in csv.DictReader(f):
             scanned += 1
             naics = (row.get("NaicsCode") or "").strip()
             if naics not in wanted_naics:
+                continue
+            if not _is_biddable(row.get("Type"), row.get("Title")):
+                decided += 1  # already won / sole-sourced — nothing to bid on
                 continue
             if active_only and (row.get("Active") or "").strip().lower() != "yes":
                 continue
@@ -406,7 +488,194 @@ def bulk_opportunities_by_naics(
             buckets[naics].append(_csv_row_to_opportunity(row))
             kept += 1
     logger.info(
-        "SAM.gov bulk CSV: %d rows scanned, %d kept (%d dropped as past-deadline) across %d NAICS (last %dd)",
-        scanned, kept, expired, len(buckets), posted_within_days,
+        "SAM.gov bulk CSV: %d rows scanned, %d kept (%d past-deadline, %d already-decided) "
+        "across %d NAICS (last %dd)",
+        scanned, kept, expired, decided, len(buckets), posted_within_days,
+    )
+    return buckets
+
+
+# ---------------------------------------------------------------------------
+# FALLBACK — SAM.gov's own public search API (the one sam.gov's website calls).
+#
+# WHY THIS EXISTS: on 2026-07-23 GSA's bulk CSV started publishing header-only
+# (685 bytes, zero data rows). Our poller downloaded it fine, parsed 0 rows, and
+# logged "matched=0" — indistinguishable from a quiet day — so ingestion was dead
+# for 16 days before anyone noticed. This is the second tier: same public data,
+# no API key, no quota, and it carries fields the keyed v2 API does NOT (real
+# description text, set-aside, PSC).
+#
+# It is UNDOCUMENTED (it backs the public website), so treat it as a fallback,
+# never the primary: GSA can change it without notice. The CSV stays first and
+# reclaims the job automatically the moment GSA fixes it.
+#
+# Two calls per opportunity:
+#   search  -> id, title, type, dates, description HTML   (1 call per NAICS)
+#   detail  -> naics, PSC, set-aside, POC, place of perf. (1 call per KEPT notice)
+# Details are fetched only for notices that survive the date/active filters, so a
+# daily run is ~31 searches + a few hundred details, not thousands.
+# ---------------------------------------------------------------------------
+_SGS_SEARCH_URL = "https://sam.gov/api/prod/sgs/v1/search/"
+_SGS_DETAIL_URL = "https://sam.gov/api/prod/opps/v2/opportunities/{nid}"
+# `Accept: application/hal+json` is REQUIRED — anything else returns 406.
+_SGS_HEADERS = {
+    "User-Agent": "Collecct/1.0 (govcon BD pipeline; contact via SAM.gov registrant)",
+    "Accept": "application/hal+json",
+}
+_SGS_PAGE_SIZE = 1000          # verified: the API honours size=1000 in one page
+_SGS_DETAIL_WORKERS = 6        # polite concurrency against a public .gov service
+_SGS_TIMEOUT = httpx.Timeout(connect=15.0, read=45.0, write=15.0, pool=15.0)
+
+
+def _utc_today() -> date:
+    """Today in UTC — NOT the server's local date.
+
+    Every date this module compares is UTC-based: SAM.gov publishes `publishDate` /
+    `PostedDate` in UTC, the bulk CSV refreshes at 03:30 GMT, and the beat schedule is
+    written in UTC. Using `date.today()` (server-local) silently shifted the recency
+    window by a day whenever the worker ran outside UTC — so a box in IST would compute
+    "yesterday" ~5.5 hours early and drop notices that were still in range.
+    """
+    return datetime.now(timezone.utc).date()
+
+
+def _csv_has_data_rows(path: str) -> bool:
+    """True when the bulk CSV holds at least one row BEYOND the header.
+
+    The size guard on the cache is not enough: GSA publishes a well-formed but
+    EMPTY export (a clean header line and nothing else), which parses to zero rows
+    and looks exactly like a quiet day. This is the check that tells them apart.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+            next(f, None)                     # header
+            return next(f, None) is not None  # any data row?
+    except OSError:
+        return False
+
+
+def _sgs_search_naics(code: str) -> list[dict]:
+    """Every ACTIVE notice for one NAICS, newest first (one page at size=1000)."""
+    params = {
+        "index": "opp", "mode": "search", "mfe": "opp", "sort": "-modifiedDate",
+        "is_active": "true", "page": "0", "size": str(_SGS_PAGE_SIZE), "naics": code,
+    }
+    resp = httpx.get(_SGS_SEARCH_URL, params=params, headers=_SGS_HEADERS, timeout=_SGS_TIMEOUT)
+    resp.raise_for_status()
+    return ((resp.json() or {}).get("_embedded") or {}).get("results") or []
+
+
+def _sgs_detail(notice_id: str) -> dict:
+    """The notice's `data2` block — NAICS, PSC, set-aside, POC, place of performance.
+    Returns {} on any failure: a detail we cannot fetch costs a few fields, not the notice."""
+    try:
+        resp = httpx.get(
+            _SGS_DETAIL_URL.format(nid=notice_id), headers=_SGS_HEADERS, timeout=_SGS_TIMEOUT
+        )
+        resp.raise_for_status()
+        return (resp.json() or {}).get("data2") or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("SAM.gov detail fetch failed for %s: %s", notice_id, exc)
+        return {}
+
+
+def _sgs_to_opportunity(rec: dict, detail: dict, fallback_naics: str) -> Opportunity:
+    """Map one search record + its detail onto our canonical Opportunity."""
+    from utils.signature import html_to_text  # description content is HTML
+
+    agency = " › ".join(
+        o.get("name") for o in sorted(
+            rec.get("organizationHierarchy") or [], key=lambda x: x.get("level") or 0
+        ) if o.get("name")
+    ) or None
+
+    descs = rec.get("descriptions") or []
+    body = " ".join(html_to_text(descs[0].get("content") or "").split()) if descs else ""
+
+    naics_block = (detail.get("naics") or [{}])[0]
+    codes = naics_block.get("code") or []
+    sol = detail.get("solicitation") or {}
+    pocs = detail.get("pointOfContact") or []
+    poc = next((p for p in pocs if p.get("email")), pocs[0] if pocs else {})
+    pop = detail.get("placeOfPerformance") or {}
+    pop_str = ", ".join(
+        p for p in [(pop.get("city") or {}).get("name"), (pop.get("state") or {}).get("code")] if p
+    ) or None
+
+    return Opportunity(
+        title=(rec.get("title") or "").strip() or "(untitled SAM.gov notice)",
+        solicitation_number=(rec.get("solicitationNumber") or "").strip() or None,
+        notice_id=rec.get("_id"),
+        agency=agency,
+        naics=(codes[0] if codes else None) or fallback_naics,
+        psc_code=detail.get("classificationCode"),
+        place_of_performance=pop_str,
+        set_aside=sol.get("setAside"),
+        opp_type=(rec.get("type") or {}).get("value"),
+        posted_date=_clean_date((rec.get("publishDate") or "")[:10]),
+        response_deadline=_clean_date((rec.get("responseDate") or "")[:10]),
+        poc_name=poc.get("fullName"),
+        poc_email=poc.get("email"),
+        description=body or None,
+        link=f"https://sam.gov/opp/{rec.get('_id')}/view",
+        source="sam.gov",
+        extra={"set_aside_code": sol.get("setAside"), "via": "sgs-public-search"},
+    )
+
+
+def public_opportunities_by_naics(
+    wanted_naics: set[str], posted_within_days: int = 1, open_only: bool = True,
+) -> dict[str, list[Opportunity]]:
+    """Same contract as `bulk_opportunities_by_naics`, served by the public search API.
+
+    Search returns every ACTIVE notice for a NAICS, so the recency window is applied
+    HERE rather than server-side (the API ignored a publishDate range in testing).
+    Details are fetched only for the survivors, concurrently.
+    """
+    if not wanted_naics:
+        return {}
+    today_iso = _utc_today().isoformat()
+    cutoff = (_utc_today() - timedelta(days=posted_within_days)).isoformat() if posted_within_days > 0 else None
+
+    # 1) search per NAICS, keep only recent + still-open, dedupe across codes
+    picked: dict[str, tuple[dict, str]] = {}
+    searched = expired = decided = 0
+    for code in sorted(wanted_naics):
+        try:
+            results = _sgs_search_naics(code)
+        except Exception as exc:  # noqa: BLE001 — one NAICS failing must not sink the run
+            logger.warning("SAM.gov public search failed for NAICS %s: %s", code, exc)
+            continue
+        searched += len(results)
+        for rec in results:
+            nid = rec.get("_id")
+            if not nid or nid in picked or rec.get("isCanceled"):
+                continue
+            if not _is_biddable((rec.get("type") or {}).get("value"), rec.get("title")):
+                decided += 1  # already won / sole-sourced — nothing to bid on
+                continue
+            posted = (rec.get("publishDate") or "")[:10]
+            if cutoff and (not posted or posted < cutoff):
+                continue
+            if open_only:
+                deadline = (rec.get("responseDate") or "")[:10]
+                if deadline and deadline < today_iso:
+                    expired += 1
+                    continue
+            picked[nid] = (rec, code)
+
+    # 2) fetch details concurrently (only for what we are keeping)
+    buckets: dict[str, list[Opportunity]] = defaultdict(list)
+    if picked:
+        with ThreadPoolExecutor(max_workers=min(_SGS_DETAIL_WORKERS, len(picked))) as pool:
+            details = dict(zip(picked, pool.map(_sgs_detail, list(picked))))
+        for nid, (rec, code) in picked.items():
+            buckets[code].append(_sgs_to_opportunity(rec, details.get(nid) or {}, code))
+
+    logger.info(
+        "SAM.gov public search: %d notices seen, %d kept (%d past-deadline, %d already-decided) "
+        "across %d NAICS (last %dd)",
+        searched, sum(len(v) for v in buckets.values()), expired, decided,
+        len(buckets), posted_within_days,
     )
     return buckets
