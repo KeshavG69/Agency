@@ -7,9 +7,10 @@ re-reading. What each run extracts:
   1. SIGNATURES -> job titles, phone numbers, seniority, function. Read by a small model
      (Gemma via SIGNATURE_MODEL), not regex: it handles the free-form blocks a pattern never
      will. This is what trycompai/crm does — let a model read the block — done as a FALLBACK-
-     free first pass here, one model call per sender per sweep, run concurrently and capped by
-     LLM_SIG_BUDGET so a backfill can't fan out. A lone read is a suggestion; a reply from
-     that address corroborates it into a fact.
+     free first pass here: one model call per sender per sweep, for EVERY sender in the run,
+     concurrently. The only ceiling is how many messages the sweep reads (BACKFILL_LIMIT /
+     INCREMENTAL_CAP). A lone read is a suggestion; a reply from that address corroborates it
+     into a fact.
   2. CORRESPONDENCE COUNTS -> `corr_count` / `last_contact` on the graph. These are
      otherwise hardcoded to 0 by `fetch_outlook_network` (it reads only the address book),
      while `crm_agent.py` instructs the model to rank contacts on `corr_count`. On an
@@ -33,13 +34,6 @@ BACKFILL_LIMIT = 400
 # Safety cap for an incremental sweep: normally it stops at the bookmark long before this,
 # but a mailbox that received a flood since the last run should not read unbounded.
 INCREMENTAL_CAP = 600
-# Ceiling on model signature reads PER SWEEP. Signatures are read by the model (one call per
-# sender), so this bounds a first backfill; incremental sweeps see only a handful of new
-# senders and never approach it. The reads run concurrently and the model is small and cheap,
-# so this can be raised freely — a sender skipped this run is simply read on the next.
-LLM_SIG_BUDGET = 120
-
-
 @celery_app.task(bind=True, name="mail_sweep.for_employee", max_retries=2, default_retry_delay=60)
 def sweep_mailbox_task(self, employee_email: str, organization_id: str, limit: int | None = None) -> dict:
     """Sweep ONE employee's mail. Owner-scoped: correspondence signals belong to the employee
@@ -113,11 +107,17 @@ def sweep_mailbox_task(self, employee_email: str, organization_id: str, limit: i
         if msg.get("conversation_id"):
             replies += 1  # they wrote from this address — corroborates their identity
 
-    # Pass 2: read those signatures with the model, CONCURRENTLY. The per-sweep budget caps a
-    # first backfill so it cannot fan out into hundreds of calls; incremental sweeps see only a
-    # handful of new senders and never approach it. The worker is already a thread pool, so a
-    # bounded pool here just overlaps the network waits.
-    candidates = list(first_inbound.items())[:LLM_SIG_BUDGET]
+    # Pass 2: read EVERY sender's signature with the model, CONCURRENTLY.
+    #
+    # There is no separate budget here on purpose: the read is already bounded upstream by how
+    # many messages the sweep pulls (BACKFILL_LIMIT / INCREMENTAL_CAP), and one distinct sender
+    # per message is the ceiling — so this can never exceed a few hundred small, cheap calls.
+    # The old 120 cap sat *below* that ceiling and silently dropped the rest of the mailbox:
+    # at 3,200 contacts it needed roughly a month of daily runs to cover one mailbox once, and
+    # because senders are picked by recency it kept re-reading the same recent ones instead of
+    # working through the tail. The worker is already a thread pool, so a bounded pool here
+    # just overlaps the network waits.
+    candidates = list(first_inbound.items())
 
     def _read(item):
         sender, msg = item
@@ -171,10 +171,6 @@ def sweep_mailbox_task(self, employee_email: str, organization_id: str, limit: i
     # Move the bookmark forward only after a successful pass. `newest` never goes backwards
     # (commit takes the max), so an empty incremental sweep simply leaves it where it was.
     sync.commit(owner, org, high_water=(newest or None), backfilled=True)
-    if len(first_inbound) > LLM_SIG_BUDGET:
-        logger.info("Mail sweep: %d senders this run exceeded the %d-call model budget for %s "
-                    "(the rest are read on later sweeps)",
-                    len(first_inbound), LLM_SIG_BUDGET, owner)
 
     logger.info(
         "Mail sweep for %s (%s): %d messages, %d correspondents, %d signatures read by model "
