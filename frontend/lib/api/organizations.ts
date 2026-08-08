@@ -24,6 +24,9 @@ export interface Organization {
   _id?: string;
   name: string;
   uei?: string | null;
+  // Capability focus areas (e.g. "DevSecOps", "AI engineering"). Stored as a list; the admin
+  // enters them comma-separated. Given to the agents as a RANKING signal, never a filter.
+  keywords?: string[] | null;
   company_details?: CompanyDetails | null;
   created_at?: string;
   updated_at?: string;
@@ -44,7 +47,7 @@ export const organizationsApi = {
 
   // Update the organization's name and/or UEI (admin only).
   updateOrganization: async (
-    payload: { name?: string; uei?: string }
+    payload: { name?: string; uei?: string; keywords?: string }
   ): Promise<Organization> => {
     const response = await apiClient.patch<Organization>('/api/organizations/me', payload);
     return response.data;

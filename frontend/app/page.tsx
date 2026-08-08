@@ -2846,6 +2846,8 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
   const qc = useQueryClient();
   const [orgName, setOrgName] = useState("");
   const [uei, setUei] = useState("");
+  // Held as the raw comma-separated string the admin types; split server-side on save.
+  const [keywords, setKeywords] = useState("");
   const [savingOrg, setSavingOrg] = useState(false);
   const [orgMsg, setOrgMsg] = useState<string | null>(null);
   const [subTab, setSubTab] = useState<"settings" | "team">("settings");
@@ -2876,6 +2878,7 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
     if (!org) return;
     setOrgName(org.name ?? "");
     setUei(org.uei ?? "");
+    setKeywords((org.keywords ?? []).join(", "));
   }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Single action: save the name + UEI, then automatically pull the company's
@@ -2888,6 +2891,7 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
       const updated = await organizationsApi.updateOrganization({
         name: orgName.trim(),
         uei: uei.trim(),
+        keywords: keywords, // raw comma-separated; the server splits + de-dupes
       });
       let merged = updated;
       if (uei.trim()) {
@@ -2990,6 +2994,21 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
                 />
                 <div style={{ fontSize: 11.5, color: "var(--faint)" }}>
                   On save we pull your company&apos;s registration (legal name, CAGE, NAICS, status) from SAM.gov.
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <label style={orgLabel}>Focus areas · what you&apos;re actively pursuing</label>
+                <input
+                  className="search"
+                  value={keywords}
+                  onChange={(e) => setKeywords(e.target.value)}
+                  placeholder="DevSecOps, AI engineering, zero trust, cloud migration"
+                />
+                <div style={{ fontSize: 11.5, color: "var(--faint)" }}>
+                  Comma-separated. Your SAM.gov registration says what you&apos;re <i>eligible</i> for;
+                  this says what you&apos;re <i>good at</i>. The agents rank matching opportunities
+                  higher — nothing is ever filtered out for not matching, and they match on meaning
+                  (&ldquo;secure software factory&rdquo; counts as DevSecOps).
                 </div>
               </div>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>

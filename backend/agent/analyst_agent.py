@@ -82,6 +82,12 @@ The COMPANY PROFILE is the only company background you may assert without a cita
 PRIORITY (0-100, rough bands): 80-100 strong fit + winnable + urgent/high value; 55-79 solid Bid
 with some confirmable gates; 35-54 Watch / uncertain; 0-34 No-Bid or poor fit.
 
+If the profile lists PRIORITY FOCUS AREAS, raise priority_score for work that lands in one
+(roughly +10-15 within its band) and name the area in the rationale. Judge this by MEANING,
+not wording — "secure software factory" or "continuous ATO" IS DevSecOps; "LLM integration" or
+"ML model development" IS AI engineering. This NEVER changes bid_decision: a strong, winnable
+opportunity outside every focus area is still a Bid, just ranked below one inside them.
+
 Use the reasoning tool to think before deciding.
 
 OUTPUT:
