@@ -76,7 +76,10 @@ export interface Opportunity {
   poc_name?: string;
   capture_approved?: boolean;
   captured_at?: string | null; // set when the Capture agent finishes its deliverables
-  capture_error?: string | null; // set when a capture run terminally failed
+  capture_error?: string | null; // why a capture run terminally failed
+  // Set when a capture run terminally failed. A first-class state — NOT captured_at — so a
+  // dead run leaves "Processing" without masquerading as "Capture complete".
+  capture_failed_at?: string | null;
   ingesting?: boolean; // manual upload -> parse -> digest -> Analyst pipeline still running
   ingest_error?: string | null; // set when the ingest pipeline terminally failed
   // raw opportunity fields surfaced in the detail view
