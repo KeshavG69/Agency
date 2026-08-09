@@ -190,9 +190,16 @@ class CRMStore:
 
     # --- capture gate (human approval) ------------------------------------
     def mark_capture_approved(self, opportunity_id: str) -> None:
-        """Human-approve an opportunity for capture (lets the capture agents run)."""
+        """Human-approve an opportunity for capture (lets the capture agents run).
+
+        Clears any previous failure in the same write, so re-approving after a failed run is
+        a genuine retry — otherwise the stale `capture_failed_at` would keep the opp badged
+        as failed while the new run is actually in flight.
+        """
         self.opps.update_one(
-            {"_id": ObjectId(opportunity_id)}, {"$set": {"capture_approved": True}}
+            {"_id": ObjectId(opportunity_id)},
+            {"$set": {"capture_approved": True},
+             "$unset": {"capture_failed_at": "", "capture_error": ""}},
         )
 
     def list_capture_ready(self, organization_id: str) -> list[dict]:
@@ -211,12 +218,24 @@ class CRMStore:
         )
 
     def mark_capture_failed(self, opportunity_id: str, error: str) -> None:
-        """Terminal capture failure — stamp captured_at (so the opp leaves the UI's
-        'Processing' window, which is capture_approved && !captured_at) plus a capture_error,
-        instead of sitting capture_approved forever after retries exhaust."""
+        """Terminal capture failure — a FIRST-CLASS state, not a fake success.
+
+        This used to stamp `captured_at` so the opp would fall out of the UI's 'Processing'
+        window (capture_approved && !captured_at). That worked, but it made a failed run
+        indistinguishable from a finished one — it landed in 'Capture complete' with no
+        documents. `capture_failed_at` says what actually happened, keeps the opp out of
+        BOTH buckets, and lets the UI offer a retry instead of a permanent spinner.
+        """
         self.opps.update_one(
             {"_id": ObjectId(opportunity_id)},
-            {"$set": {"captured_at": _utc_now(), "capture_error": error}},
+            {"$set": {"capture_failed_at": _utc_now(), "capture_error": error}},
+        )
+
+    def clear_capture_failure(self, opportunity_id: str) -> None:
+        """Wipe the failure so a retry starts clean (the Approve-Capture path calls this)."""
+        self.opps.update_one(
+            {"_id": ObjectId(opportunity_id)},
+            {"$unset": {"capture_failed_at": "", "capture_error": ""}},
         )
 
     def set_recommended_contacts(self, opportunity_id: str, contacts: list[dict]) -> None:
@@ -438,7 +457,16 @@ class CRMStore:
         if status == "ingesting":
             return {"ingesting": True}
         if status == "processing":
-            return {"$and": [{"capture_approved": True}, {"captured_at": {"$in": [None]}}]}
+            # Capture approved, not finished, and NOT failed — a genuinely in-flight run.
+            # Without the failure clause a dead run sits here forever looking like work.
+            return {"$and": [
+                {"capture_approved": True},
+                {"captured_at": {"$in": [None]}},
+                {"$or": [{"capture_failed_at": {"$exists": False}},
+                         {"capture_failed_at": None}]},
+            ]}
+        if status == "capture_failed":
+            return {"capture_failed_at": {"$ne": None}}
         if status == "new":  # no verdict yet AND not still ingesting
             return {"$and": [
                 {"$or": [{"bid_decision": {"$exists": False}}, {"bid_decision": None}]},
@@ -492,12 +520,24 @@ class CRMStore:
         if due_days:
             clauses.append(self._due_clause(due_days))
         if q and q.strip():
-            rx = re.escape(q.strip())
-            clauses.append({"$or": [
-                {"title": {"$regex": rx, "$options": "i"}},
-                {"agency": {"$regex": rx, "$options": "i"}},
-                {"solicitation_number": {"$regex": rx, "$options": "i"}},
-            ]})
+            # EVERY WORD must appear, in ANY order, across title / agency / solicitation #.
+            #
+            # This was a single literal substring match, so word order decided whether you
+            # found anything: searching "UHF Handheld Receiver overhaul" returned nothing
+            # because the record is titled "Open, Inspect, Report and Overhaul UHF Handheld
+            # Receiver" — same words, rearranged. Nobody types titles in their exact order.
+            #
+            # Each token is AND-ed (so more words narrow the result, as expected) and within a
+            # token the three fields are OR-ed (so "navy antenna" matches an antenna title at
+            # a Navy agency). Tokens are escaped, so punctuation in a solicitation number is
+            # literal, not a pattern.
+            for token in q.strip().split():
+                rx = re.escape(token)
+                clauses.append({"$or": [
+                    {"title": {"$regex": rx, "$options": "i"}},
+                    {"agency": {"$regex": rx, "$options": "i"}},
+                    {"solicitation_number": {"$regex": rx, "$options": "i"}},
+                ]})
         if posted_date:
             clauses.append({"posted_date": posted_date})
         return clauses[0] if len(clauses) == 1 else {"$and": clauses}

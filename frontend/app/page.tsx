@@ -108,7 +108,10 @@ const badgeClass = (d?: BidDecision) =>
 // Ingesting: the upload -> parse -> digest -> Analyst pipeline is still running.
 // Processing: a Capture run (agent + contact search) is in flight for a Bid.
 const isIngesting = (o: Opportunity) => !!o.ingesting;
-const isProcessing = (o: Opportunity) => !!o.capture_approved && !o.captured_at;
+// A run that DIED is not a run in flight. Without the failure clause a crashed capture sits
+// in "Processing" forever showing a spinner — four of them sat there for a month.
+const isProcessing = (o: Opportunity) =>
+  !!o.capture_approved && !o.captured_at && !o.capture_failed_at;
 const activityChip = (o: Opportunity): { label: string; cls: string } | null => {
   if (o.ingest_error) return { label: "Ingest failed", cls: "failed" };
   if (isIngesting(o)) return { label: "Ingesting", cls: "ingesting" };

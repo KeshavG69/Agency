@@ -5,6 +5,8 @@ Provides simple interface for uploading and deleting proposal documents.
 Thread-safe singleton pattern with RLock.
 """
 
+import mimetypes
+
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -79,8 +81,15 @@ class IDriveStorage:
 
         with self._lock:
             try:
-                # Upload file to S3
-                self.s3.upload_file(file_path, self.bucket, object_key)
+                # SET THE REAL CONTENT TYPE. Without ExtraArgs every object is served as
+                # `binary/octet-stream`, and the inline preview silently dies: the Office
+                # Online and Google Docs viewers sniff Content-Type to decide how to render,
+                # see "unknown binary", and refuse — so the modal fell through both viewers
+                # and showed "Preview isn't available for this document" for every .docx we
+                # ever generated. The bytes were always fine; only the header was wrong.
+                ctype, _ = mimetypes.guess_type(filename)
+                extra = {"ContentType": ctype} if ctype else None
+                self.s3.upload_file(file_path, self.bucket, object_key, ExtraArgs=extra)
 
                 # Generate pre-signed URL (7 days expiration - maximum allowed)
                 presigned_url = self.get_presigned_url(object_key)
