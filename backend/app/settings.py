@@ -93,7 +93,11 @@ class Settings(BaseSettings):
     # ---- Agent models — one per agent, so each can be tuned independently ----
     ANALYST_MODEL: str = "openai/gpt-5.4-mini"   # bid / no-bid analyst
     CRM_MODEL: str = "openai/gpt-5.6-terra"      # relation / contact-finding agent
-    RESEARCH_MODEL: str = "openai/gpt-5.4-mini"  # company research
+    RESEARCH_MODEL: str = "openai/gpt-5.4-mini"  # company research (contact companies)
+    # The org's OWN company profile, researched once when an admin saves their UEI. Small
+    # model on purpose: it runs a handful of times per org, not per contact. Swap via env
+    # if the output quality is not good enough — the result is admin-editable either way.
+    ORG_PROFILE_MODEL: str = "openai/gpt-5.6-luna"
     CAPTURE_MODEL: str = "openai/gpt-5.6-terra"  # capture strategy + deliverables
     MAIL_MODEL: str = "openai/gpt-5.6-terra"     # outreach drafting
     BRIEF_MODEL: str = "openai/gpt-5.6-terra"    # call brief (org-level meeting prep)

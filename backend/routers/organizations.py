@@ -5,6 +5,7 @@ roles, and removes people. Mirrors PriceIQ's organizations.py patterns
 (require_admin + can_manage_user) but trimmed to what Collecct needs — no rate
 presets / proposals. A last-admin guard makes it impossible to orphan an org.
 """
+import logging
 from datetime import datetime
 
 from bson import ObjectId
@@ -17,6 +18,8 @@ from auth.dependencies import get_current_user, require_admin
 from auth.rbac import can_manage_user
 from utils.helpers import serialize_doc, serialize_docs
 from utils.organizations import get_organization_crud
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/organizations", tags=["organizations"])
 
@@ -117,11 +120,44 @@ async def lookup_organization_uei(current_user: dict = Depends(require_admin)):
     if not details:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"No SAM.gov entity found for UEI {uei}.")
+    # WHAT THE COMPANY ACTUALLY DOES — the other half of the fit lens.
+    #
+    # SAM.gov tells us what the org is ELIGIBLE for (NAICS, set-asides) and nothing about
+    # what they are good at. That gap is not academic: with NAICS alone the Analyst read
+    # Nexagen's registered manufacturing codes and recommended bidding on antenna and switch
+    # parts — for a systems-engineering services company. SAM.gov hands us their own website
+    # in `entity_url`, so we research it and store the answer for every agent to read.
+    #
+    # Best-effort and non-fatal: the UEI lookup is the user's action and must succeed even if
+    # research does not. Runs on ORG_PROFILE_MODEL (small — this fires once per org).
+    profile = None
+    site = (details.get("entity_url") or "").strip()
+    if site:
+        try:
+            from urllib.parse import urlparse
+
+            from agent.company_research_agent import research_company
+            from app.settings import settings as _s
+
+            host = urlparse(site if "//" in site else f"http://{site}").netloc.lower()
+            host = host[4:] if host.startswith("www.") else host
+            if host:
+                r = research_company(host, budget=3, model=_s.ORG_PROFILE_MODEL)
+                if r.found:
+                    # `source_url` is kept so a human can check where this came from — the
+                    # narrative is machine-written and admin-editable, never asserted blind.
+                    profile = {"industry": r.industry, "description": r.description,
+                               "source_url": r.source_url, "generated": True}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Org company-profile research failed for %s: %s", site, exc)
+
     db = get_mongodb_client().get_database()
-    db["organizations"].update_one(
-        {"_id": org["_id"]},
-        {"$set": {"company_details": details, "updated_at": datetime.utcnow()}},
-    )
+    update: dict = {"company_details": details, "updated_at": datetime.utcnow()}
+    if profile:
+        # Never clobber a narrative an admin has edited by hand.
+        if not ((org.get("company_profile") or {}).get("edited_by")):
+            update["company_profile"] = profile
+    db["organizations"].update_one({"_id": org["_id"]}, {"$set": update})
     return details
 
 

@@ -1,3 +1,4 @@
 crm/
 .vscode
 dump.rdb
+backend/celerybeat-schedule.db

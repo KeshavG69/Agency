@@ -97,10 +97,15 @@ OUTPUT — your FINAL message must be ONLY this JSON object, no prose, no markdo
 _SKILL_CALL_ALLOWANCE = 3
 
 
-def build_company_research_agent(domain: str, budget: int = 3) -> Agent:
+def build_company_research_agent(
+    domain: str, budget: int = 3, model: str | None = None
+) -> Agent:
+    """`model` overrides RESEARCH_MODEL for one caller — the org's OWN company profile runs
+    on a smaller model (settings.ORG_PROFILE_MODEL) since it fires once per org, not per
+    contact-company. Everything else keeps RESEARCH_MODEL."""
     return Agent(
         name="CompanyResearch",
-        model=get_chat_llm_agno(model=settings.RESEARCH_MODEL),
+        model=get_chat_llm_agno(model=model or settings.RESEARCH_MODEL),
         tools=[create_exa_web_search_tool()],
         skills=get_bd_skills(),
         # The budget is ENFORCED here, not merely requested in the prompt. A model that
@@ -112,9 +117,13 @@ def build_company_research_agent(domain: str, budget: int = 3) -> Agent:
     )
 
 
-def research_company(domain: str, budget: int = 3, max_attempts: int = 2) -> CompanyResearch:
+def research_company(
+    domain: str, budget: int = 3, max_attempts: int = 2, model: str | None = None
+) -> CompanyResearch:
     """Look up one company by its email domain. Never raises for 'not found' — that is a
-    result. Raises only when the model could not be made to produce valid JSON at all."""
+    result. Raises only when the model could not be made to produce valid JSON at all.
+
+    `model` overrides RESEARCH_MODEL for this call (see build_company_research_agent)."""
     dom = (domain or "").strip().lower()
     if not dom:
         return CompanyResearch(found=False)
@@ -125,7 +134,7 @@ def research_company(domain: str, budget: int = 3, max_attempts: int = 2) -> Com
     )
     last: Optional[Exception] = None
     for attempt in range(1, max_attempts + 1):
-        result = build_company_research_agent(dom, budget).run(message)
+        result = build_company_research_agent(dom, budget, model).run(message)
         try:
             out = coerce_output(result.content, CompanyResearch)
         except Exception as exc:  # noqa: BLE001 — reasoning models occasionally emit junk
