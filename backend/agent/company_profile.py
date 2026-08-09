@@ -51,9 +51,38 @@ def _focus_block(keywords: list[str] | None) -> str:
     )
 
 
+def _what_we_do_block(profile: dict | None) -> str:
+    """What the company ACTUALLY DOES — researched from their own website on UEI save.
+
+    SAM.gov's NAICS list is an eligibility record, not a description of the business, and
+    reading it as one is actively misleading: Nexagen registered manufacturing codes
+    (334220/334419/336992) for integration work, and on NAICS alone the Analyst recommended
+    bidding on antenna and switch parts — for a systems-engineering services company. This
+    block is what stops that.
+
+    Carries its own source URL because it is machine-written; an admin may overwrite it.
+    """
+    if not profile:
+        return ""
+    industry = (profile.get("industry") or "").strip()
+    desc = (profile.get("description") or "").strip()
+    if not (industry or desc):
+        return ""
+    src = (profile.get("source_url") or "").strip()
+    return (
+        "\nWHAT THIS COMPANY ACTUALLY DOES"
+        + (f" (sector: {industry})" if industry else "")
+        + ":\n"
+        + (desc or industry)
+        + (f"\n(source: {src})" if src else "")
+        + "\nWeigh fit against THIS, not the NAICS list alone — a registered NAICS code means "
+          "the company may bid, not that the work is their business."
+    )
+
+
 def _format(name: str | None, uei: str | None, d: dict | None,
-            keywords: list[str] | None = None) -> str:
-    focus = _focus_block(keywords)
+            keywords: list[str] | None = None, profile: dict | None = None) -> str:
+    focus = _what_we_do_block(profile) + _focus_block(keywords)
     if not d:
         if name:
             return (
@@ -103,4 +132,4 @@ def company_context(organization_id: str) -> tuple[str, str]:
     # Focus areas are org-owned (admin-entered), not SAM.gov data — so they survive even
     # when the entity lookup fails, and every agent reading this lens gets them.
     keywords = [str(k).strip() for k in (org.get("keywords") or []) if str(k).strip()]
-    return display_name, _format(name, uei, details, keywords)
+    return display_name, _format(name, uei, details, keywords, org.get("company_profile"))
