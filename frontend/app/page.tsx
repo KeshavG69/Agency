@@ -68,6 +68,7 @@ import TopBar from "./TopBar";
 import { useUiStore, type ViewKey, type TabKey } from "@/lib/stores/uiStore";
 import { useToastStore } from "@/lib/stores/toastStore";
 import CallBriefDialog from "./CallBriefDialog";
+import RiskMeter from "./RiskMeter";
 import CallPlanFilters, {
   EMPTY_CALL_FILTERS,
   type CallFilters,
@@ -2207,6 +2208,9 @@ function InfoTab({ opp }: { opp: Opportunity }) {
           <p className="rationale">{opp.analyst_rationale}</p>
         </>
       )}
+      {/* The same judgement the rationale explains in prose — as a meter plus each risk
+          with its own reasoning, so it can be skimmed and sorted rather than read. */}
+      <RiskMeter level={opp.risk_level} factors={opp.risk_factors} />
       <div className="sec-title">Opportunity details</div>
       <div className="kv-grid">
         {rows.map(([k, v, mono]) => (
