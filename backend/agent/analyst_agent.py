@@ -108,10 +108,25 @@ OUTPUT:
 After researching and reasoning, your FINAL message must be ONLY this JSON object —
 no prose, no markdown fences, no <reasoning> tags:
 {{"bid_decision": "Bid" | "No-Bid" | "Watch", "priority_score": <integer 0-100>,
+  "risk_level": "Low" | "Medium" | "High",
+  "risk_factors": [{{"factor": "capability" | "eligibility" | "competition" | "past_performance" | "scope_clarity" | "schedule" | "contract_type" | "teaming", "severity": "blocker" | "high" | "medium" | "low", "note": "<one line a rep can act on>"}}],
   "rationale": "<2-5 sentences incl. the gates to confirm>", "recommended_stage": "Qualify" | "Discover" | "No-Bid",
   "call_action": {{"contact": "<who>", "channel": "email", "talking_point": "<one line>"}},
   "recheck_after_days": <integer 1-365 or null>, "recheck_reason": "<one line or null>"}}
 Use null for "call_action" unless bid_decision is "Bid".
+
+RISK — this is the SAME judgement you already made in (A) and (B), just written down separately
+so a rep can sort and filter on it. Do not re-reason it; report it.
+  * A HARD DISQUALIFIER from (A) is severity "blocker" -> risk_level MUST be "High" and
+    bid_decision MUST be "No-Bid". (e.g. a set-aside {company} is not eligible for; work it
+    cannot perform and has no teaming path to.)
+  * A CONFIRMABLE GATE from (B) is severity "high"/"medium"/"low" — NEVER "blocker". These do
+    not force a No-Bid; they are what the rep goes and checks.
+  * `risk_level`: High if any blocker, or several "high" factors; Low only when you found
+    nothing material. Say nothing rather than padding the list — an invented risk is worse
+    than a short list.
+  * Anything you could not verify from public data belongs here as "scope_clarity" (or the
+    fitting factor) rather than being asserted as fact in the rationale.
 Use null for both recheck fields unless bid_decision is "Watch".
 """
 

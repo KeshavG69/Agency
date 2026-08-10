@@ -12,10 +12,45 @@ class CallAction(BaseModel):
     talking_point: str = Field(description="One line: why we're reaching out and what to say")
 
 
+class RiskFactor(BaseModel):
+    """ONE named risk on a pursuit, with the reasoning behind it.
+
+    The agent already separates hard disqualifiers from confirmable gates in its reasoning;
+    this is that judgement made STRUCTURED so the UI can show a risk meter and a rep can
+    filter on it, instead of the same finding being buried in a paragraph of rationale.
+    """
+
+    factor: Literal[
+        "capability",     # can we self-perform, or do we depend on a sub/OEM we don't have?
+        "eligibility",    # set-aside, clearance, certification, facility requirement
+        "competition",    # incumbent strength, expected bidders, recompete
+        "past_performance",  # do we have relevant, citable CPARS for this scope?
+        "scope_clarity",  # attachments/specs unavailable — we don't fully know the ask
+        "schedule",       # enough time to produce a compliant response?
+        "contract_type",  # FFP on unclear scope, unfunded options, pricing exposure
+        "teaming",        # need a partner/authorisation we do not currently hold
+    ]
+    severity: Literal["blocker", "high", "medium", "low"] = Field(
+        description="'blocker' = a HARD DISQUALIFIER (forces No-Bid). Anything else is a risk "
+                    "to weigh or a gate to confirm — never a reason to reject on its own."
+    )
+    note: str = Field(description="One line a rep can act on: what the risk is and why")
+
+
 class AnalystVerdict(BaseModel):
     """The Analyst Agent's decision on a single opportunity."""
 
     bid_decision: Literal["Bid", "No-Bid", "Watch"]
+    # The headline for the risk meter. Derived from the factors below, but stated explicitly
+    # so the UI never has to re-derive it (and so it survives an empty factor list).
+    risk_level: Literal["Low", "Medium", "High"] = Field(
+        "Medium", description="Overall risk of pursuing. Any 'blocker' factor => High."
+    )
+    risk_factors: list[RiskFactor] = Field(
+        default_factory=list,
+        description="Every material risk, each with its own reasoning. Empty is valid — say "
+                    "so rather than inventing risks to fill the list.",
+    )
     priority_score: int = Field(description="0–100; higher = pursue sooner", ge=0, le=100)
     rationale: str = Field(
         description="2–5 sentences: the fit read, the specific gates to confirm internally "

@@ -292,6 +292,10 @@ class CRMStore:
                 "bid_decision": verdict.bid_decision,
                 "priority_score": verdict.priority_score,
                 "analyst_rationale": verdict.rationale,
+                # Structured risk — the same judgement the rationale explains in prose, kept
+                # as fields so the UI can render a meter and the list can filter on it.
+                "risk_level": verdict.risk_level,
+                "risk_factors": [f.model_dump() for f in verdict.risk_factors],
                 "stage": verdict.recommended_stage,
                 "analyzed_at": _utc_now(),
                 # Analyst-done is the single choke point where a manual opp leaves the

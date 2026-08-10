@@ -2025,6 +2025,116 @@ button {
   border-left: 2px solid var(--accent);
 }
 
+/* ---- Analyst risk meter + per-factor reasoning ---- */
+.risk {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.risk-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.risk-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+/* Three bars: how many are lit IS the level, so it reads without the word. */
+.risk-bars {
+  display: inline-flex;
+  gap: 3px;
+}
+.risk-bars i {
+  width: 20px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--line);
+}
+.risk-bars.r-low i.on {
+  background: var(--bid, #2f9e78);
+}
+.risk-bars.r-medium i.on {
+  background: var(--watch, #d79a3a);
+}
+.risk-bars.r-high i.on {
+  background: var(--danger, #d84a4a);
+}
+.risk-level {
+  font-size: 12px;
+  font-weight: 700;
+}
+.risk-level.r-low {
+  color: var(--bid, #2f9e78);
+}
+.risk-level.r-medium {
+  color: var(--watch, #d79a3a);
+}
+.risk-level.r-high {
+  color: var(--danger, #d84a4a);
+}
+.risk-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.risk-list > * {
+  flex-shrink: 0; /* scrolling-column rule — see .view-companies */
+}
+.risk-list li {
+  display: grid;
+  grid-template-columns: 66px 108px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+/* A blocker is a different KIND of finding from a gate — it must not read as one more row. */
+.risk-list li.blocker {
+  padding: 6px 8px;
+  margin-left: -8px;
+  border-radius: 5px;
+  background: var(--nobid-soft, rgba(216, 74, 74, 0.1));
+}
+.risk-sev {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 2px 0;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--faint);
+}
+.risk-sev.s-blocker {
+  background: var(--danger, #d84a4a);
+  color: #fff;
+}
+.risk-sev.s-high {
+  background: var(--nobid-soft, rgba(216, 74, 74, 0.16));
+  color: var(--danger, #d84a4a);
+}
+.risk-sev.s-medium {
+  background: var(--watch-soft, rgba(215, 154, 58, 0.16));
+  color: var(--watch, #d79a3a);
+}
+.risk-factor {
+  font-weight: 600;
+  color: var(--ink);
+}
+.risk-note {
+  color: var(--muted);
+}
+
 /* generic record card (calls, docs, tasks) */
 .card-list {
   display: flex;

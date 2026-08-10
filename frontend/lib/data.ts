@@ -59,6 +59,26 @@ export interface OutreachDraft {
   grounded_on?: string[];
 }
 
+// ---- Analyst risk assessment ----
+// `blocker` is a HARD DISQUALIFIER (forces No-Bid). Everything else is a risk to weigh or a
+// gate for the rep to confirm — never a reason to reject on its own.
+export type RiskSeverity = "blocker" | "high" | "medium" | "low";
+export type RiskLevel = "Low" | "Medium" | "High";
+export type RiskFactorKind =
+  | "capability"
+  | "eligibility"
+  | "competition"
+  | "past_performance"
+  | "scope_clarity"
+  | "schedule"
+  | "contract_type"
+  | "teaming";
+export interface RiskFactor {
+  factor: RiskFactorKind;
+  severity: RiskSeverity;
+  note: string;
+}
+
 export interface Opportunity {
   id: string;
   title: string;
@@ -73,6 +93,10 @@ export interface Opportunity {
   assigned_to?: string[]; // member user-ids this opportunity is assigned to (empty = unassigned)
   priority_score?: number;
   analyst_rationale?: string;
+  // Structured risk from the Analyst — the same judgement its rationale explains in prose,
+  // kept as fields so the UI can show a meter and name each risk with its reasoning.
+  risk_level?: RiskLevel | null;
+  risk_factors?: RiskFactor[];
   poc_name?: string;
   capture_approved?: boolean;
   captured_at?: string | null; // set when the Capture agent finishes its deliverables
