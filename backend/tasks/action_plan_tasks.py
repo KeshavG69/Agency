@@ -296,9 +296,32 @@ def _infeasible_reason(step: Step, deadline: Optional[date], today: date) -> str
 # ---------------------------------------------------------------------------------------
 
 
+# Steps that remain worth doing after the solicitation has closed.
+#
+# The rest of the ladder is pre-submission: once the response date is gone you cannot
+# analyse, decide, approve capture or submit your way back into a closed competition, so
+# those steps expire with the deadline and stop asking. These two do not expire, because
+# the deadline passing does not undo them:
+#
+#   call        — the customer relationship outlives one solicitation. A contracting
+#                 officer you were about to speak to is still worth speaking to, and the
+#                 next requirement from that office is the actual return on the call.
+#   review_docs — capture already ran and produced deliverables. Nobody has read them.
+#                 Expiring that is throwing away work that was already paid for.
+POST_CAPTURE_KINDS: frozenset[str] = frozenset({"call", "review_docs"})
+
+
 def _is_terminal(opp: dict, today: date) -> bool:
-    if opp.get("bid_decision") in TERMINAL_DECISIONS or opp.get("stage") in TERMINAL_STAGES:
-        return True
+    """Whether the pursuit is over for ALL purposes.
+
+    A human decision (No-Bid) or a terminal stage (Won / Lost / Submitted) ends everything.
+    A passed deadline deliberately does NOT: it ends the pre-submission chain only, which
+    `_deadline_passed` handles per-step. See POST_CAPTURE_KINDS.
+    """
+    return opp.get("bid_decision") in TERMINAL_DECISIONS or opp.get("stage") in TERMINAL_STAGES
+
+
+def _deadline_passed(opp: dict, today: date) -> bool:
     deadline = _parse_day(opp.get("response_deadline"))
     return deadline is not None and deadline < today
 
@@ -353,6 +376,11 @@ def plan_for_org(organization_id: str) -> dict:
         step = next_step(opp, ctx, closed_by_opp.get(opp_id, set()))
         if step is None:
             no_step.append(opp_id)
+            continue
+        # Past its response date, a pursuit keeps only its post-capture work. Counted as
+        # terminal so the sweep below closes anything still open on the dead chain.
+        if step.kind not in POST_CAPTURE_KINDS and _deadline_passed(opp, today):
+            terminal.append(opp_id)
             continue
         by_step.setdefault(step.kind, []).append(opp_id)
 
