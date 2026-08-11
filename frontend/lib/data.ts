@@ -301,22 +301,37 @@ export async function fetchOpportunity(id: string): Promise<Opportunity> {
 // rest from its sidebar with no error anywhere. Looping is both correct and bounded: it
 // stops as soon as a short page comes back.
 export async function fetchBids(): Promise<Opportunity[]> {
-  const PAGE_SIZE = 100;
+  const PAGE_SIZE = 100; // the server's hard ceiling — see MAX_PAGE_SIZE in crm_store
   const MAX_PAGES = 20; // 2,000 active bids is far beyond real; a guard against a bad total
-  const all: Opportunity[] = [];
 
-  for (let i = 0; i < MAX_PAGES; i++) {
-    const page = await fetchOpportunityPage({
-      status: "Bid",
-      offset: all.length,
-      limit: PAGE_SIZE,
-      // The sidebar never renders the status pills, so skip computing them per page.
-      withCounts: false,
-    });
-    all.push(...page.items);
-    if (page.items.length < PAGE_SIZE || all.length >= page.total) break;
-  }
-  return all;
+  // ONE round trip to learn the size, then the remainder CONCURRENTLY.
+  //
+  // This used to walk the pages in a `for await` loop, so an org with 272 Bids paid three
+  // round trips end-to-end before the Dashboard could draw anything. Against a cluster
+  // ~400ms away that is over a second of pure waiting for pages the browser could have
+  // asked for at the same time. The first page still has to come back alone, because its
+  // `total` is what says how many more there are.
+  const first = await fetchOpportunityPage({
+    status: "Bid",
+    offset: 0,
+    limit: PAGE_SIZE,
+    // The sidebar never renders the status pills, so skip computing them per page.
+    withCounts: false,
+  });
+  if (first.items.length < PAGE_SIZE || first.items.length >= first.total) return first.items;
+
+  const pages = Math.min(Math.ceil(first.total / PAGE_SIZE), MAX_PAGES);
+  const rest = await Promise.all(
+    Array.from({ length: pages - 1 }, (_, i) =>
+      fetchOpportunityPage({
+        status: "Bid",
+        offset: (i + 1) * PAGE_SIZE,
+        limit: PAGE_SIZE,
+        withCounts: false,
+      }),
+    ),
+  );
+  return [...first.items, ...rest.flatMap((p) => p.items)];
 }
 
 // Trigger an on-demand SAM.gov pull for this org (NAICS-filtered, still-open notices).

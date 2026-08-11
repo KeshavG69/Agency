@@ -288,7 +288,17 @@ function Console({ user }: { user: User }) {
   const outlookAccount = outlook.accountId;
   const spConnected = sharepoint.connected;
 
+  // Which providers are connected drives the Connect bars on Contacts and Library and the
+  // Organisation panel — and nothing else. Checked when one of those is opened, once, rather
+  // than on every app start regardless of destination.
+  const view = useUiStore((s) => s.view);
+
+  const wantsConnStatus =
+    view === "contacts" || view === "documents" || view === "org";
+  const connChecked = useRef(false);
   useEffect(() => {
+    if (!wantsConnStatus || connChecked.current) return;
+    connChecked.current = true;
     getConnStatus("outlook")
       .then((s) => setConnection("outlook", s.connected, s.connected_account_id ?? null))
       .catch(() => {}); // offline/unauthenticated — keep whatever the cache already says
@@ -296,7 +306,7 @@ function Console({ user }: { user: User }) {
       .then((s) => setConnection("sharepoint", s.connected, s.connected_account_id ?? null))
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [wantsConnStatus]);
   const [connecting, setConnecting] = useState(false);
   const [spConnecting, setSpConnecting] = useState(false);
   const [resyncing, setResyncing] = useState(false);
@@ -316,7 +326,6 @@ function Console({ user }: { user: User }) {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewContacts, setReviewContacts] = useState<ContactCandidate[]>([]);
-  const view = useUiStore((s) => s.view);
   const setView = useUiStore((s) => s.setView);
   const setPrepCallFor = useUiStore((s) => s.setPrepCallFor);
   // Every view change goes through here so the swap animates. Sibling tabs imply no
@@ -326,6 +335,7 @@ function Console({ user }: { user: User }) {
   // --- server-side pagination state (replaces "load every opp") ---
   const PAGE = 50;
   const [counts, setCounts] = useState<Record<string, number>>({}); // filter-pill counts (server)
+  const [decidingId, setDecidingId] = useState<string | null>(null); // row whose verdict is saving
   const [inFlight, setInFlight] = useState(0); // ingesting+processing (arms the poll)
   const [facetOptions, setFacetOptions] = useState<{ agencies: string[]; naics: string[]; setAsides: string[] }>(
     { agencies: [], naics: [], setAsides: [] },
@@ -378,7 +388,9 @@ function Console({ user }: { user: User }) {
   // THE LOADING RULE (plan 5.2). `placeholderData: previous` lives in opportunityListQuery,
   // so a filter change, a keystroke or the 5s poll keeps the current rows painted and only
   // flips isFetching. Nothing below may gate rendering on isFetching — only on isPending.
-  const listQuery = useQuery(listOptions);
+  // Same gating as the Bid set: a 50-row page of the pipeline is meaningless on Today or
+  // Contacts, and on this deployment it measured ~3.9s of the landing view's wait.
+  const listQuery = useQuery({ ...listOptions, enabled: view === "pipeline" });
 
   const rows = listQuery.data?.items ?? NO_OPPS;
   const total = listQuery.data?.total ?? 0;
@@ -442,24 +454,39 @@ function Console({ user }: { user: User }) {
     }
   }, [params]);
 
-  // The Bid set for the sidebar + dashboard — loaded separately from the paged list, and
-  // independent of the pipeline filters (a Watch filter must not empty the sidebar).
-  const bidsQ = useQuery(bidsQuery());
+  // The Bid set for the Call Plan sidebar + the Dashboard.
+  //
+  // GATED ON THE VIEW, and it matters more than it looks: `fetchBids` pages through the org's
+  // ENTIRE Bid set 100 at a time, so on a few hundred pursuits it is several SEQUENTIAL round
+  // trips — the single most expensive thing this shell can ask for. It used to run on mount
+  // whatever you were looking at, which meant landing on Today (which never reads it) put its
+  // one small request behind this, the pipeline page, the counts, the dates and the facets.
+  // Today is the landing view; it should not wait on the rest of the console's data.
+  const wantsBids = view === "callplan" || view === "dashboard";
+  const bidsQ = useQuery({ ...bidsQuery(), enabled: wantsBids });
   const bidOpps = bidsQ.data ?? NO_OPPS;
+
+  // Counts, calendar dots and facet options all feed the Pipeline's filter bar and nothing
+  // else, so they load with the Pipeline rather than with the app.
+  const onPipeline = view === "pipeline";
 
   // On any filter/search/status/calendar change: refresh counts + dots. The rows themselves
   // need no effect — `params` is part of the query key, so changing it IS the refetch.
   useEffect(() => {
+    if (!onPipeline) return;
     loadCounts();
     loadDates();
-  }, [loadCounts, loadDates]);
+  }, [onPipeline, loadCounts, loadDates]);
 
-  // Facet dropdown options load once on mount.
+  // Facet dropdown options: once, the first time the Pipeline is opened.
+  const facetsLoaded = useRef(false);
   useEffect(() => {
+    if (!onPipeline || facetsLoaded.current) return;
+    facetsLoaded.current = true;
     fetchFacets()
       .then((f) => setFacetOptions({ agencies: f.agencies, naics: f.naics, setAsides: f.set_asides }))
       .catch(() => {});
-  }, []);
+  }, [onPipeline]);
 
   // While anything is mid-flight (ingesting / a capture run), poll so the Ingesting/Processing
   // sections self-empty as workers finish — even for items not on the current page. Armed by the
@@ -504,10 +531,16 @@ function Console({ user }: { user: User }) {
     }
   }, [isAdmin, view]);
 
-  // Admins need the member roster to assign opportunities.
+  // Admins need the member roster to assign opportunities — which happens in the pursuit
+  // detail sheet, reachable from the Pipeline. Fetched once, when the Pipeline is first
+  // opened, rather than on every app start: on Today it was two more requests competing
+  // with the only one that view actually needs.
+  const membersLoaded = useRef(false);
   useEffect(() => {
-    if (isAdmin) organizationsApi.getMembers().then(setMembers).catch(() => {});
-  }, [isAdmin]);
+    if (!isAdmin || view !== "pipeline" || membersLoaded.current) return;
+    membersLoaded.current = true;
+    organizationsApi.getMembers().then(setMembers).catch(() => {});
+  }, [isAdmin, view]);
 
   // Assign an opportunity to members (admin). Optimistic; reverts on failure.
   const onAssign = async (id: string, userIds: string[]) => {
@@ -833,6 +866,22 @@ function Console({ user }: { user: User }) {
     }
   };
 
+  /**
+   * Set a verdict straight from a list row. Wraps the same optimistic path the detail sheet
+   * uses, so a decision made here and one made there behave identically; the only addition
+   * is a per-row busy id, because a row's buttons sit under the cursor and are trivially
+   * double-clickable while the write is still in flight.
+   */
+  const onQuickDecision = async (id: string, decision: BidDecision) => {
+    if (decidingId) return;
+    setDecidingId(id);
+    try {
+      await onSetDecision(id, decision);
+    } finally {
+      setDecidingId(null);
+    }
+  };
+
   const onApproveCapture = async (id: string) => {
     setCapturing(true);
     setError(null);
@@ -917,10 +966,28 @@ function Console({ user }: { user: User }) {
   type SortKey = "title" | "agency" | "response_deadline" | "priority_score";
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  /**
+   * Click a column to sort it; click again to reverse; click a third time to drop back to
+   * the server's default order.
+   *
+   * The third state is what let the separate "Sort" dropdown be deleted. That dropdown
+   * offered exactly the four keys these headers already carry, so the surface had two
+   * controls driving one piece of state — and the only thing it could express that a
+   * header could not was "Default". Now the headers own it.
+   */
   const onSort = useCallback((key: SortKey) => {
     setSortKey((prevKey) => {
-      setSortDir((prevDir) => (prevKey === key && prevDir === "asc" ? "desc" : "asc"));
-      return key;
+      if (prevKey !== key) {
+        setSortDir("asc");
+        return key;
+      }
+      let cleared = false;
+      setSortDir((prevDir) => {
+        if (prevDir === "asc") return "desc";
+        cleared = true;
+        return "asc";
+      });
+      return cleared ? null : key;
     });
   }, []);
 
@@ -1049,7 +1116,11 @@ function Console({ user }: { user: User }) {
               extraAction={{ label: "Select folders", onClick: () => setSpPickerOpen(true) }}
             />
           )}
-          <SharePointGraph />
+          <SharePointGraph
+            connected={spConnected}
+            connecting={spConnecting}
+            onConnect={onConnectSharePoint}
+          />
         </section>
       ) : view === "org" ? (
         <section className="graph-pane">
@@ -1114,30 +1185,6 @@ function Console({ user }: { user: User }) {
               </div>
             );
           })()}
-          <div className="sort-wrap">
-            <label className="sort-label" htmlFor="opp-sort">Sort</label>
-            <select
-              id="opp-sort"
-              className="sort-select"
-              value={sortKey ?? ""}
-              onChange={(e) => setSortKey((e.target.value || null) as SortKey | null)}
-            >
-              <option value="">Default</option>
-              <option value="priority_score">Priority</option>
-              <option value="response_deadline">Deadline</option>
-              <option value="title">Opportunity</option>
-              <option value="agency">Agency</option>
-            </select>
-            <button
-              type="button"
-              className="sort-dir"
-              disabled={!sortKey}
-              title={sortDir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
-              onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-            >
-              {sortDir === "asc" ? "↑" : "↓"}
-            </button>
-          </div>
         </div>
         <div className="rows">
           <table className="opp-table">
@@ -1249,10 +1296,29 @@ function Console({ user }: { user: User }) {
                         )}
                       </td>
                       <td className="col-agency">{o.agency || "—"}</td>
-                      <td className="col-stage">
-                        <span className={`badge ${chip ? chip.cls : badgeClass(o.bid_decision)}`}>
+                      <td className="col-stage" onClick={(e) => e.stopPropagation()}>
+                        <span className={`badge row-badge ${chip ? chip.cls : badgeClass(o.bid_decision)}`}>
                           {chip ? chip.label : o.bid_decision ?? "New"}
                         </span>
+                        {/* An in-flight row (ingesting / capture running) has no verdict to
+                            set yet, so it keeps the plain chip and no controls. */}
+                        {!chip && (
+                          <span className="row-dec">
+                            {(["Bid", "Watch", "No-Bid"] as BidDecision[]).map((d) => (
+                              <button
+                                key={d}
+                                type="button"
+                                className={`rd-btn ${d === o.bid_decision ? `on ${badgeClass(d)}` : ""}`}
+                                disabled={decidingId === o.id}
+                                aria-pressed={d === o.bid_decision}
+                                title={`Mark ${d}`}
+                                onClick={() => onQuickDecision(o.id, d)}
+                              >
+                                {d === "No-Bid" ? "No-bid" : d}
+                              </button>
+                            ))}
+                          </span>
+                        )}
                       </td>
                       <td className={`col-deadline num ${overdue ? "overdue" : ""}`}>
                         {fmtDate(o.response_deadline)}
@@ -1328,17 +1394,18 @@ function Console({ user }: { user: User }) {
           title="Drag to resize"
         />
         <div className="sheet-actions">
+          {/* The sheet now opens wide, so this narrows it for reading beside the list —
+              the inverse of what it used to do. `null` means "the CSS default", which is
+              the wide one. */}
           <button
             className="sheet-btn"
             onClick={() =>
-              setDetailWidth(
-                detailWidth ? null : Math.min(1180, Math.round(window.innerWidth * 0.94)),
-              )
+              setDetailWidth(detailWidth ? null : Math.min(720, Math.round(window.innerWidth * 0.82)))
             }
-            aria-label={detailWidth ? "Collapse" : "Expand"}
-            title={detailWidth ? "Collapse" : "Expand"}
+            aria-label={detailWidth ? "Widen the panel" : "Narrow the panel"}
+            title={detailWidth ? "Widen" : "Narrow"}
           >
-            {detailWidth ? "⤡" : "⤢"}
+            {detailWidth ? "⤢" : "⤡"}
           </button>
           <button
             className="sheet-btn"
@@ -1663,7 +1730,10 @@ function CallPlanView() {
                     c.captured && <span className="cp-status done">Captured</span>
                   ) : c.status === "Planned" ? (
                     <>
-                      <button className="mini-btn" onClick={() => update(c.call_id!, "Done")}>
+                      <button
+                        className="mini-btn secondary"
+                        onClick={() => update(c.call_id!, "Done")}
+                      >
                         Mark done
                       </button>
                       <button className="sel-link" onClick={() => update(c.call_id!, "Dismissed")}>

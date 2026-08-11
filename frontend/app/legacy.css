@@ -477,21 +477,24 @@ button {
 }
 
 /* "SAM.gov" provenance chip on an opportunity row */
+/* Where a record came from is METADATA, not a judgement — so it takes the neutral pill
+   treatment, not the accent. It was rendering in the decision green, which is reserved for
+   bid/no-bid and actions: with one on every row of a 3,600-row table, the colour that is
+   supposed to make a Bid badge jump off the page was the most repeated thing on screen. */
 .src-tag {
   margin-left: auto;
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: var(--bid-ink);
-  background: color-mix(in srgb, var(--accent-2) 12%, transparent);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
   border-radius: 4px;
   padding: 1px 6px;
   white-space: nowrap;
 }
 /* Manually-added opportunities — neutral, distinct from the accent SAM.gov tag. */
 .src-tag.manual {
-  color: var(--muted);
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  font-style: italic;
 }
 
 /* "View on SAM.gov" link in the detail info tab */
@@ -1485,20 +1488,38 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px 14px;
+  /* Wraps rather than crushing the contact: the actions keep their size and drop to their
+     own line when the name needs the room. */
+  flex-wrap: wrap;
 }
+/* THE NAME NEVER TRUNCATES. This is a call sheet — "Darryl O. Br…" is the one thing on the
+   card a rep cannot act on, and it was being clipped so that two buttons could hold a fixed
+   width. It wraps now, and takes the row's spare space first. */
 .cp-contact {
+  flex: 1 1 190px;
+  min-width: 0;
   font-size: 12px;
+  line-height: 1.45;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 .cp-actions {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+}
+/* The card's own hierarchy: prep is the action, done is the book-keeping. */
+.cp-actions .mini-btn.secondary {
+  border-color: var(--line-strong);
+  background: transparent;
+  color: var(--muted);
+}
+.cp-actions .mini-btn.secondary:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--ink);
+  border-color: var(--muted);
 }
 .cp-status {
   font-size: 10px;
@@ -1791,7 +1812,11 @@ button {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(720px, 82%);
+  /* Opens WIDE by default. A pursuit's sheet carries the verdict, its named risks, the
+     contacts, the documents and the agent trail — at 720px that is a column of wrapped
+     fragments and a lot of scrolling. The narrow preset is still one click away for
+     reading beside the list. */
+  width: min(1240px, 92%);
   background: var(--surface);
   display: flex;
   flex-direction: column;
@@ -2766,7 +2791,26 @@ button {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  /* Fixed layout so the columns are sized by their headers, not by their longest value.
+     With `auto` the browser gave a four-word company name four stacked lines while the
+     email column ran straight off the right edge and was CLIPPED — no ellipsis, no
+     scroll, the address simply ended mid-domain. Every cell below truncates honestly
+     instead, and the full value is still in the row's title attribute. */
+  table-layout: fixed;
 }
+.view-table tbody td,
+.view-table thead th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Proportions from what the columns actually carry: a person's name and their address are
+   the two that matter and get the room; a job title is usually a word or absent. */
+.view-table col.c-name { width: 26%; }
+.view-table col.c-title { width: 14%; }
+.view-table col.c-company { width: 22%; }
+.view-table col.c-email { width: 26%; }
+.view-table col.c-last { width: 12%; }
 .view-table thead th {
   position: sticky;
   top: 0;
@@ -3750,9 +3794,7 @@ button {
 .bb-row {
   width: 100%;
   text-align: left;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: block;
   padding: 11px 11px;
   border-radius: 5px;
   transition: background 0.14s;
@@ -3760,14 +3802,46 @@ button {
 .bb-row:hover { background: var(--surface); }
 .bb-row.sel { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-strong); }
 .bb-main { flex: 1; min-width: 0; }
+/* Two lines before it clips, because the pursuit's name is what a rep scans this rail for.
+   It used to be a single truncated line sharing the row with a due chip, so a 440px rail
+   showed "APX NEXT All-…" beside a pill that read "Overdue" on every single entry — the
+   width went to a word that, being true of all 272, distinguished none of them. */
 .bb-name {
-  font-size: 13px; font-weight: 550; color: var(--ink);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--ink);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
-.bb-sub {
-  font-size: 11.5px; color: var(--faint); margin-top: 2px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.bb-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--faint);
+  min-width: 0;
 }
+.bb-agency {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The deadline as a word, in its own tone — no pill, no reserved column. */
+.bb-due {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.bb-due.overdue { color: var(--danger); }
+.bb-due.soon { color: var(--watch); }
+.bb-due.ok { color: var(--bid-ink); }
+.bb-due.far,
+.bb-due.none { color: var(--faint); }
 
 /* ============ Filter bar (faceted opportunity filters) ============ */
 .filterbar {
@@ -4756,4 +4830,501 @@ button {
   padding: 14px 0 6px;
   font-size: 12.5px;
   color: var(--faint);
+}
+
+/* ============================================================================
+   Auth surfaces — the sign-in field
+
+   THE STRUCTURE, AND WHY IT IS NOT A CARD. The previous sign-in was a 412px card
+   floating in the middle of an empty page: the arrangement every product ships, and one
+   that says nothing about what this is. A visitor's first contact with Collecct looked
+   like a visitor's first contact with anything.
+
+   This is an asymmetric field instead. A ruled institutional panel carries the identity
+   and what the product actually is; the form sits directly on the paper beside it with
+   room to breathe, not boxed inside a container. The devices are the ones this system
+   already owns — one tonal step, hairline rules, uppercase micro-labels, mono for
+   anything machine-derived — so the entry surface reads as the same product as the
+   console behind it, which the floating card never did.
+   ============================================================================ */
+.auth-split {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1fr);
+  background: var(--paper);
+}
+
+/* --- the institutional panel --------------------------------------------- */
+.auth-aside {
+  position: relative;
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
+  padding: 46px 44px 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow-y: auto;
+}
+.auth-word {
+  font-family: var(--font-display);
+  font-size: 34px;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  line-height: 1;
+  color: var(--ink);
+}
+.auth-word .dot {
+  color: var(--bid-ink);
+}
+.auth-tag {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+  max-width: 34ch;
+  line-height: 1.5;
+}
+
+/* What the product is, stated as fact. Three lines, ruled apart — the shape of a form's
+   header block. No invented metrics or customers: PRODUCT.md records that none exist. */
+/* --line is tuned to separate a card from the PAGE; on the tonal step it measures
+   rgb(42,42,42) against rgb(41,41,41) and disappears, which turned this ruled block into
+   three loose paragraphs. Deriving the rule from the ink instead keeps it visible on any
+   surface and in both themes. */
+.auth-facts {
+  --auth-rule: color-mix(in oklab, var(--ink) 16%, transparent);
+  list-style: none;
+  margin-top: 34px;
+  max-width: 38ch;
+  border-top: 1px solid var(--auth-rule);
+}
+.auth-facts li {
+  padding: 13px 0;
+  border-bottom: 1px solid var(--auth-rule);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.auth-facts b {
+  font-weight: 550;
+}
+
+.auth-sources {
+  position: absolute;
+  left: 44px;
+  bottom: 34px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* --- the form field ------------------------------------------------------- */
+.auth-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 44px;
+  overflow-y: auto;
+}
+.auth-form {
+  width: 100%;
+  max-width: 384px;
+}
+.auth-h1 {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+.auth-sub {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.auth-fields {
+  margin-top: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.auth-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.auth-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.auth-input {
+  width: 100%;
+  padding: 11px 13px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.16s var(--ease-out), box-shadow 0.16s var(--ease-out);
+}
+.auth-input::placeholder {
+  color: var(--faint);
+}
+.auth-input:focus {
+  border-color: var(--ring);
+  /* The ring is drawn as a shadow rather than an outline so the 5px corner is followed. */
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 22%, transparent);
+}
+.auth-aside-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+.auth-link {
+  font-size: 12.5px;
+  color: var(--bid-ink);
+  text-decoration: none;
+}
+.auth-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.auth-submit,
+.auth-alt {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.auth-submit {
+  margin-top: 4px;
+}
+.auth-or {
+  margin: 20px 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.auth-or i {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.auth-or span {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.auth-foot {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--muted);
+}
+.auth-foot a {
+  color: var(--bid-ink);
+  text-decoration: none;
+  font-weight: 600;
+}
+.auth-foot a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* An error is the one moment on this page that must not be missed. */
+.auth-error {
+  margin-bottom: 16px;
+  padding: 10px 13px;
+  border-radius: 5px;
+  border: 1px solid color-mix(in oklab, var(--danger) 34%, var(--line));
+  background: color-mix(in oklab, var(--danger) 9%, var(--surface));
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+/* --- stacked ------------------------------------------------------------- */
+@media (max-width: 900px) {
+  .auth-split {
+    height: auto;
+    min-height: 100vh;
+    grid-template-columns: 1fr;
+    /* auto/1fr, not the default equal rows: stretched rows gave the identity band half a
+       phone screen, pushing the actual task below the fold. The band takes what it needs
+       and the form takes the rest. */
+    grid-template-rows: auto 1fr;
+  }
+  /* The panel keeps its identity but drops the evidence block: on a phone the job is to
+     sign in, and three ruled facts between the wordmark and the first field is furniture. */
+  .auth-aside {
+    position: static;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 30px 24px;
+  }
+  .auth-facts,
+  .auth-sources {
+    display: none;
+  }
+  .auth-word {
+    font-size: 27px;
+  }
+  .auth-main {
+    padding: 34px 24px 44px;
+    align-items: flex-start;
+  }
+}
+
+/* --- shared auth content pieces ------------------------------------------
+   Used by every surface inside .auth-main. Declared once here rather than as a per-page
+   style object, which is how the seven auth pages drifted apart in the first place. */
+
+/* A neutral note: "check your email", "a link is on its way". Distinct from .auth-error,
+   which is the failure state and carries the alarm colour. */
+.auth-note {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.auth-note strong {
+  font-weight: 600;
+}
+
+/* Helper text under a field or a heading — answers a question the control does not. */
+.auth-help {
+  margin-top: 7px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+/* Password/complexity requirements, ticked as they are met. */
+.auth-reqs {
+  list-style: none;
+  margin-top: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.auth-reqs li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.auth-reqs li.met {
+  color: var(--bid-ink);
+}
+.auth-reqs .tick {
+  width: 12px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* Status surfaces: verifying, redirecting, verified, failed. One sentence and a way on. */
+.auth-status-sub {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.auth-actions {
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* A working state needs to look like one. The dot pulses on the same 1.6s cadence the
+   in-flight badges use, so "the system is busy" reads identically everywhere. */
+.auth-working {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.auth-working i {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--bid-ink);
+  animation: badgePulse 1.6s var(--ease-out) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-working i {
+    animation: none;
+  }
+}
+
+/* Key/value block — the invitation's org + role, the reset link's target address. */
+.auth-kv {
+  margin-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.auth-kv div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.auth-kv dt {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.auth-kv dd {
+  color: var(--ink);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Two fields on one row — a person's name is one thought, not two. */
+.auth-row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 420px) {
+  .auth-row2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Consent row. The whole row is the label, so the text is part of the hit target rather
+   than a 15px box being the only way to tick it. */
+.auth-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.auth-check input {
+  margin-top: 1px;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.auth-check span {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ============================================================================
+   Row-level verdict control
+
+   The boss's ask: set Bid / Watch / No-bid without opening the pursuit.
+
+   WHY IT REPLACES THE BADGE RATHER THAN ADDING A COLUMN. The Stage cell already shows the
+   verdict; a separate column of three buttons on every one of 3,600 rows would have put
+   ~11,000 controls on a surface whose whole value is being scannable. So the badge IS the
+   control: at rest the row reads exactly as before, and on hover or keyboard focus the
+   cell swaps in place to the three choices with the current one held.
+
+   The cell reserves its width, so the swap never moves a column.
+   ============================================================================ */
+.col-stage {
+  /* Measured against the widest control state: Bid 36 + Watch 56 + No-bid 57, two 4px gaps
+     and the cell's 28px horizontal padding = 185px. Reserving less made every column to the
+     right jump sideways the moment a row was hovered. */
+  min-width: 190px;
+}
+.row-dec {
+  display: none;
+  align-items: center;
+  gap: 4px;
+}
+.opp-row:hover .row-dec,
+.opp-row:focus-within .row-dec {
+  display: inline-flex;
+}
+.opp-row:hover .row-badge,
+.opp-row:focus-within .row-badge {
+  display: none;
+}
+.rd-btn {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.14s var(--ease-out), background 0.14s var(--ease-out),
+    border-color 0.14s var(--ease-out);
+}
+.rd-btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--muted);
+}
+.rd-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.rd-btn:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+/* The held verdict, in its own signal colour — same vocabulary as the badge it replaces. */
+.rd-btn.on.bid {
+  color: var(--bid-ink);
+  border-color: color-mix(in oklab, var(--bid) 45%, var(--line));
+  background: var(--bid-soft);
+}
+.rd-btn.on.watch {
+  color: var(--watch);
+  border-color: color-mix(in oklab, var(--watch) 45%, var(--line));
+  background: var(--watch-soft);
+}
+.rd-btn.on.nobid {
+  color: var(--muted);
+  border-color: var(--muted);
+  background: var(--nobid-soft);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rd-btn {
+    transition: none;
+  }
+}
+
+/* An empty state's action belongs IN the empty state. The Library's said "connect
+   SharePoint" while the only Connect button sat ~700px above it, off the reader's screen. */
+.graph-empty .ge-action {
+  margin-top: 18px;
 }

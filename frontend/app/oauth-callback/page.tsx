@@ -8,6 +8,7 @@ import {
   syncSharePointStructure,
 } from "@/lib/data";
 import { useConnectionStore, type Provider } from "@/lib/stores/connectionStore";
+import AuthShell from "@/app/auth/AuthShell";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -126,33 +127,28 @@ function CallbackInner() {
   }, [router, params]);
 
   return (
-    <div className="loading-full" style={{ flexDirection: "column", gap: 14 }}>
-      <div className="word" style={{ fontFamily: "var(--font-display)", fontSize: 30 }}>
-        Collecct<span style={{ color: "var(--accent-2)" }}>.</span>
-      </div>
-      <div style={{ fontStyle: "normal", fontFamily: "var(--font-sans)", fontSize: 14, color: "var(--muted)" }}>
-        {msg}
-      </div>
+    <AuthShell facts={false}>
+      <span className="auth-working">
+        <i />
+        Connecting
+      </span>
+      <h1 className="auth-h1" style={{ marginTop: 14 }}>
+        Finishing the connection
+      </h1>
+      <p className="auth-status-sub">{msg}</p>
       {/* Manual escape hatch — the poll loop can take up to ~30s (or longer if a
           Composio/network hiccup stalls it) before it gives up on its own; let the user
           leave immediately instead of forcing them to wait it out. The connection still
           finishes server-side either way. */}
-      <button
-        onClick={() => router.push("/")}
-        style={{
-          fontFamily: "var(--font-sans)",
-          fontSize: 13,
-          color: "var(--accent-2)",
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          textDecoration: "underline",
-          padding: 0,
-        }}
-      >
-        Back to home
-      </button>
-    </div>
+      <div className="auth-actions">
+        <button type="button" className="btn ghost auth-alt" onClick={() => router.push("/")}>
+          Back to Collecct
+        </button>
+      </div>
+      <p className="auth-help">
+        You can leave now — the connection keeps finishing in the background.
+      </p>
+    </AuthShell>
   );
 }
 

@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import AuthShell from '../AuthShell';
 import { authApi } from '@/lib/api/auth';
 
 function ResetPasswordForm() {
@@ -52,106 +53,117 @@ function ResetPasswordForm() {
   };
 
   return (
-    <div style={styles.page}>
-      <div style={styles.shell}>
-        <div style={styles.brand}>
-          <div className="word" style={styles.word}>
-            Collecct<span style={{ color: 'var(--bid-ink)' }}>.</span>
+    <AuthShell facts={false}>
+      {success ? (
+        <>
+          <h1 className="auth-h1">Password reset</h1>
+          <p className="auth-status-sub">
+            Your password has been updated. Redirecting you to sign in…
+          </p>
+          <div className="auth-actions">
+            <button className="btn primary auth-submit" onClick={() => router.push('/auth/login')}>
+              Go to sign in
+            </button>
           </div>
-        </div>
-
-        <div style={styles.card}>
-          {success ? (
-            <>
-              <h1 style={styles.title}>Password reset</h1>
-              <p style={styles.subtitle}>
-                Your password has been updated. Redirecting you to sign in…
-              </p>
-              <button
-                className="btn primary"
-                style={{ ...styles.submit, marginTop: 18 }}
-                onClick={() => router.push('/auth/login')}
-              >
-                Go to sign in
-              </button>
-            </>
-          ) : !token ? (
-            <>
-              <h1 style={styles.title}>Invalid link</h1>
-              <p style={styles.subtitle}>This password reset link is invalid or has expired.</p>
-              <button
-                className="btn primary"
-                style={{ ...styles.submit, marginTop: 18 }}
-                onClick={() => router.push('/auth/forgot-password')}
-              >
-                Request a new link
-              </button>
-            </>
-          ) : (
-            <>
-              <h1 style={styles.title}>Reset your password</h1>
-              <p style={styles.subtitle}>
-                Enter your new password below — at least 8 characters.
-              </p>
-
-              <form onSubmit={handleSubmit} style={styles.form}>
-                {error && <div style={styles.errorBox}>{error}</div>}
-
-                <div style={styles.group}>
-                  <label style={styles.label} htmlFor="newPassword">
-                    New password
-                  </label>
-                  <input
-                    id="newPassword"
-                    type="password"
-                    style={styles.input}
-                    placeholder="Enter new password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    required
-                    autoComplete="new-password"
-                    autoFocus
-                  />
-                </div>
-
-                <div style={styles.group}>
-                  <label style={styles.label} htmlFor="confirmPassword">
-                    Confirm password
-                  </label>
-                  <input
-                    id="confirmPassword"
-                    type="password"
-                    style={styles.input}
-                    placeholder="Confirm new password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    required
-                    autoComplete="new-password"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="btn primary"
-                  style={styles.submit}
-                  disabled={isLoading}
-                >
-                  {isLoading && <span className="spin" />}
-                  {isLoading ? 'Resetting…' : 'Reset password'}
-                </button>
-              </form>
-            </>
-          )}
-
-          <div style={styles.footer}>
-            Remember your password?{' '}
-            <Link href="/auth/login" style={styles.linkStrong}>
-              Sign in
-            </Link>
+        </>
+      ) : !token ? (
+        <>
+          <h1 className="auth-h1">This link has expired</h1>
+          {/* Names the cause and the way out, rather than "Invalid link" with no recourse. */}
+          <p className="auth-status-sub">
+            Password reset links are single-use and short-lived. Request a fresh one and it
+            will arrive in a moment.
+          </p>
+          <div className="auth-actions">
+            <button
+              className="btn primary auth-submit"
+              onClick={() => router.push('/auth/forgot-password')}
+            >
+              Request a new link
+            </button>
           </div>
-        </div>
+        </>
+      ) : (
+        <>
+          <h1 className="auth-h1">Choose a new password</h1>
+          <p className="auth-sub">You&apos;ll use this to sign in from now on.</p>
+
+          <form onSubmit={handleSubmit}>
+            {error && (
+              <div className="auth-error" role="alert" style={{ marginTop: 20, marginBottom: 0 }}>
+                {error}
+              </div>
+            )}
+
+            <div className="auth-fields">
+              <div className="auth-group">
+                <label className="auth-label" htmlFor="newPassword">
+                  New password
+                </label>
+                <input
+                  id="newPassword"
+                  type="password"
+                  className="auth-input"
+                  placeholder="Enter new password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                  autoFocus
+                />
+              </div>
+
+              <div className="auth-group">
+                <label className="auth-label" htmlFor="confirmPassword">
+                  Confirm password
+                </label>
+                <input
+                  id="confirmPassword"
+                  type="password"
+                  className="auth-input"
+                  placeholder="Confirm new password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                />
+              </div>
+                {/* The rules were previously stated once in prose and never checked, so the
+                    only way to learn you had failed one was to submit. They tick live. */}
+                <ul className="auth-reqs">
+                  <li className={newPassword.length >= 8 ? 'met' : undefined}>
+                    <span className="tick" aria-hidden="true">
+                      {newPassword.length >= 8 ? '✓' : '–'}
+                    </span>
+                    At least 8 characters
+                  </li>
+                  <li
+                    className={
+                      confirmPassword.length > 0 && newPassword === confirmPassword
+                        ? 'met'
+                        : undefined
+                    }
+                  >
+                    <span className="tick" aria-hidden="true">
+                      {confirmPassword.length > 0 && newPassword === confirmPassword ? '✓' : '–'}
+                    </span>
+                    Both entries match
+                  </li>
+                </ul>
+
+              <button type="submit" className="btn primary auth-submit" disabled={isLoading}>
+                {isLoading && <span className="spin" />}
+                {isLoading ? 'Resetting…' : 'Reset password'}
+              </button>
+            </div>
+          </form>
+        </>
+      )}
+
+      <div className="auth-foot">
+        Remember your password? <Link href="/auth/login">Sign in</Link>
       </div>
-    </div>
+    </AuthShell>
   );
 }
 
@@ -162,78 +174,3 @@ export default function ResetPasswordPage() {
     </Suspense>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: '100vh',
-    height: 'auto',
-    overflowY: 'auto',
-    background: 'var(--paper)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  shell: { width: '100%', maxWidth: 412 },
-  brand: { textAlign: 'center', marginBottom: 26 },
-  word: {
-    fontFamily: 'var(--font-display)',
-    fontSize: 32,
-    fontWeight: 500,
-    letterSpacing: '-0.02em',
-    lineHeight: 1,
-    color: 'var(--ink)',
-  },
-  card: {
-    background: 'var(--surface)',
-    border: '1px solid var(--line)',
-    borderRadius: 16,
-    padding: '30px 30px 26px',
-    boxShadow: '0 12px 34px rgba(24, 21, 17, 0.06)',
-  },
-  title: {
-    fontFamily: 'var(--font-display)',
-    fontSize: 24,
-    fontWeight: 500,
-    letterSpacing: '-0.015em',
-    color: 'var(--ink)',
-  },
-  subtitle: { marginTop: 6, fontSize: 13.5, color: 'var(--muted)', lineHeight: 1.5 },
-  form: { marginTop: 22, display: 'flex', flexDirection: 'column', gap: 16 },
-  group: { display: 'flex', flexDirection: 'column', gap: 6 },
-  label: {
-    fontSize: 11,
-    letterSpacing: '0.07em',
-    textTransform: 'uppercase',
-    color: 'var(--faint)',
-  },
-  input: {
-    width: '100%',
-    padding: '10px 12px',
-    background: 'var(--surface-2)',
-    border: '1px solid var(--line-strong)',
-    borderRadius: 9,
-    fontSize: 13.5,
-    color: 'var(--ink)',
-    fontFamily: 'var(--font-sans)',
-    outline: 'none',
-  },
-  errorBox: {
-    background: 'var(--watch-soft)',
-    border: '1px solid var(--line-strong)',
-    borderRadius: 9,
-    padding: '10px 14px',
-    fontSize: 13,
-    color: '#b4453a',
-  },
-  submit: {
-    width: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: 4,
-  },
-  footer: { marginTop: 22, textAlign: 'center', fontSize: 13, color: 'var(--muted)' },
-  linkStrong: { color: 'var(--bid-ink)', textDecoration: 'none', fontWeight: 600 },
-};

@@ -208,7 +208,13 @@ export default function MailTriagePanel({
 }) {
   const [cards, setCards] = useState<MailTriageCard[] | null>(null);
 
+  // The ref guard is for React's development double-invoke of effects: without it the
+  // panel fired its fetch twice on every mount, which showed up as a duplicated
+  // /api/mail-triage on the Dashboard's request waterfall.
+  const fetched = useRef(false);
   useEffect(() => {
+    if (fetched.current) return;
+    fetched.current = true;
     let alive = true;
     fetchMailTriage()
       .then((r) => alive && setCards(r.cards))

@@ -44,6 +44,12 @@ typography:
     fontSize: "17px"
     fontWeight: 500
     letterSpacing: "-0.01em"
+  brand-lockup:
+    fontFamily: "Geist Sans, system-ui, -apple-system, sans-serif"
+    fontSize: "34px"
+    fontWeight: 500
+    letterSpacing: "-0.025em"
+    lineHeight: 1
   page-title:
     fontFamily: "Geist Sans, system-ui, -apple-system, sans-serif"
     fontSize: "26px"
@@ -255,7 +261,9 @@ headings with −0.02em tracking at the top, and 10px uppercase labels tracked o
 0.07em at the bottom. Numbers always defect to the mono.
 
 ### Hierarchy
-- **Display** (500, 27px, 1.0, −0.02em): the wordmark.
+- **Brand lockup** (500, 34px, 1.0, −0.025em): the wordmark on entry surfaces only — sign
+  in, sign up, invite. The one place the mark is the largest thing on screen.
+- **Display** (500, 27px, 1.0, −0.02em): the wordmark in the app shell.
 - **Page title** (500, 26px, −0.015em): the `h1` of a section — Dashboard, Today, Pipeline.
 - **Headline** (500, 22px, −0.015em): section and modal titles.
 - **Title** (500, 17px, −0.01em): card and record titles.

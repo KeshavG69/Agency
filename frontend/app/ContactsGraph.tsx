@@ -61,6 +61,17 @@ function ContactsList({ people }: { people: GraphNode[] }) {
       </div>
       <div className="view-table-wrap">
         <table className="view-table">
+          {/* Explicit widths: with six columns and free-text values, an auto-laid-out table
+              gave a long company name four wrapped lines and clipped the email column off
+              the right edge entirely. */}
+          <colgroup>
+            <col className="c-name" />
+            <col className="c-title" />
+            <col className="c-company" />
+            <col className="c-email" />
+            <col className="c-last" />
+            <col className="c-last" />
+          </colgroup>
           <thead>
             <tr>
               <th onClick={() => toggleSort("name")}>Name{arrow("name")}</th>
@@ -76,10 +87,10 @@ function ContactsList({ people }: { people: GraphNode[] }) {
           <tbody>
             {rows.map((p) => (
               <tr key={p.id}>
-                <td className="vt-name">{p.label}</td>
-                <td>{p.title || "—"}</td>
-                <td>{p.company || "—"}</td>
-                <td className="mono">{p.email || "—"}</td>
+                <td className="vt-name" title={p.label}>{p.label}</td>
+                <td title={p.title || undefined}>{p.title || "—"}</td>
+                <td title={p.company || undefined}>{p.company || "—"}</td>
+                <td className="mono" title={p.email || undefined}>{p.email || "—"}</td>
                 <td style={{ textAlign: "right" }}>{p.weight ?? 0}×</td>
                 <td>
                   <span className={`gc-tag ${p.enriched ? "on" : ""}`}>

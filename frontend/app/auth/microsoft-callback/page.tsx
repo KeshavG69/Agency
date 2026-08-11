@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { authApi } from '@/lib/api/auth';
 import { useAuthStore } from '@/lib/stores/authStore';
+import AuthShell from '../AuthShell';
 
 type Status = 'working' | 'success' | 'error';
 
@@ -55,43 +56,43 @@ function MicrosoftCallbackContent() {
   }, [searchParams, login, router]);
 
   return (
-    <div style={styles.page}>
-      <div style={styles.shell}>
-        <div style={styles.brand}>
-          <div className="word" style={styles.word}>
-            Collecct<span style={{ color: 'var(--bid-ink)' }}>.</span>
+    <AuthShell facts={false}>
+      {status === 'working' && (
+        <>
+          <span className="auth-working">
+            <i />
+            Signing in
+          </span>
+          <h1 className="auth-h1" style={{ marginTop: 14 }}>
+            Confirming your Microsoft account
+          </h1>
+          <p className="auth-status-sub">This takes a moment. Don&apos;t close the tab.</p>
+        </>
+      )}
+
+      {status === 'success' && (
+        <>
+          <h1 className="auth-h1">You&apos;re in</h1>
+          <p className="auth-status-sub">Taking you to Collecct…</p>
+        </>
+      )}
+
+      {status === 'error' && (
+        <>
+          <h1 className="auth-h1">Sign-in failed</h1>
+          {/* The message IS the error, so it carries the alarm treatment rather than
+              sitting as quiet body text under a heading nobody can act on. */}
+          <div className="auth-error" role="alert" style={{ marginTop: 14, marginBottom: 0 }}>
+            {errorMessage}
           </div>
-        </div>
-
-        <div style={styles.card}>
-          {status === 'working' && (
-            <div style={{ textAlign: 'center' }}>
-              <h1 style={styles.title}>Signing you in…</h1>
-              <p style={styles.subtitle}>Confirming your Microsoft account.</p>
-            </div>
-          )}
-
-          {status === 'success' && (
-            <div style={{ textAlign: 'center' }}>
-              <h1 style={styles.title}>You&apos;re in</h1>
-              <p style={styles.subtitle}>Taking you to Collecct…</p>
-            </div>
-          )}
-
-          {status === 'error' && (
-            <div>
-              <h1 style={styles.title}>Sign-in failed</h1>
-              <p style={styles.subtitle}>{errorMessage}</p>
-              <div style={styles.footer}>
-                <Link href="/auth/login" style={styles.linkStrong}>
-                  Back to sign in
-                </Link>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+          <div className="auth-actions">
+            <Link href="/auth/login" className="btn primary auth-submit">
+              Back to sign in
+            </Link>
+          </div>
+        </>
+      )}
+    </AuthShell>
   );
 }
 
@@ -102,44 +103,3 @@ export default function MicrosoftCallbackPage() {
     </Suspense>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: '100vh',
-    height: 'auto',
-    overflowY: 'auto',
-    background: 'var(--paper)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  shell: { width: '100%', maxWidth: 412 },
-  brand: { textAlign: 'center', marginBottom: 26 },
-  word: {
-    fontFamily: 'var(--font-display)',
-    fontSize: 32,
-    fontWeight: 500,
-    letterSpacing: '-0.02em',
-    lineHeight: 1,
-    color: 'var(--ink)',
-  },
-  card: {
-    background: 'var(--surface)',
-    border: '1px solid var(--line)',
-    borderRadius: 16,
-    padding: '30px 30px 26px',
-    boxShadow: '0 12px 34px rgba(24, 21, 17, 0.06)',
-  },
-  title: {
-    fontFamily: 'var(--font-display)',
-    fontSize: 24,
-    fontWeight: 500,
-    letterSpacing: '-0.015em',
-    color: 'var(--ink)',
-    textAlign: 'center',
-  },
-  subtitle: { marginTop: 6, fontSize: 13.5, color: 'var(--muted)', lineHeight: 1.5, textAlign: 'center' },
-  footer: { marginTop: 22, textAlign: 'center', fontSize: 13, color: 'var(--muted)' },
-  linkStrong: { color: 'var(--bid-ink)', textDecoration: 'none', fontWeight: 600 },
-};
