@@ -1673,8 +1673,8 @@ function CallPlanView() {
           </span>
         </h2>
         <div className="cp-sub">
-          Every pursuit that has been through capture, plus the calls the Analyst recommends —
-          your consolidated call sheet.
+          The pursuits you&apos;ve marked <b>Bid</b>, and who to speak to on each — your
+          consolidated call sheet.
         </div>
       </div>
 

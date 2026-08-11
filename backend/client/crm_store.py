@@ -770,10 +770,14 @@ class CRMStore:
         """One row per PURSUIT worth calling on — the consolidated BD call sheet, sorted by
         priority (then nearest deadline).
 
-        A pursuit belongs here when EITHER:
-          * it has been through capture (`captured_at`) — the work is done, calling the
-            customer is the next move, whether or not the Analyst raised a call; or
-          * the Analyst raised a call action for it (a "Bid" verdict).
+        BID ONLY. A pursuit belongs here when its verdict is "Bid" AND something has
+        happened on it — the Analyst raised a call, or capture produced deliverables.
+
+        The verdict test is the whole point of the sheet: it is a list of customers to ring
+        about work you are actually chasing. It previously admitted anything with a call
+        row, so a pursuit the Analyst flagged while it looked live stayed on the sheet after
+        a human ruled No-Bid (nothing closes the call row), and Watch rows sat alongside
+        committed ones. On real data that was 30 of 158 rows.
 
         One row per OPPORTUNITY, not per call row: the card opens a dialog with a tab per
         contact, so a second call row on the same pursuit would just duplicate the card. When
@@ -823,6 +827,18 @@ class CRMStore:
             captured = bool(opp.get("captured_at"))
             if call is None and not captured:
                 continue  # nothing has happened on this pursuit yet
+
+            # BID ONLY — no exceptions, capture included.
+            #
+            # Deliberately stricter than the action planner's post-capture rule. There a
+            # call survives a passed deadline because the pursuit was committed to and the
+            # work was done. Here the question is different: this sheet answers "who am I
+            # ringing about the business we are chasing", and a pursuit we declined, or have
+            # not decided on, is not that — whatever was produced for it earlier. A Watch
+            # with a named contact is a DECISION to make; it belongs on Today as a `decide`
+            # action, not on the call sheet as though it were committed work.
+            if opp.get("bid_decision") != "Bid":
+                continue
             rows.append({
                 # None for a captured pursuit the Analyst never raised a call for — the card
                 # still preps calls, it just has no call row to mark Done/Dismiss.
