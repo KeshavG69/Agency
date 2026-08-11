@@ -30,7 +30,6 @@ import {
   fetchOpportunitySharePointFiles,
   type SharePointFile,
   type SharePointFilesResponse,
-  fetchCallPlan,
   setCallStatus,
   fetchCollisions,
   type CallPlanItem,
@@ -57,8 +56,6 @@ import {
 } from "@/lib/data";
 import ContactsGraph from "./ContactsGraph";
 import SharePointGraph from "./SharePointGraph";
-import MailTriagePanel from "./MailTriage";
-import { toLocalIso } from "./CalendarStrip";
 import FilePreview from "./FilePreview";
 import AddOpportunityModal from "./AddOpportunityModal";
 import AssignModal from "./AssignModal";
@@ -68,6 +65,8 @@ import TopBar from "./TopBar";
 import { useUiStore, type ViewKey, type TabKey } from "@/lib/stores/uiStore";
 import { useToastStore } from "@/lib/stores/toastStore";
 import CallBriefDialog from "./CallBriefDialog";
+import TodayView from "./TodayView";
+import DashboardView from "./DashboardView";
 import RiskMeter from "./RiskMeter";
 import CallPlanFilters, {
   EMPTY_CALL_FILTERS,
@@ -75,9 +74,9 @@ import CallPlanFilters, {
 } from "./CallPlanFilters";
 import BidSidebar from "./BidSidebar";
 import FilterBar, { type Facets, EMPTY_FACETS, activeFacetCount } from "./FilterBar";
-import { DonutStat, type ChartConfig } from "@/components/dashboard-charts";
 import {
   bidsQuery,
+  callPlanQuery,
   opportunityListQuery,
   opportunityQuery,
   organizationQuery,
@@ -138,23 +137,14 @@ const fmtDate = (s?: string | null) => {
 };
 
 
-// Slice colours for the deadline donut. Declared once, at module scope and in a fixed order,
-// because that is what pins a colour to a BUCKET rather than to its rank: a week with no
-// deadlines drops out of the chart without recolouring the buckets that remain.
-// Deadline urgency is ORDINAL, so it gets a sequential teal ramp (dark = this week / urgent
-// → light = later) plus a neutral slate for "no deadline" (off the urgency scale) — not four
-// rainbow hues. Tokens defined in legacy.css so light/dark each get their own steps.
-const DEADLINE_SLICES: ChartConfig = {
-  week: { label: "This week", color: "var(--deadline-week)" },
-  month: { label: "This month", color: "var(--deadline-month)" },
-  later: { label: "Later", color: "var(--deadline-later)" },
-  none: { label: "No deadline", color: "var(--deadline-none)" },
-};
-
 // One shared empty array, so `query.data ?? NO_OPPS` keeps a stable identity while a query
 // is still pending. A fresh `[]` per render would re-trigger every useMemo/useDeferredValue
 // downstream of it on every commit.
 const NO_OPPS: Opportunity[] = [];
+
+// Same stable-identity trick for the call sheet, so `query.data ?? NO_CALLS` does not hand a
+// fresh array to every downstream useMemo on each render.
+const NO_CALLS: CallPlanItem[] = [];
 
 // Pipeline stages shown as the portfolio nav. "All" first.
 const FILTERS: { key: string; label: string; match: (o: Opportunity) => boolean }[] = [
@@ -328,6 +318,7 @@ function Console({ user }: { user: User }) {
   const [reviewContacts, setReviewContacts] = useState<ContactCandidate[]>([]);
   const view = useUiStore((s) => s.view);
   const setView = useUiStore((s) => s.setView);
+  const setPrepCallFor = useUiStore((s) => s.setPrepCallFor);
   // Every view change goes through here so the swap animates. Sibling tabs imply no
   // hierarchy, so the transition is "lateral": a fade and a 12px rise, no directional slide.
   const navigate = useCallback((v: ViewKey) => switchView(() => setView(v)), []);
@@ -802,6 +793,19 @@ function Console({ user }: { user: User }) {
     navigate("pipeline");
   };
 
+  // Today's cards open the tool that FINISHES the job, not just the record — a card that
+  // only linked to the pipeline would recreate the "here's the data, you work it out"
+  // problem the view exists to remove.
+  const openOppDocuments = (id: string) => {
+    setSelectedId(id);
+    setTab("documents");
+    navigate("pipeline");
+  };
+  const prepCallFor = (id: string) => {
+    setPrepCallFor(id);
+    navigate("callplan");
+  };
+
   // Refetch the open opp's full record (after a mutation completes server-side).
   const refreshSelected = useCallback(
     (id: string) => {
@@ -986,10 +990,29 @@ function Console({ user }: { user: User }) {
             stay put while the view morphs. Fired by switchView(); an unrouted update
             renders instantly. */}
         <PageTransition>
-      {view === "dashboard" ? (
+      {view === "today" ? (
+        <section className="graph-pane">
+          <TodayView
+            onOpenOpportunity={openOpp}
+            onOpenDocuments={openOppDocuments}
+            onPrepCall={prepCallFor}
+            onOpenMail={() => navigate("dashboard")}
+          />
+        </section>
+      ) : view === "dashboard" ? (
         <section className="graph-pane">
           {/* isPending, never isFetching: the 5s poll must not blank the agenda. */}
-          <DashboardView opps={bidOpps} loading={bidsQ.isPending} onOpen={openOpp} />
+          <DashboardView
+            opps={bidOpps}
+            loading={bidsQ.isPending}
+            onOpen={openOpp}
+            // Every figure on the Dashboard is a population; handing the matching status to
+            // the Pipeline is what turns "1,552 undecided" into somewhere to go.
+            onNavigatePipeline={(status) => {
+              setFilter(status);
+              navigate("pipeline");
+            }}
+          />
         </section>
       ) : view === "callplan" ? (
         <section className="graph-pane">
@@ -1459,347 +1482,45 @@ function ConnectBar({
 // The Dashboard: an at-a-glance view of the pipeline — what's pending, what's
 // done, what's in pursuit — plus a due-date agenda (keyed on the response
 // deadline, with human-relative labels like "Due tomorrow" / "Due Aug 2028").
-function DashboardView({
-  opps,
-  loading,
-  onOpen,
-}: {
-  opps: Opportunity[];
-  loading: boolean;
-  onOpen: (id: string) => void;
-}) {
-  // Dashboard shows ONLY the opportunities marked Bid (your active pursuits).
-  const bids = useMemo(() => opps.filter((o) => o.bid_decision === "Bid"), [opps]);
-
-  // Deadline agenda over the bids, soonest first. Overdue is excluded entirely;
-  // bids without a deadline fall into their own group so they're never hidden.
-  const agenda = useMemo(() => {
-    const rows = bids
-      .map((o) => ({ o, due: dueLabel(o.response_deadline) }))
-      .filter((r) => r.due.days == null || (r.due.days ?? 0) >= 0) // drop overdue
-      .sort((a, b) => (a.due.days ?? Infinity) - (b.due.days ?? Infinity));
-    const inRange = (r: (typeof rows)[number], lo: number, hi: number) =>
-      r.due.days != null && r.due.days >= lo && r.due.days <= hi;
-    const groups: { key: string; label: string; rows: typeof rows }[] = [
-      { key: "week", label: "Due this week", rows: rows.filter((r) => inRange(r, 0, 7)) },
-      { key: "month", label: "Due this month", rows: rows.filter((r) => inRange(r, 8, 31)) },
-      { key: "later", label: "Due later", rows: rows.filter((r) => (r.due.days ?? -1) > 31) },
-      { key: "none", label: "No deadline", rows: rows.filter((r) => r.due.days == null) },
-    ];
-    return groups.filter((g) => g.rows.length > 0);
-  }, [bids]);
-
-  const dueThisWeek = useMemo(
-    () =>
-      bids.filter((o) => {
-        const d = dueLabel(o.response_deadline).days;
-        return d != null && d >= 0 && d <= 7;
-      }).length,
-    [bids],
-  );
-  const capturedBids = useMemo(() => bids.filter((o) => !!o.captured_at).length, [bids]);
-
-  // Two ways to narrow the right-hand panel, mutually exclusive so the header never lies:
-  //   selectedDay    — a calendar day was clicked (YYYY-MM-DD, local)
-  //   selectedBucket — a donut slice was clicked (week/month/later/none)
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [selectedBucket, setSelectedBucket] = useState<string | null>(null);
-  // Picking a day clears a bucket and vice versa — only one filter drives the panel at a time.
-  const pickDay = (day: string | null) => {
-    setSelectedBucket(null);
-    setSelectedDay(day);
-  };
-  const pickBucket = (key: string) => {
-    setSelectedDay(null);
-    setSelectedBucket((prev) => (prev === key ? null : key)); // click the active slice to clear
-  };
-  const selectedDayBids = useMemo(
-    () =>
-      !selectedDay
-        ? []
-        : bids.filter((o) => {
-            if (!o.response_deadline) return false;
-            const d = new Date(o.response_deadline);
-            if (isNaN(d.getTime())) return false;
-            return toLocalIso(new Date(d.getFullYear(), d.getMonth(), d.getDate())) === selectedDay;
-          }),
-    [bids, selectedDay],
-  );
-
-  const stats: { label: string; value: number; tone?: string }[] = [
-    { label: "Active pursuits", value: bids.length, tone: "bid" },
-    { label: "Captured", value: capturedBids, tone: "bid" },
-    { label: "Due this week", value: dueThisWeek, tone: dueThisWeek > 0 ? "watch" : "" },
-  ];
-
-  // id -> title, for the mail-triage cards to show which pursuit an incoming mail belongs to.
-  const opportunityTitles = useMemo(
-    () => Object.fromEntries(opps.map((o) => [o.id, o.title])),
-    [opps],
-  );
-
-  // Part-to-whole over the SAME buckets the agenda below is grouped by, so the ring and the
-  // list can never tell different stories. Reusing `agenda` also inherits its rule that
-  // overdue is not a bucket — hence "upcoming" on the centre figure rather than a bare total.
-  const deadlineMix = useMemo(
-    () => agenda.map((g) => ({ key: g.key, value: g.rows.length })),
-    [agenda],
-  );
-
-  return (
-    <div className="dash">
-      <div className="dash-head">
-        <div>
-          <h1>Dashboard</h1>
-          <div className="dash-sub">
-            Your active pursuits — opportunities marked <b>Bid</b>, by deadline.
-          </div>
-        </div>
-      </div>
-
-      <div className="dash-top">
-        <div className="dash-stats dash-stats-3">
-          {stats.map((s) => (
-            <div className="dash-stat" key={s.label}>
-              <div className={`ds-n ${s.tone ?? ""}`}>{s.value}</div>
-              <div className="ds-l">{s.label}</div>
-            </div>
-          ))}
-        </div>
-
-        {deadlineMix.length > 0 && (
-          <section className="dash-chart-card rounded-lg border border-border bg-card p-4">
-            <h2 className="mb-1 text-[13px] font-medium">Pursuit load by deadline</h2>
-            <DonutStat
-              data={deadlineMix}
-              config={DEADLINE_SLICES}
-              totalLabel="upcoming"
-              height={188}
-              onSelect={pickBucket}
-              activeKey={selectedBucket}
-            />
-          </section>
-        )}
-      </div>
-
-      <MailTriagePanel opportunityTitles={opportunityTitles} onOpenOpportunity={onOpen} />
-
-      <div className="dash-cal2">
-        <DashCalendar bids={bids} selectedDay={selectedDay} onSelectDay={pickDay} />
-
-        <div className="dash-col">
-          {selectedDay ? (
-            <>
-              <div className="dash-col-head">
-                <span>Due {fmtDate(selectedDay)}</span>
-                <button className="sel-link" onClick={() => setSelectedDay(null)}>
-                  Clear
-                </button>
-              </div>
-              {selectedDayBids.length === 0 ? (
-                <div className="dash-empty">No active pursuits due this day.</div>
-              ) : (
-                <div className="dash-agenda">
-                  {selectedDayBids.map((o) => (
-                    <button className="dash-row" key={o.id} onClick={() => onOpen(o.id)}>
-                      <div className="dr-main">
-                        <div className="dr-title">{o.title}</div>
-                        <div className="dr-sub">{o.agency ?? "—"}</div>
-                      </div>
-                      <span className={`due-chip ${dueLabel(o.response_deadline).tone}`}>
-                        {dueLabel(o.response_deadline).text}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <div className="dash-col-head">
-                <span>
-                  {selectedBucket
-                    ? agenda.find((g) => g.key === selectedBucket)?.label ??
-                      "Active pursuits · by deadline"
-                    : "Active pursuits · by deadline"}
-                </span>
-                {selectedBucket && (
-                  <button className="sel-link" onClick={() => setSelectedBucket(null)}>
-                    Clear
-                  </button>
-                )}
-              </div>
-              {loading ? (
-                <div className="dash-empty">Loading…</div>
-              ) : bids.length === 0 ? (
-                <div className="dash-empty">
-                  No active pursuits yet. Mark an opportunity <b>Bid</b> to see it here.
-                </div>
-              ) : agenda.length === 0 ? (
-                <div className="dash-empty">No upcoming deadlines on your active pursuits.</div>
-              ) : (
-                <div className="dash-agenda">
-                  {(selectedBucket
-                    ? agenda.filter((g) => g.key === selectedBucket)
-                    : agenda
-                  ).map((g) => (
-                    <div className="agenda-group" key={g.key}>
-                      <div className={`agenda-label ${g.key}`}>
-                        {g.label} <span className="c">{g.rows.length}</span>
-                      </div>
-                      {g.rows.map(({ o, due }) => (
-                        <button className="dash-row" key={o.id} onClick={() => onOpen(o.id)}>
-                          <div className="dr-main">
-                            <div className="dr-title">{o.title}</div>
-                            <div className="dr-sub">{o.agency ?? "—"}</div>
-                          </div>
-                          <span className={`due-chip ${due.tone}`}>{due.text}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Month calendar for the Dashboard — marks the days that have Bid opportunities due
-// (today-or-future only; overdue is never marked). Clicking a marked day selects it.
-function DashCalendar({
-  bids,
-  selectedDay,
-  onSelectDay,
-}: {
-  bids: Opportunity[];
-  selectedDay: string | null;
-  onSelectDay: (iso: string | null) => void;
-}) {
-  const [cursor, setCursor] = useState(() => {
-    const t = new Date();
-    return { y: t.getFullYear(), m: t.getMonth() };
-  });
-
-  // iso-day -> count of bids due that day (drop overdue).
-  const byDay = useMemo(() => {
-    const map = new Map<string, number>();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    for (const o of bids) {
-      if (!o.response_deadline) continue;
-      const d = new Date(o.response_deadline);
-      if (isNaN(d.getTime())) continue;
-      const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-      if (day.getTime() < today.getTime()) continue; // no overdue
-      const iso = toLocalIso(day);
-      map.set(iso, (map.get(iso) ?? 0) + 1);
-    }
-    return map;
-  }, [bids]);
-
-  // 6-week grid (42 cells) starting on the Sunday on/before the 1st.
-  const cells = useMemo(() => {
-    const first = new Date(cursor.y, cursor.m, 1);
-    const start = new Date(cursor.y, cursor.m, 1 - first.getDay());
-    return Array.from({ length: 42 }, (_, i) =>
-      new Date(start.getFullYear(), start.getMonth(), start.getDate() + i),
-    );
-  }, [cursor]);
-
-  const todayIso = toLocalIso(new Date());
-  const monthLabel = new Date(cursor.y, cursor.m, 1).toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
-  const step = (delta: number) =>
-    setCursor((c) => {
-      const m = c.m + delta;
-      if (m < 0) return { y: c.y - 1, m: 11 };
-      if (m > 11) return { y: c.y + 1, m: 0 };
-      return { y: c.y, m };
-    });
-
-  return (
-    <div className="dash-cal">
-      <div className="dcal-head">
-        <button className="dcal-nav" onClick={() => step(-1)} aria-label="Previous month">
-          ‹
-        </button>
-        <div className="dcal-month">{monthLabel}</div>
-        <button className="dcal-nav" onClick={() => step(1)} aria-label="Next month">
-          ›
-        </button>
-        <button
-          className="dcal-today"
-          onClick={() => {
-            const t = new Date();
-            setCursor({ y: t.getFullYear(), m: t.getMonth() });
-          }}
-        >
-          Today
-        </button>
-      </div>
-      <div className="dcal-grid">
-        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((w) => (
-          <div className="dcal-wd" key={w}>
-            {w}
-          </div>
-        ))}
-        {cells.map((d, i) => {
-          const iso = toLocalIso(d);
-          const count = byDay.get(iso) ?? 0;
-          const inMonth = d.getMonth() === cursor.m;
-          return (
-            <button
-              key={i}
-              className={`dcal-day ${inMonth ? "" : "muted"} ${count ? "has" : ""} ${
-                iso === todayIso ? "today" : ""
-              } ${iso === selectedDay ? "sel" : ""}`}
-              onClick={() => (count ? onSelectDay(iso === selectedDay ? null : iso) : undefined)}
-              disabled={!count}
-              title={count ? `${count} due` : undefined}
-            >
-              <span className="dcal-num">{d.getDate()}</span>
-              {count > 0 && <span className="dcal-dot">{count}</span>}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function CallPlanView() {
-  const [calls, setCalls] = useState<CallPlanItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [prepOpp, setPrepOpp] = useState<string | null>(null);
+  // A QUERY, not useState+useEffect+fetch. Every tab switch remounts this component, and the
+  // old shape refetched the whole call sheet from zero behind a blank loading state each
+  // time — five round trips across six navigations, on the app's slowest endpoint. Cached,
+  // returning to the tab is instant and the refresh happens behind the rendered list.
+  const qc = useQueryClient();
+  const callsQ = useQuery(callPlanQuery());
+  const calls = callsQ.data ?? NO_CALLS;
+  const loading = callsQ.isPending;
+  // Seeded from the store when Today's "Prep the call" navigated here, so the dialog is
+  // already open on arrival. Read once at mount and cleared, so coming back to the Call Plan
+  // later doesn't re-open a dialog the rep already closed.
+  const prepCallFor = useUiStore((s) => s.prepCallFor);
+  const setPrepCallFor = useUiStore((s) => s.setPrepCallFor);
+  const [prepOpp, setPrepOpp] = useState<string | null>(prepCallFor);
   const [filters, setFilters] = useState<CallFilters>(EMPTY_CALL_FILTERS);
   const pushToast = useToastStore((s) => s.push);
 
-  const load = useCallback(async () => {
-    try {
-      setCalls(await fetchCallPlan());
-    } catch {
-      pushToast("Couldn't load the call plan — is the backend running?");
-    } finally {
-      setLoading(false);
-    }
-  }, [pushToast]);
   useEffect(() => {
-    load();
-  }, [load]);
+    if (callsQ.isError) pushToast("Couldn't load the call plan — is the backend running?");
+  }, [callsQ.isError, pushToast]);
+
+  // Consume the hand-off exactly once. The local state above already picked it up on mount;
+  // clearing it here stops a later visit re-opening the same dialog.
+  useEffect(() => {
+    if (prepCallFor) setPrepCallFor(null);
+  }, [prepCallFor, setPrepCallFor]);
 
   const update = async (callId: string, status: string) => {
-    setCalls((prev) => prev.map((c) => (c.call_id === callId ? { ...c, status } : c))); // optimistic
+    // Optimistic against the CACHE now, so the row updates instantly and a background
+    // refetch cannot resurrect the old status mid-flight.
+    qc.setQueryData<CallPlanItem[]>(queryKeys.callPlan, (prev) =>
+      (prev ?? []).map((c) => (c.call_id === callId ? { ...c, status } : c)),
+    );
     try {
       await setCallStatus(callId, status);
     } catch {
       pushToast("Couldn't update the call — reverting.");
-      load();
+      void qc.invalidateQueries({ queryKey: queryKeys.callPlan });
     }
   };
 
@@ -2400,7 +2121,7 @@ function ContactsTab({
                 )}
                 {c.reason && <div className="rec-body">{c.reason}</div>}
                 {c.suggested_outreach && (
-                  <div className="rec-body" style={{ color: "var(--accent)" }}>
+                  <div className="rec-body" style={{ color: "var(--bid-ink)" }}>
                     ↳ {c.suggested_outreach}
                   </div>
                 )}
@@ -2856,6 +2577,9 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
   // Held as the raw comma-separated string the admin types; split server-side on save.
   const [keywords, setKeywords] = useState("");
   const [savingOrg, setSavingOrg] = useState(false);
+  // Its own flag, not savingOrg: the SAM.gov re-pull is the slow path (live fetch + site
+  // scrape + the research agent) and should say so rather than hide behind "Saving…".
+  const [refreshingSam, setRefreshingSam] = useState(false);
   const [orgMsg, setOrgMsg] = useState<string | null>(null);
   const [subTab, setSubTab] = useState<"settings" | "team">("settings");
   const [err, setErr] = useState<string | null>(null);
@@ -2888,8 +2612,14 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
     setKeywords((org.keywords ?? []).join(", "));
   }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Single action: save the name + UEI, then automatically pull the company's
-  // details from SAM.gov (if a UEI is set).
+  // Single action: save the name, UEI and keywords — and re-pull the SAM.gov profile ONLY
+  // when the UEI itself changed.
+  //
+  // This used to run the lookup on every save where a UEI was merely present, which made
+  // editing the keywords one of the slowest actions in the product: /me/uei-lookup busts
+  // the Redis profile cache, re-fetches SAM.gov live, scrapes the company's website and
+  // runs the company-research LLM agent. None of that can be affected by a keyword edit —
+  // keywords are a ranking signal the agents read straight off the org document.
   const saveOrg = async () => {
     setSavingOrg(true);
     setErr(null);
@@ -2901,7 +2631,9 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
         keywords: keywords, // raw comma-separated; the server splits + de-dupes
       });
       let merged = updated;
-      if (uei.trim()) {
+      const nextUei = uei.trim().toUpperCase();
+      const prevUei = (org?.uei ?? "").trim().toUpperCase();
+      if (nextUei && nextUei !== prevUei) {
         try {
           const details = await organizationsApi.lookupUei();
           merged = { ...updated, company_details: details };
@@ -2921,6 +2653,24 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
       setErr(errText(e, "Couldn't save the organisation."));
     } finally {
       setSavingOrg(false);
+    }
+  };
+
+  /** The SAM.gov re-pull, on purpose rather than as a side effect of every save. */
+  const refreshSamProfile = async () => {
+    setRefreshingSam(true);
+    setErr(null);
+    setOrgMsg(null);
+    try {
+      const details = await organizationsApi.lookupUei();
+      qc.setQueryData(queryKeys.organization, (prev: OrgBundle | undefined) =>
+        prev ? { ...prev, org: { ...prev.org, company_details: details } } : prev,
+      );
+      setOrgMsg("Company details re-pulled from SAM.gov.");
+    } catch (e) {
+      setErr(errText(e, "Couldn't reach SAM.gov."));
+    } finally {
+      setRefreshingSam(false);
     }
   };
 
@@ -3000,7 +2750,8 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
                   style={{ fontFamily: "var(--font-mono)" }}
                 />
                 <div style={{ fontSize: 11.5, color: "var(--faint)" }}>
-                  On save we pull your company&apos;s registration (legal name, CAGE, NAICS, status) from SAM.gov.
+                  Change it and we pull your registration (legal name, CAGE, NAICS, status) from
+                  SAM.gov on save. Already correct? Use Refresh to re-pull it.
                 </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -3028,7 +2779,21 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
                     "Save"
                   )}
                 </button>
-                {orgMsg && <span style={{ color: "var(--bid)", fontSize: 13 }}>{orgMsg}</span>}
+                <button
+                  className="btn ghost"
+                  onClick={refreshSamProfile}
+                  disabled={savingOrg || refreshingSam || !uei.trim()}
+                  title="Re-pull this company's SAM.gov registration and regenerate its profile"
+                >
+                  {refreshingSam ? (
+                    <>
+                      <span className="spin" /> Refreshing…
+                    </>
+                  ) : (
+                    "Refresh from SAM.gov"
+                  )}
+                </button>
+                {orgMsg && <span style={{ color: "var(--bid-ink)", fontSize: 13 }}>{orgMsg}</span>}
               </div>
             </div>
 
@@ -3109,7 +2874,7 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
                 {inviting ? "Sending…" : "Send invite"}
               </button>
             </form>
-            {inviteMsg && <div style={{ color: "var(--bid)", fontSize: 13, marginTop: 8 }}>{inviteMsg}</div>}
+            {inviteMsg && <div style={{ color: "var(--bid-ink)", fontSize: 13, marginTop: 8 }}>{inviteMsg}</div>}
 
             <div className="sec-title">Members{members.length ? ` · ${members.length}` : ""}</div>
             {loading ? (

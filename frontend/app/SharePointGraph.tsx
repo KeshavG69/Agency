@@ -9,7 +9,7 @@ import ForceGraph, { type NodeVisual } from "./ForceGraph";
 
 const TYPE: Record<string, { color: string; r: number; square?: boolean }> = {
   site: { color: "var(--ink)", r: 9, square: true },
-  library: { color: "var(--accent)", r: 7 },
+  library: { color: "var(--bid-ink)", r: 7 },
   list: { color: "var(--watch)", r: 7 },
   folder: { color: "var(--faint)", r: 5 },
   file: { color: "var(--line-strong)", r: 4 },
@@ -34,7 +34,7 @@ const card = (n: SPNode) => (
     {n.path && <div className="gc-row mono">{n.path}</div>}
     {n.web_url && (
       <div style={{ marginTop: 8 }}>
-        <a href={n.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontSize: 12.5 }}>
+        <a href={n.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--bid-ink)", fontSize: 12.5 }}>
           Open in SharePoint ↗
         </a>
       </div>
@@ -111,7 +111,7 @@ function SPList({ nodes }: { nodes: SPNode[] }) {
                 <td style={{ textAlign: "right" }}>{n.item_count ?? "—"}</td>
                 <td>
                   {n.web_url ? (
-                    <a href={n.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
+                    <a href={n.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--bid-ink)" }}>
                       Open ↗
                     </a>
                   ) : (
@@ -213,7 +213,7 @@ function SPBySite({ nodes, edges }: { nodes: SPNode[]; edges: { source: string; 
                       {m.type}
                     </span>
                     {m.web_url && (
-                      <a href={m.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
+                      <a href={m.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--bid-ink)" }}>
                         Open ↗
                       </a>
                     )}

@@ -617,6 +617,80 @@ export async function getDocUrl(documentId: string): Promise<string> {
   return data.url;
 }
 
+// ---- Today (the daily action plan) ----
+// The Pipeline shows records; this shows the VERB. One row per thing a human owes a pursuit,
+// scheduled backwards from its response deadline — so a bid closing in three days puts its
+// whole remaining chain on today, and one closing in a month contributes only its first step.
+// See docs/daily-action-plan.md.
+export type ActionKind =
+  | "analyze"
+  | "decide"
+  | "approve_capture"
+  | "retry_capture"
+  | "call"
+  | "review_docs"
+  | "submit"
+  | "reply_mail";
+export type ActionUrgency = "critical" | "high" | "normal";
+
+export interface ActionItem {
+  id: string;
+  kind: ActionKind;
+  title: string; // imperative, rendered server-side: "Call Donna Scandaliato at U.S. COAST GUARD"
+  reason: string; // why this, why now
+  due_on: string; // YYYY-MM-DD (UTC)
+  hard_deadline?: string | null; // the pursuit's response deadline
+  // Days to that deadline, computed server-side against the SAME UTC day the planner
+  // scheduled against. Not derived in the browser: a rep whose local date has rolled over
+  // would otherwise see "Overdue" on a card whose own reason line says "closes today".
+  closes_in_days?: number | null;
+  urgency: ActionUrgency;
+  infeasible?: boolean; // not enough runway left — leads with Dismiss, not Done
+  opportunity_id?: string | null;
+  contact_email?: string | null;
+  ref_id?: string | null; // mail-triage card id for `reply_mail`
+  // Folded on server-side so a card renders without a second fetch.
+  opportunity_title?: string | null;
+  agency?: string | null; // shortened for a headline; `agency_full` keeps the breadcrumb
+  agency_full?: string | null;
+  solicitation_number?: string | null;
+  priority_score?: number | null;
+  bid_decision?: BidDecision | null;
+  risk_level?: RiskLevel | null;
+  link?: string | null;
+}
+
+export interface TodayPlan {
+  date: string; // the UTC day the buckets were computed against
+  scope: "mine" | "org";
+  overdue: ActionItem[];
+  today: ActionItem[];
+  upcoming: { day: string; count: number }[]; // collapsed on purpose — counts, not cards
+  counts: { overdue: number; today: number; upcoming: number; critical: number };
+}
+
+export async function fetchTodayPlan(scope: "mine" | "org" = "mine"): Promise<TodayPlan> {
+  const { data } = await apiClient.get("/api/actions/today", { params: { scope } });
+  return data;
+}
+
+/** Tick it off / push it to a later day / decide not to do it. */
+export async function closeAction(
+  actionId: string,
+  outcome: "done" | "dismiss",
+): Promise<void> {
+  await apiClient.post(`/api/actions/${actionId}/${outcome}`);
+}
+
+export async function snoozeAction(actionId: string, days: number): Promise<void> {
+  await apiClient.post(`/api/actions/${actionId}/snooze`, { days });
+}
+
+/** Rebuild the plan now rather than waiting for the daily run. */
+export async function replanActions(): Promise<void> {
+  await apiClient.post("/api/actions/replan");
+}
+
 // ---- Call plan (consolidated BD call sheet across the pipeline) ----
 export interface CallPlanItem {
   // null for a pursuit that reached capture but has no Analyst call row — it still appears

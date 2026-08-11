@@ -38,6 +38,19 @@
   /* --- the one intentionally per-theme token: a ring only has to be SEEN --- */
   --ring: #006b4f;
 
+  /* Alarm as TEXT. Referenced by risk meters, overdue markers and failure states, and
+     until now never DEFINED — every `var(--danger, #d84a4a)` fell through to its literal
+     fallback, which is why the colour was identical in both themes and failed contrast in
+     dark. Light takes the same oxblood as --destructive; dark needs a lighter red for the
+     same reason --ring does. */
+  --danger: #ae2e24;
+
+  /* The accent as TEXT. Same reasoning as --ring, and the same exception: #006b4f on the
+     dark card surface measures 2.5:1, which fails even the 3:1 large-text floor, so a green
+     figure set in it is unreadable in dark mode. Fills keep --primary (they carry white on
+     top); anything where the green IS the ink reads this instead. */
+  --bid-ink: #006b4f;
+
   --overlay: rgb(0 0 0 / 0.18);
 
   /* --- charts: validated colourblind-safe on this surface (plan §6.1) --- */
@@ -98,6 +111,8 @@
   --destructive: #ae2e24;
 
   --ring: #40be96; /* the exception — must be visible on dark */
+  --bid-ink: #40be96; /* 7.4:1 on the dark card, against #006b4f's 2.5:1 */
+  --danger: #f87171; /* 5.8:1 on the dark card; the oxblood measures 2.5:1 there */
   --overlay: rgb(0 0 0 / 0.55); /* the scrim MUST be heavier in dark, or it vanishes */
 
   --chart-1: #0fa871;
@@ -112,7 +127,10 @@
   --deadline-later: #0e7457;
   --deadline-none: #7c8899;
 
-  --watch: #c07e22;
+  /* Brightened from #c07e22, which measured 4.33:1 as 11px text on the raised card
+     surface — just under the 4.5 floor. Amber is read far more often as text here (badges,
+     due chips, risk labels) than as a fill, so the ink case sets the value. */
+  --watch: #d99a2e;
 
   /* A 12% shadow is invisible on #0f0f0f; dark elevation needs the alpha, not the blur. */
   --shadow-2xs: 0 1px 2px rgb(0 0 0 / 0.2);
@@ -299,7 +317,7 @@ button {
   line-height: 1;
 }
 .brand .word .dot {
-  color: var(--accent-2);
+  color: var(--bid-ink);
 }
 .brand .sub {
   margin-top: 7px;
@@ -446,7 +464,7 @@ button {
 /* SAM.gov pull — secondary (outlined) variant of the upload button */
 .sam-btn {
   background: transparent;
-  color: var(--accent-2);
+  color: var(--bid-ink);
   border: 1px solid var(--accent-2);
   margin-bottom: 8px;
 }
@@ -464,7 +482,7 @@ button {
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: var(--accent-2);
+  color: var(--bid-ink);
   background: color-mix(in srgb, var(--accent-2) 12%, transparent);
   border-radius: 4px;
   padding: 1px 6px;
@@ -482,7 +500,7 @@ button {
   margin-top: 12px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--accent-2);
+  color: var(--bid-ink);
 }
 .sam-link:hover {
   text-decoration: underline;
@@ -537,7 +555,7 @@ button {
 }
 .search:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--ring);
 }
 
 .rows {
@@ -687,7 +705,7 @@ button {
   gap: 6px;
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
-  color: var(--accent);
+  color: var(--bid-ink);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-radius: 20px;
@@ -790,7 +808,7 @@ button {
   display: inline-block;
   width: 12px;
   margin-left: 3px;
-  color: var(--accent);
+  color: var(--bid-ink);
 }
 .opp-table tbody tr.opp-row {
   cursor: pointer;
@@ -1027,7 +1045,7 @@ button {
 .cal-day.on {
   border-color: var(--accent-2);
   background: color-mix(in srgb, var(--accent-2) 12%, transparent);
-  color: var(--accent-2);
+  color: var(--bid-ink);
 }
 .cd-wd {
   font-size: 9.5px;
@@ -1037,7 +1055,7 @@ button {
   color: var(--faint);
 }
 .cal-day.on .cd-wd {
-  color: var(--accent-2);
+  color: var(--bid-ink);
 }
 .cd-num {
   font-size: 15px;
@@ -1106,7 +1124,7 @@ button {
 }
 .dt-btn.on.bid {
   background: var(--bid-soft);
-  color: var(--bid);
+  color: var(--bid-ink);
 }
 .dt-btn.on.nobid {
   background: var(--nobid-soft);
@@ -1127,7 +1145,7 @@ button {
 }
 .dt-btn.on.assigned {
   background: color-mix(in srgb, var(--accent-2) 14%, transparent);
-  color: var(--accent-2);
+  color: var(--bid-ink);
   border-color: transparent;
 }
 /* assign-to-members modal (PriceIQ share-style) */
@@ -1229,7 +1247,7 @@ button {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--accent-2);
+  color: var(--bid-ink);
   background: color-mix(in srgb, var(--accent-2) 12%, transparent);
   border-radius: 4px;
   padding: 2px 6px;
@@ -1274,7 +1292,7 @@ button {
 .doc-preview-link {
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent-2);
+  color: var(--bid-ink);
 }
 .preview-overlay {
   position: fixed;
@@ -1337,7 +1355,7 @@ button {
 }
 .preview-btn:hover {
   border-color: var(--accent-2);
-  color: var(--accent-2);
+  color: var(--bid-ink);
 }
 .preview-body {
   position: relative;
@@ -1492,7 +1510,7 @@ button {
 }
 .cp-status.done {
   background: var(--bid-soft);
-  color: var(--bid);
+  color: var(--bid-ink);
 }
 .cp-status.dismissed {
   background: var(--nobid-soft);
@@ -1658,7 +1676,7 @@ button {
 .cb-ask .cb-h {
   display: inline;
   margin-right: 6px;
-  color: var(--bid);
+  color: var(--bid-ink);
 }
 .row-title {
   font-size: 13.5px;
@@ -1701,7 +1719,7 @@ button {
 }
 .badge.bid {
   background: var(--bid-soft);
-  color: var(--bid);
+  color: var(--bid-ink);
 }
 .badge.nobid {
   background: var(--nobid-soft);
@@ -1723,7 +1741,7 @@ button {
 }
 .badge.processing {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--bid-ink);
   animation: badgePulse 1.6s var(--ease-out) infinite;
 }
 .badge.failed {
@@ -1848,7 +1866,11 @@ button {
 .empty-detail .big {
   font-family: var(--font-display);
   font-size: 22px;
-  color: var(--line-strong);
+  /* --line-strong is a BORDER token: #2a2a2a in dark, which as text on the page measured
+     1.15:1 — the headline of this empty state was effectively invisible. The supporting
+     line under it already uses --faint; the headline should not be quieter than its own
+     subtitle. */
+  color: var(--muted);
 }
 
 .detail-head {
@@ -2188,7 +2210,7 @@ button {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--bid-ink);
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   border-radius: 4px;
   padding: 1px 5px;
@@ -2210,7 +2232,7 @@ button {
 }
 .add-contact .ac-in:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--ring);
 }
 .rec-body {
   font-size: 13px;
@@ -2219,7 +2241,7 @@ button {
   line-height: 1.55;
 }
 .rec a {
-  color: var(--accent);
+  color: var(--bid-ink);
   text-decoration: none;
   font-weight: 600;
   font-size: 12.5px;
@@ -2241,7 +2263,7 @@ button {
 .doc-type {
   font-family: var(--font-mono);
   font-size: 10.5px;
-  color: var(--accent);
+  color: var(--bid-ink);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -2365,7 +2387,7 @@ button {
   margin-left: auto;
 }
 .foot-note b {
-  color: var(--bid);
+  color: var(--bid-ink);
 }
 
 /* toast / error line */
@@ -2570,7 +2592,7 @@ button {
 }
 .gc-tag.on {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--bid-ink);
 }
 .graph-empty {
   background: var(--surface);
@@ -2587,7 +2609,10 @@ button {
 .graph-empty .ge-t {
   font-family: var(--font-display);
   font-size: 20px;
-  color: var(--line-strong);
+  /* Same fix as .empty-detail .big: --line-strong is a BORDER token and rendered this
+     empty-state headline at 1.15:1. An empty state is the only thing on screen; it is the
+     one heading that must not be the faintest text on the page. */
+  color: var(--muted);
 }
 
 /* outlook connected row + disconnect */
@@ -2725,7 +2750,7 @@ button {
 }
 .view-search:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--ring);
 }
 .view-count {
   font-size: 12px;
@@ -2879,7 +2904,7 @@ button {
   border-radius: 999px;
   border: 1px solid var(--accent);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--bid-ink);
   cursor: pointer;
   transition: background 0.15s, color 0.15s, opacity 0.15s;
 }
@@ -2927,7 +2952,7 @@ button {
 }
 .mail-send:hover:not(:disabled) { background: var(--accent-2); }
 .mail-send:disabled { opacity: 0.6; cursor: default; }
-.mail-sent { font-size: 12px; font-weight: 600; color: var(--accent); }
+.mail-sent { font-size: 12px; font-weight: 600; color: var(--bid-ink); }
 
 .mail-subject {
   width: 100%;
@@ -2941,7 +2966,7 @@ button {
   border-radius: 5px;
   background: var(--surface-2);
 }
-.mail-subject:focus { outline: none; border-color: var(--accent); }
+.mail-subject:focus { outline: none; border-color: var(--ring); }
 
 .mail-body {
   width: 100%;
@@ -2956,7 +2981,7 @@ button {
   border-radius: 5px;
   background: var(--surface);
 }
-.mail-body:focus { outline: none; border-color: var(--accent); }
+.mail-body:focus { outline: none; border-color: var(--ring); }
 
 .mail-err { margin-top: 8px; font-size: 12px; color: #b4453a; }
 
@@ -3009,7 +3034,7 @@ button {
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s, opacity 0.15s;
 }
-.mail-regen:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.mail-regen:hover:not(:disabled) { border-color: var(--accent); color: var(--bid-ink); }
 .mail-regen:disabled { opacity: 0.55; cursor: default; }
 
 /* ---------------- Connect bar (Contacts / Library section header) ---------------- */
@@ -3139,7 +3164,7 @@ button {
   line-height: 1;
   color: var(--ink);
 }
-.dash-stat .ds-n.bid { color: var(--bid); }
+.dash-stat .ds-n.bid { color: var(--bid-ink); }
 .dash-stat .ds-n.watch { color: var(--watch); }
 .dash-stat .ds-n.nobid { color: var(--nobid); }
 .dash-stat .ds-l { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
@@ -3241,9 +3266,9 @@ button {
   white-space: nowrap;
   border: 1px solid transparent;
 }
-.due-chip.overdue { color: #fff; background: var(--nobid); }
+.due-chip.overdue { color: var(--background); background: var(--nobid); }
 .due-chip.soon { color: var(--watch); background: var(--watch-soft); border-color: #ecd9b3; }
-.due-chip.ok { color: var(--accent); background: var(--accent-soft); }
+.due-chip.ok { color: var(--bid-ink); background: var(--accent-soft); }
 .due-chip.far { color: var(--muted); background: var(--surface-2); border-color: var(--line); }
 .due-chip.none { color: var(--faint); background: var(--surface-2); }
 
@@ -3333,7 +3358,7 @@ button {
   padding: 3px 9px;
   border-radius: 999px;
 }
-.crm-tag.work { color: var(--accent); background: var(--accent-soft); }
+.crm-tag.work { color: var(--bid-ink); background: var(--accent-soft); }
 .crm-tag.personal { color: var(--muted); background: var(--surface-2); border: 1px solid var(--line); }
 .crm-group-count { font-size: 12px; color: var(--faint); flex: 1; }
 
@@ -3419,7 +3444,7 @@ button {
 }
 .aof-input:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--ring);
 }
 .aof-textarea {
   resize: vertical;
@@ -3508,7 +3533,7 @@ button {
   margin-left: 4px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--bid-ink);
   padding: 6px 11px;
   border-radius: 5px;
   border: 1px solid var(--accent-soft);
@@ -3545,7 +3570,7 @@ button {
   font-size: 13px;
   transition: background 0.13s, border-color 0.13s;
 }
-.dcal-day.muted .dcal-num { color: var(--line-strong); }
+.dcal-day.muted .dcal-num { color: var(--faint); }
 .dcal-day.today { border-color: var(--line-strong); }
 .dcal-day.has {
   cursor: pointer;
@@ -3575,7 +3600,7 @@ button {
   justify-content: center;
   line-height: 1;
 }
-.dcal-day.sel .dcal-dot { background: #fff; color: var(--accent); }
+.dcal-day.sel .dcal-dot { background: #fff; color: var(--bid-ink); }
 
 /* ============ Top navigation bar (primary nav) ============ */
 .topbar {
@@ -3596,7 +3621,7 @@ button {
   letter-spacing: -0.02em;
   flex-shrink: 0;
 }
-.tb-brand .dot { color: var(--accent-2); }
+.tb-brand .dot { color: var(--bid-ink); }
 .tb-nav {
   display: flex;
   align-items: center;
@@ -3715,7 +3740,7 @@ button {
 .bb-count {
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--accent);
+  color: var(--bid-ink);
   background: var(--accent-soft);
   border-radius: 999px;
   padding: 1px 9px;
@@ -3787,7 +3812,7 @@ button {
 }
 .fb-btn:hover:not(:disabled) { border-color: var(--accent); }
 .fb-btn:disabled { opacity: 0.5; cursor: default; }
-.fb-btn.on { border-color: var(--accent); color: var(--accent); }
+.fb-btn.on { border-color: var(--accent); color: var(--bid-ink); }
 .fb-badge {
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -3822,7 +3847,7 @@ button {
   font-size: 12.5px;
   margin-bottom: 6px;
 }
-.fb-search:focus { outline: none; border-color: var(--accent); }
+.fb-search:focus { outline: none; border-color: var(--ring); }
 .fb-opts { overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
 /* Same rule as .view-companies: a scrolling column list must never shrink its rows. The
    Agency picker can hold a couple of thousand options. */
@@ -3878,7 +3903,7 @@ button {
   color: var(--ink);
   cursor: pointer;
 }
-.fb-select:focus { outline: none; border-color: var(--accent); }
+.fb-select:focus { outline: none; border-color: var(--ring); }
 .fb-clearall {
   padding: 7px 12px;
   border-radius: 5px;
@@ -3921,14 +3946,14 @@ button {
   flex-shrink: 0;
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--bid-ink);
 }
 .sp-open:hover { text-decoration: underline; }
 .sp-subs { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
 .sp-sub {
   font-size: 12px;
   font-weight: 500;
-  color: var(--accent);
+  color: var(--bid-ink);
   background: var(--accent-soft);
   border: 1px solid transparent;
   border-radius: 999px;
@@ -3974,7 +3999,7 @@ button {
   white-space: nowrap;
 }
 .sp-file-size { font-size: 11px; color: var(--faint); font-family: var(--font-mono); flex-shrink: 0; }
-.sp-file-open { font-size: 11.5px; color: var(--accent); flex-shrink: 0; opacity: 0; transition: opacity 0.13s; }
+.sp-file-open { font-size: 11.5px; color: var(--bid-ink); flex-shrink: 0; opacity: 0; transition: opacity 0.13s; }
 .sp-file:hover .sp-file-open { opacity: 1; }
 
 /* ---------------- Mail triage (Dashboard "Needs attention") ---------------- */
@@ -4026,13 +4051,13 @@ button {
   margin-top: 4px;
   font-size: 10.5px;
   font-weight: 600;
-  color: var(--accent-2);
+  color: var(--bid-ink);
 }
 .triage-body { padding: 0 12px 14px; }
 .triage-actions { display: flex; gap: 14px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
 .triage-link {
   font-size: 12px;
-  color: var(--accent-2);
+  color: var(--bid-ink);
   background: none;
   border: none;
   padding: 0;
@@ -4054,6 +4079,681 @@ button {
   resize: vertical;
 }
 .triage-reply-actions { display: flex; gap: 8px; }
-.triage-created { font-size: 12px; color: var(--accent-2); }
+.triage-created { font-size: 12px; color: var(--bid-ink); }
 .triage-err { font-size: 12px; color: #b4453a; margin-top: 6px; }
 .btn.btn-sm { padding: 6px 12px; font-size: 12px; }
+
+/* ============================================================================
+   Today — the daily action plan
+   ----------------------------------------------------------------------------
+   The landing view. Every row is a VERB, so the card is laid out to be read in
+   that order: what to do (title), why now (reason), then the controls. The
+   urgency stripe on the left is the only colour that carries meaning here —
+   everything else stays neutral so the stripe is not competing for attention.
+   ========================================================================== */
+.today {
+  padding: 28px 32px 40px;
+  overflow-y: auto;
+  height: 100%;
+}
+/* A task list is read line by line, so it is capped rather than stretched: past ~1150px the
+   reason line and its buttons drift so far apart they stop reading as one row. */
+.today > * {
+  max-width: 1150px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.today-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.today-head h1 {
+  margin: 0;
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+.today-sub {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.today-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.today-replan {
+  padding: 6px 12px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.today-replan:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+.today-replan:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.today-section {
+  margin-bottom: 26px;
+}
+.today-section h2 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.today-section.overdue h2 {
+  color: var(--danger, #d84a4a);
+}
+.today-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 1px 7px;
+  letter-spacing: 0;
+}
+.today-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.today-list > * {
+  flex-shrink: 0; /* scrolling-column rule — see .view-companies */
+}
+
+/* --- one card ------------------------------------------------------------ */
+.act {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 13px 16px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: var(--shadow-2xs);
+}
+.act:hover {
+  border-color: var(--line-strong);
+}
+
+/* URGENCY IS THE CARD'S SURFACE, not a stripe down its edge.
+   The original intent was right and is kept: urgency has to be scannable down a column
+   without a word on every card saying "critical", which stops meaning anything by the
+   third one. What changed is the device. A 3px coloured left border is the reflex
+   solution — it reads as a costume bolted onto the card rather than a property of it,
+   and it fought this system's own Hairline Rule (every border 1px, in the line token).
+   Washing the whole surface in 8% of the signal colour is the SAME encoding, scans just
+   as fast down a column at a glance, and is already the system's documented Soft-Fill
+   Rule — the same treatment the Bid/Watch badges use. Mixed into --surface rather than
+   --background because these cards sit on the raised plane, not the page.
+
+   Carried heavier than the badges' 8%: a badge is a small saturated chip read against a
+   plain page, while this is a large field competing with its own border and content.
+   Measured at 8% the three tiers were indistinguishable down a column, which would have
+   lost the very property the stripe existed to provide. */
+.act.critical {
+  background: color-mix(in oklab, var(--danger) 16%, var(--surface));
+  border-color: color-mix(in oklab, var(--danger) 38%, var(--line));
+}
+.act.high {
+  background: color-mix(in oklab, var(--watch) 11%, var(--surface));
+  border-color: color-mix(in oklab, var(--watch) 30%, var(--line));
+}
+/* `normal` is the resting card. Deliberately no treatment: if every urgency has a colour,
+   none of them is a signal. */
+/* Not a normal task. Muted so it recedes, and Dismiss leads instead of Done.
+   Now that the BACKGROUND carries urgency, this cannot simply overwrite it — declared
+   after the tiers, a flat `background: var(--surface-2)` erased them, and an infeasible
+   critical became indistinguishable from an infeasible normal. Instead each tier gets its
+   own dulled variant: the hue survives so the card still reads as its tier, mixed toward
+   the recessed surface so it still visibly steps back. */
+.act.infeasible {
+  background: var(--surface-2);
+}
+.act.critical.infeasible {
+  background: color-mix(in oklab, var(--danger) 7%, var(--surface-2));
+  border-color: color-mix(in oklab, var(--danger) 20%, var(--line));
+}
+.act.high.infeasible {
+  background: color-mix(in oklab, var(--watch) 5%, var(--surface-2));
+  border-color: color-mix(in oklab, var(--watch) 16%, var(--line));
+}
+.act.infeasible .act-title {
+  color: var(--muted);
+}
+
+.act-main {
+  min-width: 0;
+  flex: 1;
+}
+.act-top {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.act-kind {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+.act-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+.act-reason {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.act-side {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+}
+.act-due {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.act-due.t-overdue {
+  color: var(--danger, #d84a4a);
+}
+.act-due.t-soon {
+  color: var(--watch, #d79a3a);
+}
+.act-do {
+  display: flex;
+  gap: 6px;
+}
+.act-btn {
+  padding: 6px 13px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.act-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.act-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.act-btn.ghost {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--line);
+}
+.act-btn.ghost:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  filter: none;
+}
+.act-secondary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.act-link {
+  padding: 0;
+  font-size: 11.5px;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.act-link:hover:not(:disabled) {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.act-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.act-link.lead {
+  color: var(--danger, #d84a4a);
+  font-weight: 600;
+}
+.act-snooze {
+  position: relative;
+}
+.act-snooze-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 108px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+.act-snooze-menu button {
+  padding: 7px 11px;
+  font-size: 12px;
+  text-align: left;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+.act-snooze-menu button:hover {
+  background: var(--surface-2);
+}
+
+/* --- the ending ---------------------------------------------------------- */
+/* A to-do list that can be FINISHED is the whole difference between this and a
+   dashboard, so the empty state is a reward, not a blank panel. */
+.today-done {
+  padding: 56px 20px;
+  text-align: center;
+}
+.today-done-mark {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--bid-ink);
+  font-size: 20px;
+}
+.today-done h2 {
+  margin: 0 0 6px;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+.today-done p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.today-empty {
+  padding: 56px 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Counts per day, never cards — the moment today's page contains next week's work
+   it stops being today's page. */
+.today-upcoming {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.today-upcoming-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.today-upcoming-day b {
+  font-weight: 600;
+  color: var(--ink);
+  margin-right: 3px;
+}
+
+/* ============================================================================
+   Dashboard — operations state (.ops)
+
+   Replaces the old `.dash` screen, which rendered one fact (Bid deadlines) three ways —
+   donut, month calendar, grouped list — across 3,400px of scroll, and headlined a total
+   that silently excluded the 167 pursuits whose deadline had already passed.
+
+   This layout is a fixed set of panels sized to ONE screen. The rule it enforces
+   visually: a population and the uncomfortable slice of it appear together, never on
+   two different denominators in two different places.
+   ============================================================================ */
+.ops {
+  height: 100%;
+  overflow-y: auto;
+  padding: 26px 32px 28px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ops-head h1 {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+.ops-sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.ops-sub b {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* One panel treatment for every block on the page: hairline edge defines it, the resting
+   shadow lifts it off the paper. Both, never one — see DESIGN.md's Paired-Depth Rule. */
+.ops-panel,
+.ops-intake {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow-2xs);
+  padding: 14px 18px;
+}
+.ops-panel h2,
+.ops-intake h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---- Intake: the Analyst's whole output as one proportional bar ---- */
+.ops-intake-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.ops-intake-total {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.ops-intake-total b {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.ops-dim {
+  color: var(--faint);
+}
+.ops-bar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  margin-bottom: 12px;
+}
+.ops-bar-seg {
+  min-width: 3px;
+  border-radius: 999px;
+}
+.ops-bar-seg.nobid {
+  background: var(--nobid);
+}
+.ops-bar-seg.watch {
+  background: var(--watch);
+}
+.ops-bar-seg.bid {
+  background: var(--bid);
+}
+.ops-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.ops-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: var(--muted);
+  transition: background 0.16s var(--ease-out), color 0.16s var(--ease-out);
+}
+.ops-legend-item:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.ops-legend-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Round, matching the fully-rounded bar segments it labels — and on the radius scale,
+   which a one-off 2px was not. */
+.ops-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.ops-swatch.nobid { background: var(--nobid); }
+.ops-swatch.watch { background: var(--watch); }
+.ops-swatch.bid { background: var(--bid); }
+.ops-legend-n {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.ops-legend-pct {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+/* ---- The two-column body ---- */
+.ops-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.ops-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+@media (max-width: 1100px) {
+  .ops-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- Blockers: a count, what it means, and where to go do something about it ---- */
+/* The negative inset lives on the LIST, once. Putting it on each row (with a
+   `calc(100% + 16px)` width to match) made every row wider than its container, so the
+   panel reported horizontal overflow on a page that has none. */
+.ops-blocker-list {
+  list-style: none;
+  margin: 4px -8px 0;
+}
+.ops-blocker-list > li + li {
+  border-top: 1px solid var(--line);
+}
+.ops-blocker {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 8px;
+  border-radius: 5px;
+  text-align: left;
+  transition: background 0.16s var(--ease-out);
+}
+.ops-blocker:hover {
+  background: var(--surface-2);
+}
+.ops-blocker:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ops-blocker-n {
+  font-family: var(--font-mono);
+  font-size: 21px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  min-width: 62px;
+  flex-shrink: 0;
+}
+.ops-blocker-n.watch { color: var(--watch); }
+.ops-blocker-n.nobid { color: var(--nobid); }
+.ops-blocker-n.bid { color: var(--bid-ink); }
+.ops-blocker-txt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ops-blocker-label {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--ink);
+}
+.ops-blocker-why {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ops-blocker-go {
+  flex-shrink: 0;
+  color: var(--faint);
+  opacity: 0;
+  transform: translateX(-3px);
+  transition: opacity 0.16s var(--ease-out), transform 0.16s var(--ease-out);
+}
+.ops-blocker:hover .ops-blocker-go,
+.ops-blocker:focus-visible .ops-blocker-go {
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ops-blocker-go {
+    transition: none;
+  }
+}
+
+/* ---- Label/value rows (deadline pressure, agents) ---- */
+.ops-rows {
+  margin-top: 8px;
+}
+.ops-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  font-size: 12.5px;
+}
+.ops-row + .ops-row {
+  border-top: 1px solid var(--line);
+}
+.ops-row dt {
+  color: var(--muted);
+}
+.ops-row.muted dt {
+  color: var(--faint);
+}
+.ops-row dd {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.ops-row dd.watch { color: var(--watch); }
+.ops-row dd.bid { color: var(--bid-ink); }
+.ops-row dd.nobid { color: var(--nobid); }
+.ops-note {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+/* ---- The five soonest pursuits: a shortlist, deliberately not an agenda ---- */
+.ops-soon {
+  list-style: none;
+  margin: 12px -8px 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.ops-soon-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 5px;
+  text-align: left;
+  transition: background 0.16s var(--ease-out);
+}
+.ops-soon-row:hover {
+  background: var(--surface-2);
+}
+.ops-soon-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ops-soon-title {
+  font-size: 12.5px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ops-soon .due-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.ops-empty {
+  padding: 14px 0 6px;
+  font-size: 12.5px;
+  color: var(--faint);
+}

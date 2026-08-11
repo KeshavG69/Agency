@@ -11,7 +11,14 @@ import { create } from "zustand";
  * This is the canonical home for ViewKey/TabKey so the store never has to import from a
  * component (which would risk an import cycle once those components read the store).
  */
-export type ViewKey = "dashboard" | "pipeline" | "callplan" | "contacts" | "documents" | "org";
+export type ViewKey =
+  | "today"
+  | "dashboard"
+  | "pipeline"
+  | "callplan"
+  | "contacts"
+  | "documents"
+  | "org";
 export type TabKey = "info" | "contacts" | "documents" | "activity" | "agent";
 
 interface UiStore {
@@ -29,6 +36,13 @@ interface UiStore {
   setSelectedId: (id: string | null) => void;
   setTab: (t: TabKey) => void;
   setDetailWidth: (w: number | null) => void;
+
+  // A pursuit whose call-brief dialog should open on arrival in the Call Plan. Today's
+  // "Prep the call" sets it and navigates; the Call Plan consumes it and clears it. It lives
+  // here because the dialog belongs to the Call Plan view, and the button that opens it is in
+  // a different view entirely.
+  prepCallFor: string | null;
+  setPrepCallFor: (id: string | null) => void;
 
   // One-off modals mounted at the shell level.
   spPickerOpen: boolean; // SharePoint folder picker
@@ -53,10 +67,13 @@ interface UiStore {
 }
 
 const INITIAL = {
-  view: "dashboard" as ViewKey,
+  // Today, not Dashboard. The point of the landing view is to say "here is what you do",
+  // and a dashboard — however good — lands you back in the data it exists to summarise.
+  view: "today" as ViewKey,
   selectedId: null,
   tab: "info" as TabKey,
   detailWidth: null,
+  prepCallFor: null,
   spPickerOpen: false,
   addOppOpen: false,
   reviewOpen: false,
@@ -71,6 +88,8 @@ export const useUiStore = create<UiStore>((set) => ({
   setSelectedId: (selectedId) => set({ selectedId }),
   setTab: (tab) => set({ tab }),
   setDetailWidth: (detailWidth) => set({ detailWidth }),
+
+  setPrepCallFor: (prepCallFor) => set({ prepCallFor }),
 
   setSpPickerOpen: (spPickerOpen) => set({ spPickerOpen }),
   setAddOppOpen: (addOppOpen) => set({ addOppOpen }),

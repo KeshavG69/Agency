@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 from bson import ObjectId
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument, UpdateOne
 from pymongo.errors import DuplicateKeyError
 
 from app.settings import settings
@@ -24,8 +24,28 @@ from models.opportunity import Opportunity
 from models.verdict import AnalystVerdict
 
 
+# Cursor batch size for reads that fetch a bounded working set in one go.
+#
+# The driver's default first batch is 101 documents; anything past that costs another
+# round trip to the cluster, which on this deployment measures ~1.3s. These reads return a
+# few hundred small documents at most, so pulling them in a single batch is strictly better
+# than paying a second hop for the tail. It is NOT a blanket default: an unbounded scan
+# should keep the small default so it streams instead of buffering.
+_ONE_BATCH = 1000
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _utc_today() -> date:
+    """Today in UTC — the day boundary the whole product runs on.
+
+    Deliberately not `date.today()`, which is the SERVER's local date and can be a day ahead
+    of UTC. The daily action plan is scheduled in days, so an off-by-one there silently moves
+    every task a day.
+    """
+    return datetime.now(timezone.utc).date()
 
 
 def _serialize(doc: dict) -> dict:
@@ -67,6 +87,9 @@ class CRMStore:
         # Org-level call briefs, one per (org, opportunity, requesting rep) — the rep's own
         # mailbox is the source, so two reps prepping the same call get their own brief.
         self.call_briefs = self.db["call_briefs"]
+        # The daily action plan: one row per thing a human must do, on a given day. See
+        # models/action.py for why this is its own collection and not `agent_tasks`.
+        self.actions = self.db["actions"]
         # Indexes live in utils/db_indexes.py (the single source of truth) — applied on app
         # startup and by `python -m utils.db_indexes`. Note the per-ORG uniqueness on
         # solicitation number: two orgs may legitimately track the same solicitation.
@@ -433,13 +456,57 @@ class CRMStore:
         return q
 
     # --- reads for the UI -------------------------------------------------
-    def list_all(
-        self, organization_id: str, viewer_id: str | None = None, is_admin: bool = True
-    ) -> list[dict]:
-        """This org's opportunities (highest priority first). Non-admins see only the ones
-        assigned to them or unassigned."""
-        q = self._visibility_query(organization_id, viewer_id, is_admin)
-        cursor = self.opps.find(q).sort("priority_score", -1)
+    # NOTE: `list_all` lived here — every opportunity in the org, whole documents, no
+    # projection. It was the last unprojected org-wide read, and its final caller
+    # (`call_plan`) was pulling 3,499 documents carrying `document_text` to build 203 cards:
+    # 50-124s against a remote cluster. Removed rather than left as a footgun, since any new
+    # caller would inherit the same collapse. Read through a projection instead —
+    # PLANNING_PROJECTION or CALL_PLAN_PROJECTION below, or add one.
+
+    # Exactly what the action planner's ladder reads — and nothing else. The planner walks
+    # EVERY pursuit in the org, and `list_all` returns whole documents including
+    # `document_text` (the parsed solicitation, routinely tens of KB). Reading 2,500 of those
+    # to look at a dozen scalar fields took minutes; projected, it is a couple of seconds.
+    PLANNING_PROJECTION: dict[str, int] = {f: 1 for f in (
+        "title", "agency", "response_deadline", "stage", "assigned_to", "organization_id",
+        "bid_decision", "priority_score", "risk_level", "risk_factors", "ingesting",
+        "capture_approved", "captured_at", "capture_failed_at", "capture_error",
+        "capture_reviewed_at", "poc_name", "poc_email", "recommended_contacts",
+    )}
+
+    # Exactly what call_plan() reads to build a card, and nothing else. Same reasoning as
+    # PLANNING_PROJECTION above: `recommended_contacts` is the only non-scalar, and
+    # `document_text` must never be in here.
+    CALL_PLAN_PROJECTION: dict[str, int] = {f: 1 for f in (
+        "title", "agency", "priority_score", "bid_decision", "response_deadline",
+        "poc_name", "poc_email", "captured_at", "recommended_contacts",
+    )}
+
+    def opportunities_by_id(
+        self, organization_id: str, opportunity_ids: list[str], fields: tuple[str, ...]
+    ) -> dict[str, dict]:
+        """id -> {requested fields}, org-scoped. One query for a whole list of cards, so N
+        rows never means N round trips."""
+        oids = []
+        for i in opportunity_ids:
+            try:
+                oids.append(ObjectId(i))
+            except Exception:  # noqa: BLE001 — malformed id, just not found
+                continue
+        if not oids:
+            return {}
+        # Same second-round-trip trap as list_actions: this is called with one id per card,
+        # so any plan over 101 pursuits paid an extra remote hop for the remainder.
+        cursor = self.opps.find(
+            {"_id": {"$in": oids}, "organization_id": organization_id},
+            {f: 1 for f in fields},
+        ).batch_size(_ONE_BATCH)
+        return {str(d["_id"]): _serialize(d) for d in cursor}
+
+    def list_for_planning(self, organization_id: str) -> list[dict]:
+        """Every pursuit in the org, slim, for the daily action planner. Org-wide on purpose:
+        the plan is computed for everyone and filtered by assignment when it is READ."""
+        cursor = self.opps.find({"organization_id": organization_id}, self.PLANNING_PROJECTION)
         return [_serialize(d) for d in cursor]
 
     # NOTE: `list_all_enriched` lived here — every opportunity in the org with its
@@ -712,18 +779,43 @@ class CRMStore:
         contact, so a second call row on the same pursuit would just duplicate the card. When
         several calls exist, the newest supplies the talking point and the Done/Dismiss state.
         """
-        opps = {o["id"]: o for o in self.list_all(organization_id)}
-        if not opps:
-            return []
-
-        # Newest call per opportunity (the one whose status the card reflects).
+        # Read the CALLS first, then only the pursuits that can actually produce a card.
+        #
+        # This used to call list_all(), which returns whole documents — including
+        # `document_text`, the parsed solicitation at tens of KB apiece — for every pursuit in
+        # the org. On 3,499 pursuits that is a multi-hundred-megabyte read to populate 203
+        # cards, and it measured 50-124s against a remote cluster. Projecting the fields fixed
+        # the payload; inverting the order fixes the row count too, because a pursuit with
+        # neither a call nor a capture is discarded a few lines below anyway.
+        #
+        # `calls` carries no organization_id of its own, so it is read unscoped and then
+        # intersected with an org-scoped opportunity query — the org filter still decides what
+        # can be returned, and an id from another org simply matches nothing.
         latest: dict[str, dict] = {}
-        for c in self.calls.find({"opportunity_id": {"$in": list(opps.keys())}}):
+        for c in self.calls.find().batch_size(_ONE_BATCH):
             sc = _serialize(c)
             oid = c["opportunity_id"]
             prev = latest.get(oid)
             if prev is None or (sc.get("created_at") or "") >= (prev.get("created_at") or ""):
                 latest[oid] = sc
+
+        called_oids = []
+        for i in latest:
+            try:
+                called_oids.append(ObjectId(i))
+            except Exception:  # noqa: BLE001 — malformed id, just not found
+                continue
+
+        q = self._visibility_query(organization_id, None, True)
+        q["$or"] = [{"_id": {"$in": called_oids}}, {"captured_at": {"$ne": None}}]
+        cursor = (
+            self.opps.find(q, self.CALL_PLAN_PROJECTION)
+            .sort("priority_score", -1)
+            .batch_size(_ONE_BATCH)
+        )
+        opps = {o["id"]: o for o in (_serialize(d) for d in cursor)}
+        if not opps:
+            return []
 
         rows: list[dict] = []
         for oid, opp in opps.items():
@@ -906,6 +998,16 @@ class CRMStore:
         }).sort("created_at", -1)
         return [_serialize(d) for d in cursor]
 
+    def list_open_mail_triage(self, organization_id: str) -> list[dict]:
+        """Every still-unanswered triage card in the org, across all mailboxes — the planner's
+        input for `reply_mail` actions. `replied` is excluded as well as `dismissed`: once a
+        draft has gone into Outlook the ball is no longer in our court."""
+        cursor = self.mail_triage.find({
+            "organization_id": organization_id,
+            "status": {"$nin": ["dismissed", "replied"]},
+        })
+        return [_serialize(d) for d in cursor]
+
     def get_mail_triage_card(self, card_id: str, employee_email: str) -> dict | None:
         """One card, scoped to the requesting employee (their own inbox only)."""
         try:
@@ -942,6 +1044,240 @@ class CRMStore:
             {"$set": {"status": status, "updated_at": _utc_now()}},
         )
         return True
+
+    # --- daily action plan ------------------------------------------------
+    # One row per thing a HUMAN must do, on a given day. The planner
+    # (tasks/action_plan_tasks.py) writes them; the Today view reads them. See
+    # models/action.py and docs/daily-action-plan.md.
+
+    # Set by the planner on every run — the facts these describe can change day to day.
+    # `due_on` is handled separately because a human may have overridden it (see below).
+    _ACTION_PLANNER_FIELDS = (
+        "title", "reason", "hard_deadline", "urgency", "infeasible", "assigned_to", "ref_id",
+    )
+
+    def _action_update(self, action: dict) -> list[dict]:
+        """The aggregation-pipeline update for one planned action. See `upsert_actions`."""
+        now = _utc_now()
+        sets: dict = {k: action.get(k) for k in self._ACTION_PLANNER_FIELDS}
+        sets.update({
+            # Identity — constant for a given dedupe_key, cheap to keep re-asserting.
+            "organization_id": action["organization_id"],
+            "kind": action["kind"],
+            "opportunity_id": action.get("opportunity_id"),
+            "contact_email": action.get("contact_email"),
+            "updated_at": now,
+            # Insert-only, emulated: on an upsert-insert the field does not exist yet, so
+            # $ifNull yields the default; on a re-run it yields whatever is already there.
+            # The one exception is an AUTO-completed row: the planner closed it because the
+            # state said the step was satisfied, so if the planner is asking for it again the
+            # state has regressed and it belongs back on the list.
+            "status": {"$cond": [
+                {"$and": [{"$eq": ["$status", "done"]}, {"$eq": ["$auto_completed", True]}]},
+                "open",
+                {"$ifNull": ["$status", "open"]},
+            ]},
+            "created_at": {"$ifNull": ["$created_at", now]},
+            "due_on": {
+                "$cond": [{"$eq": ["$user_scheduled", True]}, "$due_on", action["due_on"]],
+            },
+        })
+        return [{"$set": sets}]
+
+    def upsert_actions(self, actions: list[dict]) -> int:
+        """Write MANY planned actions in ONE round trip.
+
+        The planner writes a couple of hundred of these per org per run. Issued one at a time
+        against a remote database that was ~0.6 s each — over two minutes for a job whose
+        actual work is milliseconds. A single `bulk_write` makes the whole batch one trip.
+
+        `ordered=False` so one bad row cannot abandon the rest of the day's plan.
+        """
+        if not actions:
+            return 0
+        ops = [
+            UpdateOne({"dedupe_key": a["dedupe_key"]}, self._action_update(a), upsert=True)
+            for a in actions
+        ]
+        res = self.actions.bulk_write(ops, ordered=False)
+        return res.upserted_count + res.modified_count
+
+    def upsert_action(self, action: dict) -> None:
+        """Write one planned action, idempotently on `dedupe_key`.
+
+        The planner runs daily AND after every pipeline event, so this is called many times
+        for the same action. Two rules keep that safe:
+
+        * **A human's close-out is final; the system's is not.** A `dismissed` action, or one
+          a person ticked off by hand, stays closed forever — the planner cannot nag someone
+          about a decision they already made. But one the planner itself auto-closed reopens
+          if the state that satisfied it regresses. That is what stops a second capture
+          failure, after a first was fixed, from vanishing silently.
+        * **`due_on` is not overwritten once a human has scheduled it.** Snoozing sets
+          `user_scheduled`; after that the day belongs to the rep, not the ladder. Urgency and
+          the reason line still refresh, because those are facts about the deadline and they
+          genuinely change.
+
+        A pipeline update (rather than $set/$setOnInsert) because that conditional on `due_on`
+        cannot be expressed in a plain update document.
+        """
+        self.actions.update_one(
+            {"dedupe_key": action["dedupe_key"]}, self._action_update(action), upsert=True,
+        )
+
+    @staticmethod
+    def _action_visibility(viewer_id: str | None, scope: str) -> dict:
+        """Whose actions. `scope="mine"` applies to admins too — "*your* tasks for today" is
+        the whole premise, so an admin has to ASK for the org-wide list."""
+        if scope == "org" or not viewer_id:
+            return {}
+        return {"$or": [
+            {"assigned_to": viewer_id},            # array contains the viewer
+            {"assigned_to": {"$in": [None, []]}},  # explicitly unassigned
+            {"assigned_to": {"$exists": False}},
+        ]}
+
+    def list_actions(
+        self, organization_id: str, *, viewer_id: str | None = None, scope: str = "mine",
+        horizon_days: int = 7,
+    ) -> list[dict]:
+        """Every OPEN action due within `horizon_days` (plus everything overdue).
+
+        No status filter beyond `open`: done/dismissed/expired rows stay in the collection as
+        history, they just never come back to the list.
+        """
+        cutoff = (_utc_today() + timedelta(days=int(horizon_days))).isoformat()
+        q: dict = {
+            "organization_id": organization_id,
+            "status": "open",
+            "due_on": {"$lte": cutoff},  # ISO dates sort lexicographically = chronologically
+        }
+        q.update(self._action_visibility(viewer_id, scope))
+        # batch_size, because the driver's default first batch is 101 documents and a real
+        # day's plan is comfortably more than that: at 113 rows the cursor made a second
+        # round trip for the last twelve. Against a remote cluster one round trip is ~1.3s,
+        # so that tail cost more than the query — measured 2.3s -> 1.0s for the same 113 rows.
+        # Actions are ~540 bytes each; a thousand of them still fit one batch easily.
+        return [_serialize(d) for d in self.actions.find(q).batch_size(_ONE_BATCH)]
+
+    def set_action_status(
+        self, action_id: str, organization_id: str, status: str, *, snooze_days: int = 1,
+    ) -> dict | None:
+        """Human close-out: done / dismissed / snoozed. Org-scoped. Returns the updated row.
+
+        Snoozing stamps `user_scheduled` so the next planner run leaves the new day alone —
+        without it the ladder would recompute `due_on` and drag the card straight back to
+        today, which would make the snooze button a lie.
+        """
+        fields: dict = {"status": status, "updated_at": _utc_now()}
+        if status == "snoozed":
+            day = (_utc_today() + timedelta(days=max(1, int(snooze_days)))).isoformat()
+            fields.update({"snoozed_to": day, "due_on": day, "user_scheduled": True})
+        elif status in ("done", "dismissed"):
+            fields.update({"completed_at": _utc_now(), "auto_completed": False})
+        try:
+            doc = self.actions.find_one_and_update(
+                {"_id": ObjectId(action_id), "organization_id": organization_id},
+                {"$set": fields},
+                return_document=ReturnDocument.AFTER,
+            )
+        except Exception:  # noqa: BLE001 — malformed id
+            return None
+        return _serialize(doc) if doc else None
+
+    def close_actions(
+        self, organization_id: str, opportunity_ids: list[str], *, status: str = "done",
+        kinds: list[str] | None = None,
+    ) -> int:
+        """Close open actions across MANY pursuits at once — the planner's auto-completion
+        and expiry path.
+
+        `status="done"` with `auto_completed=True` is what makes the list honest: approve
+        capture from the Pipeline and the matching card disappears on its own, so nobody ever
+        ticks the same thing off twice. `status="expired"` is the pursuit going terminal, kept
+        distinct from `dismissed` so "he decided not to" and "it stopped mattering" never look
+        the same in the history.
+
+        Takes a LIST because the planner sweeps a whole org: one update_many per outcome
+        rather than one per opportunity, which on a few thousand pursuits is the difference
+        between nine writes and several thousand.
+        """
+        if not opportunity_ids:
+            return 0
+        q: dict = {
+            "organization_id": organization_id,
+            "opportunity_id": {"$in": opportunity_ids},
+            "status": {"$in": ["open", "snoozed"]},
+        }
+        if kinds is not None:
+            if not kinds:
+                return 0
+            q["kind"] = {"$in": kinds}
+        res = self.actions.update_many(q, {"$set": {
+            "status": status, "completed_at": _utc_now(),
+            "auto_completed": status == "done", "updated_at": _utc_now(),
+        }})
+        return res.modified_count
+
+    def closed_action_kinds(self, organization_id: str) -> dict[str, set[str]]:
+        """opportunity_id -> the steps a HUMAN has closed on it (dismissed, or ticked off by
+        hand). One query for the whole org; the planner needs it for every pursuit.
+
+        The ladder skips these. Without it, a step with no state field of its own to check
+        (`review_docs`) would be recreated forever and the pursuit could never reach `submit`;
+        and dismissing a call the rep has decided not to make would just bring it back
+        tomorrow. Auto-completed rows are deliberately NOT here — those are the system's own
+        bookkeeping, and for them the state predicate is the truth.
+        """
+        out: dict[str, set[str]] = {}
+        cursor = self.actions.find(
+            {"organization_id": organization_id,
+             "$or": [{"status": "dismissed"},
+                     {"status": "done", "auto_completed": {"$ne": True}}]},
+            {"kind": 1, "opportunity_id": 1},
+        )
+        for d in cursor:
+            if d.get("opportunity_id"):
+                out.setdefault(d["opportunity_id"], set()).add(d["kind"])
+        return out
+
+    def calls_by_opportunity(self, opportunity_ids: list[str]) -> dict[str, list[dict]]:
+        """All calls for many pursuits, grouped — one query instead of N."""
+        out: dict[str, list[dict]] = {}
+        if not opportunity_ids:
+            return out
+        for d in self.calls.find({"opportunity_id": {"$in": opportunity_ids}}):
+            out.setdefault(d["opportunity_id"], []).append(_serialize(d))
+        return out
+
+    def document_counts(self, opportunity_ids: list[str]) -> dict[str, int]:
+        """How many documents each pursuit has. A count, not the documents — the planner only
+        needs to know whether capture produced anything to review."""
+        out: dict[str, int] = {}
+        if not opportunity_ids:
+            return out
+        for d in self.documents.aggregate([
+            {"$match": {"opportunity_id": {"$in": opportunity_ids}}},
+            {"$group": {"_id": "$opportunity_id", "n": {"$sum": 1}}},
+        ]):
+            out[d["_id"]] = d["n"]
+        return out
+
+    def mark_capture_reviewed(self, opportunity_id: str) -> None:
+        """A human has looked at the capture documents. Satisfies the `review_docs` step and
+        unblocks `submit` — without this the ladder would stall there."""
+        self.opps.update_one(
+            {"_id": ObjectId(opportunity_id)}, {"$set": {"capture_reviewed_at": _utc_now()}}
+        )
+
+    def unsnooze_due_actions(self, organization_id: str) -> int:
+        """Snoozed actions whose day has arrived come back onto the list."""
+        res = self.actions.update_many(
+            {"organization_id": organization_id, "status": "snoozed",
+             "snoozed_to": {"$lte": _utc_today().isoformat()}},
+            {"$set": {"status": "open", "updated_at": _utc_now()}},
+        )
+        return res.modified_count
 
 
 _store: CRMStore | None = None

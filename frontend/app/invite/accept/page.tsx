@@ -145,7 +145,7 @@ function AcceptInvitationContent() {
         <div style={styles.shell}>
           <div style={styles.brand}>
             <div className="word" style={styles.word}>
-              Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
+              Collecct<span style={{ color: 'var(--bid-ink)' }}>.</span>
             </div>
           </div>
           <div style={styles.card}>
@@ -163,7 +163,7 @@ function AcceptInvitationContent() {
         <div style={styles.shell}>
           <div style={styles.brand}>
             <div className="word" style={styles.word}>
-              Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
+              Collecct<span style={{ color: 'var(--bid-ink)' }}>.</span>
             </div>
           </div>
           <div style={styles.card}>
@@ -194,7 +194,7 @@ function AcceptInvitationContent() {
       <div style={styles.shell}>
         <div style={styles.brand}>
           <div className="word" style={styles.word}>
-            Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
+            Collecct<span style={{ color: 'var(--bid-ink)' }}>.</span>
           </div>
         </div>
 
@@ -436,7 +436,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '3px 9px',
     borderRadius: 999,
     background: 'var(--accent-soft)',
-    color: 'var(--accent)',
+    color: 'var(--bid-ink)',
   },
   expires: {
     marginTop: 4,
@@ -488,7 +488,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 9,
     padding: '10px 14px',
     fontSize: 12.5,
-    color: 'var(--accent)',
+    color: 'var(--bid-ink)',
     lineHeight: 1.5,
   },
   submit: {
@@ -509,5 +509,5 @@ const styles: Record<string, React.CSSProperties> = {
   dividerText: { fontSize: 11.5, color: 'var(--faint)', letterSpacing: '0.03em' },
   muted: { fontSize: 11.5, color: 'var(--faint)', lineHeight: 1.5 },
   footer: { marginTop: 20, textAlign: 'center', fontSize: 13, color: 'var(--muted)' },
-  linkStrong: { color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 },
+  linkStrong: { color: 'var(--bid-ink)', textDecoration: 'none', fontWeight: 600 },
 };

@@ -13,6 +13,7 @@ import { queryOptions } from "@tanstack/react-query";
 
 import {
   fetchBids,
+  fetchCallPlan,
   fetchContactGraph,
   fetchFacets,
   fetchOpportunity,
@@ -21,8 +22,11 @@ import {
   fetchOpportunitySharePointFiles,
   fetchPostedDates,
   fetchSharePointGraph,
+  fetchTodayPlan,
+  type CallPlanItem,
   type OpportunityPage,
   type PipelineParams,
+  type TodayPlan,
 } from "@/lib/data";
 import { invitationsApi } from "@/lib/api/invitations";
 import { organizationsApi } from "@/lib/api/organizations";
@@ -62,10 +66,51 @@ export const queryKeys = {
   suggestions: (p: { offset?: number; limit?: number }) => ["suggestions", p] as const,
   agentEvents: (subjectId: string, limit: number) => ["agent-events", subjectId, limit] as const,
   queueHealth: ["queue-health"] as const,
+  callPlan: ["call-plan"] as const,
+  todayPlan: (scope: "mine" | "org") => ["actions", "today", scope] as const,
   contactGraph: ["contact-graph"] as const,
   sharePointGraph: ["sharepoint-graph"] as const,
   organization: ["organization"] as const,
 } as const;
+
+// ---- call plan ---------------------------------------------------------------------
+
+/**
+ * The consolidated BD call sheet.
+ *
+ * This used to be a bare `useState` + `useEffect` + fetch inside CallPlanView, which meant
+ * every visit to the tab remounted the component and refetched from zero behind a blank
+ * loading state — five round trips across six navigations, measured. As a query it is cached
+ * and de-duplicated like everything else, so returning to the tab is instant and the refresh
+ * happens in the background.
+ *
+ * `placeholderData: previous` for the same reason the pipeline list uses it: a background
+ * refetch must never blank a list the rep is reading.
+ */
+export function callPlanQuery() {
+  return queryOptions({
+    queryKey: queryKeys.callPlan,
+    queryFn: fetchCallPlan,
+    staleTime: 30_000,
+    placeholderData: (previous: CallPlanItem[] | undefined) => previous,
+  });
+}
+
+// ---- today -------------------------------------------------------------------------
+
+/**
+ * The landing view's whole payload: overdue, due today, and a peek at the week.
+ *
+ * `placeholderData: previous` so toggling Mine/Everyone swaps the list in place instead of
+ * blanking the page — the same rule the pipeline list uses.
+ */
+export function todayPlanQuery(scope: "mine" | "org" = "mine") {
+  return queryOptions({
+    queryKey: queryKeys.todayPlan(scope),
+    queryFn: () => fetchTodayPlan(scope),
+    placeholderData: (previous: TodayPlan | undefined) => previous,
+  });
+}
 
 // ---- pipeline ----------------------------------------------------------------------
 

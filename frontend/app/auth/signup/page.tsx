@@ -48,7 +48,7 @@ export default function SignupPage() {
         <div style={styles.shell}>
           <div style={styles.brand}>
             <div className="word" style={styles.word}>
-              Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
+              Collecct<span style={{ color: 'var(--bid-ink)' }}>.</span>
             </div>
           </div>
           <div style={styles.card}>
@@ -76,7 +76,7 @@ export default function SignupPage() {
       <div style={styles.shell}>
         <div style={styles.brand}>
           <div className="word" style={styles.word}>
-            Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
+            Collecct<span style={{ color: 'var(--bid-ink)' }}>.</span>
           </div>
           <div style={styles.brandSub}>Government BD, captured.</div>
         </div>
@@ -284,7 +284,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 9,
     padding: '10px 14px',
     fontSize: 12.5,
-    color: 'var(--accent)',
+    color: 'var(--bid-ink)',
   },
   submit: {
     width: '100%',
@@ -296,5 +296,5 @@ const styles: Record<string, React.CSSProperties> = {
   },
   muted: { marginTop: 14, fontSize: 11.5, color: 'var(--faint)', textAlign: 'center', lineHeight: 1.5 },
   footer: { marginTop: 18, textAlign: 'center', fontSize: 13, color: 'var(--muted)' },
-  linkStrong: { color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 },
+  linkStrong: { color: 'var(--bid-ink)', textDecoration: 'none', fontWeight: 600 },
 };

@@ -87,6 +87,16 @@ _INDEXES: list[tuple[str, list, dict]] = [
     ("mail_triage", [("employee_email", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)], {}),
     # mailbox sync bookmark: one row per mailbox; the lookup IS the uniqueness key.
     ("mailbox_sync", [("owner_email", ASCENDING), ("organization_id", ASCENDING)], {"unique": True}),
+    # daily action plan. `dedupe_key` unique is the whole idempotency contract — the planner
+    # runs daily AND after every pipeline event, and this is what stops it creating a second
+    # "Approve capture on GITSS-A". The worklist index serves the ONE query the Today view
+    # makes (org + who + open + due within the horizon); the opp index serves the planner's
+    # auto-complete / expire sweeps, which are per-pursuit.
+    ("actions", [("dedupe_key", ASCENDING)], {"unique": True}),
+    ("actions", [("organization_id", ASCENDING), ("status", ASCENDING), ("due_on", ASCENDING),
+                 ("assigned_to", ASCENDING)], {}),
+    ("actions", [("organization_id", ASCENDING), ("opportunity_id", ASCENDING),
+                 ("status", ASCENDING)], {}),
 
     # ---- agent infrastructure ------------------------------------------------------
     # contact facts: one row per distinct claim (unique); the per-contact read split by

@@ -46,6 +46,12 @@
 
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+
+  /* The accent as TEXT. `text-primary` paints #006b4f, which measures 2.5:1 on the dark card
+     and fails even the 3:1 large-text floor — so a green LABEL needs a different value from a
+     green FILL, which carries white on top and is fine as-is. Hence a separate token rather
+     than a per-theme --primary: one is a surface colour, the other is ink. */
+  --color-bid-ink: var(--bid-ink);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
 

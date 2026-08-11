@@ -59,7 +59,7 @@ function MicrosoftCallbackContent() {
       <div style={styles.shell}>
         <div style={styles.brand}>
           <div className="word" style={styles.word}>
-            Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
+            Collecct<span style={{ color: 'var(--bid-ink)' }}>.</span>
           </div>
         </div>
 
@@ -141,5 +141,5 @@ const styles: Record<string, React.CSSProperties> = {
   },
   subtitle: { marginTop: 6, fontSize: 13.5, color: 'var(--muted)', lineHeight: 1.5, textAlign: 'center' },
   footer: { marginTop: 22, textAlign: 'center', fontSize: 13, color: 'var(--muted)' },
-  linkStrong: { color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 },
+  linkStrong: { color: 'var(--bid-ink)', textDecoration: 'none', fontWeight: 600 },
 };

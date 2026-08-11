@@ -90,6 +90,16 @@ export function useCollecctCache() {
       suggestions: (settle?: Settle) =>
         run([["suggestions"]], [["contact-facts"]], settle),
 
+      /**
+       * The daily action plan changed — a card was ticked off, snoozed or dismissed.
+       *
+       * Note that `opportunity()` and `opportunities()` below do NOT touch this. That is
+       * deliberate: an action closes when the PLANNER next runs and sees the state, not the
+       * instant a decision is made in the Pipeline, so invalidating here would only refetch
+       * a list that has not changed yet. The Today view's own mutations invalidate this.
+       */
+      actions: () => run([["actions"]], []),
+
       /** An agent run finished against one subject — refresh just its trail. */
       agentEvents: (subjectId: string) =>
         run([["agent-events", subjectId]], [queryKeys.queueHealth]),

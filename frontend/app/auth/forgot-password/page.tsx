@@ -29,7 +29,7 @@ export default function ForgotPasswordPage() {
       <div style={styles.shell}>
         <div style={styles.brand}>
           <div className="word" style={styles.word}>
-            Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
+            Collecct<span style={{ color: 'var(--bid-ink)' }}>.</span>
           </div>
         </div>
 
@@ -173,7 +173,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 9,
     padding: '10px 14px',
     fontSize: 12.5,
-    color: 'var(--accent)',
+    color: 'var(--bid-ink)',
   },
   submit: {
     width: '100%',
@@ -184,5 +184,5 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 4,
   },
   footer: { marginTop: 22, textAlign: 'center', fontSize: 13, color: 'var(--muted)' },
-  linkStrong: { color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 },
+  linkStrong: { color: 'var(--bid-ink)', textDecoration: 'none', fontWeight: 600 },
 };

@@ -45,7 +45,7 @@ const STATE_LABEL: Record<TrailState, string> = {
 const STATE_TONE: Record<TrailState, string> = {
   loading: "text-muted-foreground",
   empty: "text-muted-foreground",
-  working: "text-primary",
+  working: "text-bid-ink",
   ended: "text-muted-foreground",
   // Losing the connection is a warning; the endpoint refusing is an error. Only the second
   // one is somebody's fault.

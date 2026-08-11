@@ -44,7 +44,7 @@ export default function LoginPage() {
       <div style={styles.shell}>
         <div style={styles.brand}>
           <div className="word" style={styles.word}>
-            Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
+            Collecct<span style={{ color: 'var(--bid-ink)' }}>.</span>
           </div>
           <div style={styles.brandSub}>Government BD, captured.</div>
         </div>
@@ -226,9 +226,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     color: 'var(--muted)',
   },
-  link: { color: 'var(--accent)', textDecoration: 'none', fontSize: 12.5 },
+  link: { color: 'var(--bid-ink)', textDecoration: 'none', fontSize: 12.5 },
   linkStrong: {
-    color: 'var(--accent)',
+    color: 'var(--bid-ink)',
     textDecoration: 'none',
     fontWeight: 600,
   },

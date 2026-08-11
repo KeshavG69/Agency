@@ -5,6 +5,8 @@ import type { User } from "@/lib/types";
 import type { ViewKey } from "@/lib/stores/uiStore";
 
 const NAV: { key: ViewKey; label: string; admin?: boolean }[] = [
+  // First, and the landing view: what you have to DO. Dashboard stays for the numbers.
+  { key: "today", label: "Today" },
   { key: "dashboard", label: "Dashboard" },
   { key: "pipeline", label: "Pipeline" },
   { key: "callplan", label: "Call Plan" },
