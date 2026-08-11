@@ -120,11 +120,29 @@ const activityChip = (o: Opportunity): { label: string; cls: string } | null => 
   return null;
 };
 
+/** Priority band as a FILL — the table's dot. */
 const priColor = (p?: number) =>
   p == null
     ? "var(--line-strong)"
     : p >= 80
       ? "var(--bid)"
+      : p >= 50
+        ? "var(--watch)"
+        : "var(--nobid)";
+
+/**
+ * The same bands as INK.
+ *
+ * A fill and a label cannot share a colour here: `--bid` (#006b4f) carries white on top
+ * perfectly well as a dot, but as lettering on the dark sheet it measures 2.5:1 — below
+ * even the 3:1 large-text floor. The score in the detail header was painted with the fill
+ * value and was, at a high priority, the least readable figure on the panel.
+ */
+const priInk = (p?: number) =>
+  p == null
+    ? "var(--muted)"
+    : p >= 80
+      ? "var(--bid-ink)"
       : p >= 50
         ? "var(--watch)"
         : "var(--nobid)";
@@ -1832,15 +1850,23 @@ function Detail({
                   <span>{opp.set_aside}</span>
                 </>
               )}
-              <span className="sep">·</span>
-              <span className={`badge ${badgeClass(opp.bid_decision)}`}>
-                {opp.bid_decision ?? "Unanalyzed"}
-              </span>
+              {/* The verdict is stated ONCE. When there is one, the Decision control below
+                  says it and lets you change it, so repeating it as a badge here was the
+                  same word twice — and its separator was printed unconditionally, leaving a
+                  stray "·" floating on its own line whenever the fields above it were
+                  absent. The badge now appears only for the state the control cannot
+                  express: no verdict yet. */}
+              {!opp.bid_decision && (
+                <>
+                  <span className="sep">·</span>
+                  <span className="badge none">Unanalyzed</span>
+                </>
+              )}
             </div>
           </div>
           {opp.priority_score != null && (
             <div className="verdict-card">
-              <div className="vp" style={{ color: priColor(opp.priority_score) }}>
+              <div className="vp" style={{ color: priInk(opp.priority_score) }}>
                 {opp.priority_score}
               </div>
               <div className="vl">Priority</div>
