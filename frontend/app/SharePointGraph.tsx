@@ -9,7 +9,7 @@ import ForceGraph, { type NodeVisual } from "./ForceGraph";
 
 const TYPE: Record<string, { color: string; r: number; square?: boolean }> = {
   site: { color: "var(--ink)", r: 9, square: true },
-  library: { color: "var(--accent)", r: 7 },
+  library: { color: "var(--bid-ink)", r: 7 },
   list: { color: "var(--watch)", r: 7 },
   folder: { color: "var(--faint)", r: 5 },
   file: { color: "var(--line-strong)", r: 4 },
@@ -34,7 +34,7 @@ const card = (n: SPNode) => (
     {n.path && <div className="gc-row mono">{n.path}</div>}
     {n.web_url && (
       <div style={{ marginTop: 8 }}>
-        <a href={n.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontSize: 12.5 }}>
+        <a href={n.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--bid-ink)", fontSize: 12.5 }}>
           Open in SharePoint ↗
         </a>
       </div>
@@ -111,7 +111,7 @@ function SPList({ nodes }: { nodes: SPNode[] }) {
                 <td style={{ textAlign: "right" }}>{n.item_count ?? "—"}</td>
                 <td>
                   {n.web_url ? (
-                    <a href={n.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
+                    <a href={n.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--bid-ink)" }}>
                       Open ↗
                     </a>
                   ) : (
@@ -213,7 +213,7 @@ function SPBySite({ nodes, edges }: { nodes: SPNode[]; edges: { source: string; 
                       {m.type}
                     </span>
                     {m.web_url && (
-                      <a href={m.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
+                      <a href={m.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--bid-ink)" }}>
                         Open ↗
                       </a>
                     )}
@@ -232,7 +232,17 @@ function SPBySite({ nodes, edges }: { nodes: SPNode[]; edges: { source: string; 
 // past this we stop watching rather than polling into the void.
 const WATCH_MS = 5 * 60_000;
 
-export default function SharePointGraph() {
+export default function SharePointGraph({
+  /** Whether SharePoint is connected, and how to connect it — so the empty state can carry
+      its own way forward instead of naming an action that lives 700px above it. */
+  connected,
+  onConnect,
+  connecting,
+}: {
+  connected?: boolean;
+  onConnect?: () => void;
+  connecting?: boolean;
+} = {}) {
   const sharePointRefresh = useUiStore((s) => s.sharePointRefresh);
   const [view, setView] = useState<ViewMode>("graph");
 
@@ -266,8 +276,18 @@ export default function SharePointGraph() {
   if (data.nodes.length === 0)
     return (
       <div className="graph-empty">
-        <div className="ge-t">No SharePoint structure yet</div>
-        Connect SharePoint and run the structure sync.
+        <div className="ge-t">
+          {connected ? "Nothing crawled yet" : "Your library isn't connected"}
+        </div>
+        {connected
+          ? "SharePoint is connected — run the structure sync to map your sites, folders and who can read them."
+          : "Connect SharePoint and Collecct will map your sites, folders and who can read them, so the agents can ground on your own documents."}
+        {!connected && onConnect && (
+          <button className="btn primary ge-action" onClick={onConnect} disabled={connecting}>
+            {connecting && <span className="spin" />}
+            {connecting ? "Opening Microsoft…" : "Connect SharePoint"}
+          </button>
+        )}
       </div>
     );
 

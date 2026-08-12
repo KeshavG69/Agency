@@ -49,11 +49,11 @@ export default function BidSidebar({
                 className={`bb-row ${o.id === selectedId ? "sel" : ""}`}
                 onClick={() => onOpen(o.id)}
               >
-                <div className="bb-main">
-                  <div className="bb-name">{o.title}</div>
-                  <div className="bb-sub">{o.agency ?? "—"}</div>
+                <div className="bb-name">{o.title}</div>
+                <div className="bb-meta">
+                  <span className="bb-agency">{o.agency ?? "—"}</span>
+                  <span className={`bb-due ${due.tone}`}>{due.text}</span>
                 </div>
-                <span className={`due-chip ${due.tone}`}>{due.text}</span>
               </button>
             );
           })

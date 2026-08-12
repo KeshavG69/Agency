@@ -301,22 +301,37 @@ export async function fetchOpportunity(id: string): Promise<Opportunity> {
 // rest from its sidebar with no error anywhere. Looping is both correct and bounded: it
 // stops as soon as a short page comes back.
 export async function fetchBids(): Promise<Opportunity[]> {
-  const PAGE_SIZE = 100;
+  const PAGE_SIZE = 100; // the server's hard ceiling — see MAX_PAGE_SIZE in crm_store
   const MAX_PAGES = 20; // 2,000 active bids is far beyond real; a guard against a bad total
-  const all: Opportunity[] = [];
 
-  for (let i = 0; i < MAX_PAGES; i++) {
-    const page = await fetchOpportunityPage({
-      status: "Bid",
-      offset: all.length,
-      limit: PAGE_SIZE,
-      // The sidebar never renders the status pills, so skip computing them per page.
-      withCounts: false,
-    });
-    all.push(...page.items);
-    if (page.items.length < PAGE_SIZE || all.length >= page.total) break;
-  }
-  return all;
+  // ONE round trip to learn the size, then the remainder CONCURRENTLY.
+  //
+  // This used to walk the pages in a `for await` loop, so an org with 272 Bids paid three
+  // round trips end-to-end before the Dashboard could draw anything. Against a cluster
+  // ~400ms away that is over a second of pure waiting for pages the browser could have
+  // asked for at the same time. The first page still has to come back alone, because its
+  // `total` is what says how many more there are.
+  const first = await fetchOpportunityPage({
+    status: "Bid",
+    offset: 0,
+    limit: PAGE_SIZE,
+    // The sidebar never renders the status pills, so skip computing them per page.
+    withCounts: false,
+  });
+  if (first.items.length < PAGE_SIZE || first.items.length >= first.total) return first.items;
+
+  const pages = Math.min(Math.ceil(first.total / PAGE_SIZE), MAX_PAGES);
+  const rest = await Promise.all(
+    Array.from({ length: pages - 1 }, (_, i) =>
+      fetchOpportunityPage({
+        status: "Bid",
+        offset: (i + 1) * PAGE_SIZE,
+        limit: PAGE_SIZE,
+        withCounts: false,
+      }),
+    ),
+  );
+  return [...first.items, ...rest.flatMap((p) => p.items)];
 }
 
 // Trigger an on-demand SAM.gov pull for this org (NAICS-filtered, still-open notices).
@@ -615,6 +630,80 @@ export async function updateOpportunityContacts(
 export async function getDocUrl(documentId: string): Promise<string> {
   const { data } = await apiClient.get(`/api/documents/${documentId}/url`);
   return data.url;
+}
+
+// ---- Today (the daily action plan) ----
+// The Pipeline shows records; this shows the VERB. One row per thing a human owes a pursuit,
+// scheduled backwards from its response deadline — so a bid closing in three days puts its
+// whole remaining chain on today, and one closing in a month contributes only its first step.
+// See docs/daily-action-plan.md.
+export type ActionKind =
+  | "analyze"
+  | "decide"
+  | "approve_capture"
+  | "retry_capture"
+  | "call"
+  | "review_docs"
+  | "submit"
+  | "reply_mail";
+export type ActionUrgency = "critical" | "high" | "normal";
+
+export interface ActionItem {
+  id: string;
+  kind: ActionKind;
+  title: string; // imperative, rendered server-side: "Call Donna Scandaliato at U.S. COAST GUARD"
+  reason: string; // why this, why now
+  due_on: string; // YYYY-MM-DD (UTC)
+  hard_deadline?: string | null; // the pursuit's response deadline
+  // Days to that deadline, computed server-side against the SAME UTC day the planner
+  // scheduled against. Not derived in the browser: a rep whose local date has rolled over
+  // would otherwise see "Overdue" on a card whose own reason line says "closes today".
+  closes_in_days?: number | null;
+  urgency: ActionUrgency;
+  infeasible?: boolean; // not enough runway left — leads with Dismiss, not Done
+  opportunity_id?: string | null;
+  contact_email?: string | null;
+  ref_id?: string | null; // mail-triage card id for `reply_mail`
+  // Folded on server-side so a card renders without a second fetch.
+  opportunity_title?: string | null;
+  agency?: string | null; // shortened for a headline; `agency_full` keeps the breadcrumb
+  agency_full?: string | null;
+  solicitation_number?: string | null;
+  priority_score?: number | null;
+  bid_decision?: BidDecision | null;
+  risk_level?: RiskLevel | null;
+  link?: string | null;
+}
+
+export interface TodayPlan {
+  date: string; // the UTC day the buckets were computed against
+  scope: "mine" | "org";
+  overdue: ActionItem[];
+  today: ActionItem[];
+  upcoming: { day: string; count: number }[]; // collapsed on purpose — counts, not cards
+  counts: { overdue: number; today: number; upcoming: number; critical: number };
+}
+
+export async function fetchTodayPlan(scope: "mine" | "org" = "mine"): Promise<TodayPlan> {
+  const { data } = await apiClient.get("/api/actions/today", { params: { scope } });
+  return data;
+}
+
+/** Tick it off / push it to a later day / decide not to do it. */
+export async function closeAction(
+  actionId: string,
+  outcome: "done" | "dismiss",
+): Promise<void> {
+  await apiClient.post(`/api/actions/${actionId}/${outcome}`);
+}
+
+export async function snoozeAction(actionId: string, days: number): Promise<void> {
+  await apiClient.post(`/api/actions/${actionId}/snooze`, { days });
+}
+
+/** Rebuild the plan now rather than waiting for the daily run. */
+export async function replanActions(): Promise<void> {
+  await apiClient.post("/api/actions/replan");
 }
 
 // ---- Call plan (consolidated BD call sheet across the pipeline) ----

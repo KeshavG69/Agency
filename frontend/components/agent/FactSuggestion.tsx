@@ -162,7 +162,7 @@ export function FactSuggestion({ suggestion, onDecided, className }: FactSuggest
           aria-label={`Accept ${label} “${suggestion.value}”`}
           onClick={() => decide.mutate(true)}
           disabled={busy}
-          className="grid size-5 place-items-center rounded-sm border text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-50"
+          className="grid size-5 place-items-center rounded-sm border text-muted-foreground transition-colors hover:border-primary hover:text-bid-ink disabled:opacity-50"
         >
           <span aria-hidden>✓</span>
         </button>

@@ -75,6 +75,12 @@ def _ingest(organization_id: str, opps: list, analyze: bool = True) -> dict:
     if analyze and (created or updated):
         from tasks.analyst_tasks import run_analyst_batch  # lazy: avoid task import cycle
         run_analyst_batch.delay(organization_id)
+    # Fresh notices are unread pursuits, which is an "analyse this" task on somebody's day.
+    # Fired even when `analyze` is off (the hand-picked flow) — that is precisely the case
+    # where a human owes them a read, so the card is the whole point.
+    if created:
+        from tasks.action_plan_tasks import request_replan  # lazy: avoid task import cycle
+        request_replan(organization_id)
     logger.info(
         "SAM Radar org %s: matched=%d created=%d updated=%d analyze=%s",
         organization_id, len(opps), created, updated, analyze,

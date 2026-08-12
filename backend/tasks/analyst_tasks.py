@@ -60,6 +60,12 @@ def analyze_opportunity_task(self, opp: dict) -> dict:
     )
 
     _schedule_recheck(opp, verdict)
+    # A verdict is what turns an opportunity into somebody's task, so refresh the day's plan.
+    # Debounced org-wide, so a 300-opportunity batch buys exactly one sweep, not 300.
+    if opp.get("organization_id"):
+        from tasks.action_plan_tasks import request_replan  # lazy: avoid an import cycle
+
+        request_replan(str(opp["organization_id"]))
     return {"id": opp["id"], "decision": verdict.bid_decision, "priority": verdict.priority_score}
 
 

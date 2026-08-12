@@ -12,6 +12,7 @@ celery_app = Celery(
 )
 
 # Explicitly import task modules so they register (more reliable than autodiscovery).
+import tasks.action_plan_tasks  # noqa: E402,F401
 import tasks.agent_tasks  # noqa: E402,F401
 import tasks.analyst_tasks  # noqa: E402,F401
 import tasks.backfill_tasks  # noqa: E402,F401
@@ -88,5 +89,14 @@ celery_app.conf.beat_schedule = {
     "mail-sweep-daily": {
         "task": "mail_sweep.daily",
         "schedule": crontab(hour=7, minute=0),
+    },
+    # The human to-do list: for every pursuit, what does a person owe it, and on what day —
+    # worked backwards from the response deadline. 12:00 is an hour after the SAM.gov scan,
+    # so the morning's new notices are already ingested and land on the SAME day's list
+    # instead of waiting until tomorrow. Cheap (no model, a few dozen queries per org) and
+    # idempotent, so the event-driven replans below can run as often as they like on top.
+    "action-plan-daily": {
+        "task": "action_plan.daily",
+        "schedule": crontab(hour=12, minute=0),
     },
 }

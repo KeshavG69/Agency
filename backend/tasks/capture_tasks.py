@@ -16,6 +16,17 @@ from client.events_store import record_event
 logger = logging.getLogger(__name__)
 
 
+def _replan(opp: dict) -> None:
+    """Refresh the org's daily action plan — capture finishing (or dying) changes what the
+    pursuit's next step is. Debounced org-wide, and best-effort: never let it break capture."""
+    org = str(opp.get("organization_id") or "")
+    if not org:
+        return
+    from tasks.action_plan_tasks import request_replan  # lazy: avoid an import cycle
+
+    request_replan(org)
+
+
 @celery_app.task(bind=True, name="capture.run", max_retries=2, default_retry_delay=15)
 def capture_task(self, opp: dict, employee_email: str | None = None) -> dict:
     """Run the Capture agent on one opportunity → strategy + deliverable(s), recorded.
@@ -39,6 +50,7 @@ def capture_task(self, opp: dict, employee_email: str | None = None) -> dict:
             # Terminal failure — stamp captured_at so the opp leaves the UI's "Processing"
             # window (capture_approved && !captured_at) instead of sitting there forever.
             crm.mark_capture_failed(opp["id"], str(exc))
+            _replan(opp)  # a dead run owes the rep a "retry capture" card, today
             raise
         raise self.retry(exc=exc)
 
@@ -82,6 +94,7 @@ def capture_task(self, opp: dict, employee_email: str | None = None) -> dict:
         ", ".join(d.doc_type for d in output.deliverables) or "none",
         ok=dropped == 0,
     )
+    _replan(opp)  # capture is done — the next step is now the customer call
     return {"id": opp["id"], "deliverables": [d.doc_type for d in output.deliverables], "created": created}
 
 

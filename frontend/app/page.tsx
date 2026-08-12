@@ -30,7 +30,6 @@ import {
   fetchOpportunitySharePointFiles,
   type SharePointFile,
   type SharePointFilesResponse,
-  fetchCallPlan,
   setCallStatus,
   fetchCollisions,
   type CallPlanItem,
@@ -57,8 +56,6 @@ import {
 } from "@/lib/data";
 import ContactsGraph from "./ContactsGraph";
 import SharePointGraph from "./SharePointGraph";
-import MailTriagePanel from "./MailTriage";
-import { toLocalIso } from "./CalendarStrip";
 import FilePreview from "./FilePreview";
 import AddOpportunityModal from "./AddOpportunityModal";
 import AssignModal from "./AssignModal";
@@ -68,6 +65,8 @@ import TopBar from "./TopBar";
 import { useUiStore, type ViewKey, type TabKey } from "@/lib/stores/uiStore";
 import { useToastStore } from "@/lib/stores/toastStore";
 import CallBriefDialog from "./CallBriefDialog";
+import TodayView from "./TodayView";
+import DashboardView from "./DashboardView";
 import RiskMeter from "./RiskMeter";
 import CallPlanFilters, {
   EMPTY_CALL_FILTERS,
@@ -75,9 +74,9 @@ import CallPlanFilters, {
 } from "./CallPlanFilters";
 import BidSidebar from "./BidSidebar";
 import FilterBar, { type Facets, EMPTY_FACETS, activeFacetCount } from "./FilterBar";
-import { DonutStat, type ChartConfig } from "@/components/dashboard-charts";
 import {
   bidsQuery,
+  callPlanQuery,
   opportunityListQuery,
   opportunityQuery,
   organizationQuery,
@@ -121,11 +120,29 @@ const activityChip = (o: Opportunity): { label: string; cls: string } | null => 
   return null;
 };
 
+/** Priority band as a FILL — the table's dot. */
 const priColor = (p?: number) =>
   p == null
     ? "var(--line-strong)"
     : p >= 80
       ? "var(--bid)"
+      : p >= 50
+        ? "var(--watch)"
+        : "var(--nobid)";
+
+/**
+ * The same bands as INK.
+ *
+ * A fill and a label cannot share a colour here: `--bid` (#006b4f) carries white on top
+ * perfectly well as a dot, but as lettering on the dark sheet it measures 2.5:1 — below
+ * even the 3:1 large-text floor. The score in the detail header was painted with the fill
+ * value and was, at a high priority, the least readable figure on the panel.
+ */
+const priInk = (p?: number) =>
+  p == null
+    ? "var(--muted)"
+    : p >= 80
+      ? "var(--bid-ink)"
       : p >= 50
         ? "var(--watch)"
         : "var(--nobid)";
@@ -138,23 +155,14 @@ const fmtDate = (s?: string | null) => {
 };
 
 
-// Slice colours for the deadline donut. Declared once, at module scope and in a fixed order,
-// because that is what pins a colour to a BUCKET rather than to its rank: a week with no
-// deadlines drops out of the chart without recolouring the buckets that remain.
-// Deadline urgency is ORDINAL, so it gets a sequential teal ramp (dark = this week / urgent
-// → light = later) plus a neutral slate for "no deadline" (off the urgency scale) — not four
-// rainbow hues. Tokens defined in legacy.css so light/dark each get their own steps.
-const DEADLINE_SLICES: ChartConfig = {
-  week: { label: "This week", color: "var(--deadline-week)" },
-  month: { label: "This month", color: "var(--deadline-month)" },
-  later: { label: "Later", color: "var(--deadline-later)" },
-  none: { label: "No deadline", color: "var(--deadline-none)" },
-};
-
 // One shared empty array, so `query.data ?? NO_OPPS` keeps a stable identity while a query
 // is still pending. A fresh `[]` per render would re-trigger every useMemo/useDeferredValue
 // downstream of it on every commit.
 const NO_OPPS: Opportunity[] = [];
+
+// Same stable-identity trick for the call sheet, so `query.data ?? NO_CALLS` does not hand a
+// fresh array to every downstream useMemo on each render.
+const NO_CALLS: CallPlanItem[] = [];
 
 // Pipeline stages shown as the portfolio nav. "All" first.
 const FILTERS: { key: string; label: string; match: (o: Opportunity) => boolean }[] = [
@@ -298,7 +306,17 @@ function Console({ user }: { user: User }) {
   const outlookAccount = outlook.accountId;
   const spConnected = sharepoint.connected;
 
+  // Which providers are connected drives the Connect bars on Contacts and Library and the
+  // Organisation panel — and nothing else. Checked when one of those is opened, once, rather
+  // than on every app start regardless of destination.
+  const view = useUiStore((s) => s.view);
+
+  const wantsConnStatus =
+    view === "contacts" || view === "documents" || view === "org";
+  const connChecked = useRef(false);
   useEffect(() => {
+    if (!wantsConnStatus || connChecked.current) return;
+    connChecked.current = true;
     getConnStatus("outlook")
       .then((s) => setConnection("outlook", s.connected, s.connected_account_id ?? null))
       .catch(() => {}); // offline/unauthenticated — keep whatever the cache already says
@@ -306,7 +324,7 @@ function Console({ user }: { user: User }) {
       .then((s) => setConnection("sharepoint", s.connected, s.connected_account_id ?? null))
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [wantsConnStatus]);
   const [connecting, setConnecting] = useState(false);
   const [spConnecting, setSpConnecting] = useState(false);
   const [resyncing, setResyncing] = useState(false);
@@ -326,8 +344,8 @@ function Console({ user }: { user: User }) {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewContacts, setReviewContacts] = useState<ContactCandidate[]>([]);
-  const view = useUiStore((s) => s.view);
   const setView = useUiStore((s) => s.setView);
+  const setPrepCallFor = useUiStore((s) => s.setPrepCallFor);
   // Every view change goes through here so the swap animates. Sibling tabs imply no
   // hierarchy, so the transition is "lateral": a fade and a 12px rise, no directional slide.
   const navigate = useCallback((v: ViewKey) => switchView(() => setView(v)), []);
@@ -335,6 +353,7 @@ function Console({ user }: { user: User }) {
   // --- server-side pagination state (replaces "load every opp") ---
   const PAGE = 50;
   const [counts, setCounts] = useState<Record<string, number>>({}); // filter-pill counts (server)
+  const [decidingId, setDecidingId] = useState<string | null>(null); // row whose verdict is saving
   const [inFlight, setInFlight] = useState(0); // ingesting+processing (arms the poll)
   const [facetOptions, setFacetOptions] = useState<{ agencies: string[]; naics: string[]; setAsides: string[] }>(
     { agencies: [], naics: [], setAsides: [] },
@@ -387,7 +406,9 @@ function Console({ user }: { user: User }) {
   // THE LOADING RULE (plan 5.2). `placeholderData: previous` lives in opportunityListQuery,
   // so a filter change, a keystroke or the 5s poll keeps the current rows painted and only
   // flips isFetching. Nothing below may gate rendering on isFetching — only on isPending.
-  const listQuery = useQuery(listOptions);
+  // Same gating as the Bid set: a 50-row page of the pipeline is meaningless on Today or
+  // Contacts, and on this deployment it measured ~3.9s of the landing view's wait.
+  const listQuery = useQuery({ ...listOptions, enabled: view === "pipeline" });
 
   const rows = listQuery.data?.items ?? NO_OPPS;
   const total = listQuery.data?.total ?? 0;
@@ -451,24 +472,39 @@ function Console({ user }: { user: User }) {
     }
   }, [params]);
 
-  // The Bid set for the sidebar + dashboard — loaded separately from the paged list, and
-  // independent of the pipeline filters (a Watch filter must not empty the sidebar).
-  const bidsQ = useQuery(bidsQuery());
+  // The Bid set for the Call Plan sidebar + the Dashboard.
+  //
+  // GATED ON THE VIEW, and it matters more than it looks: `fetchBids` pages through the org's
+  // ENTIRE Bid set 100 at a time, so on a few hundred pursuits it is several SEQUENTIAL round
+  // trips — the single most expensive thing this shell can ask for. It used to run on mount
+  // whatever you were looking at, which meant landing on Today (which never reads it) put its
+  // one small request behind this, the pipeline page, the counts, the dates and the facets.
+  // Today is the landing view; it should not wait on the rest of the console's data.
+  const wantsBids = view === "callplan" || view === "dashboard";
+  const bidsQ = useQuery({ ...bidsQuery(), enabled: wantsBids });
   const bidOpps = bidsQ.data ?? NO_OPPS;
+
+  // Counts, calendar dots and facet options all feed the Pipeline's filter bar and nothing
+  // else, so they load with the Pipeline rather than with the app.
+  const onPipeline = view === "pipeline";
 
   // On any filter/search/status/calendar change: refresh counts + dots. The rows themselves
   // need no effect — `params` is part of the query key, so changing it IS the refetch.
   useEffect(() => {
+    if (!onPipeline) return;
     loadCounts();
     loadDates();
-  }, [loadCounts, loadDates]);
+  }, [onPipeline, loadCounts, loadDates]);
 
-  // Facet dropdown options load once on mount.
+  // Facet dropdown options: once, the first time the Pipeline is opened.
+  const facetsLoaded = useRef(false);
   useEffect(() => {
+    if (!onPipeline || facetsLoaded.current) return;
+    facetsLoaded.current = true;
     fetchFacets()
       .then((f) => setFacetOptions({ agencies: f.agencies, naics: f.naics, setAsides: f.set_asides }))
       .catch(() => {});
-  }, []);
+  }, [onPipeline]);
 
   // While anything is mid-flight (ingesting / a capture run), poll so the Ingesting/Processing
   // sections self-empty as workers finish — even for items not on the current page. Armed by the
@@ -513,10 +549,16 @@ function Console({ user }: { user: User }) {
     }
   }, [isAdmin, view]);
 
-  // Admins need the member roster to assign opportunities.
+  // Admins need the member roster to assign opportunities — which happens in the pursuit
+  // detail sheet, reachable from the Pipeline. Fetched once, when the Pipeline is first
+  // opened, rather than on every app start: on Today it was two more requests competing
+  // with the only one that view actually needs.
+  const membersLoaded = useRef(false);
   useEffect(() => {
-    if (isAdmin) organizationsApi.getMembers().then(setMembers).catch(() => {});
-  }, [isAdmin]);
+    if (!isAdmin || view !== "pipeline" || membersLoaded.current) return;
+    membersLoaded.current = true;
+    organizationsApi.getMembers().then(setMembers).catch(() => {});
+  }, [isAdmin, view]);
 
   // Assign an opportunity to members (admin). Optimistic; reverts on failure.
   const onAssign = async (id: string, userIds: string[]) => {
@@ -802,6 +844,19 @@ function Console({ user }: { user: User }) {
     navigate("pipeline");
   };
 
+  // Today's cards open the tool that FINISHES the job, not just the record — a card that
+  // only linked to the pipeline would recreate the "here's the data, you work it out"
+  // problem the view exists to remove.
+  const openOppDocuments = (id: string) => {
+    setSelectedId(id);
+    setTab("documents");
+    navigate("pipeline");
+  };
+  const prepCallFor = (id: string) => {
+    setPrepCallFor(id);
+    navigate("callplan");
+  };
+
   // Refetch the open opp's full record (after a mutation completes server-side).
   const refreshSelected = useCallback(
     (id: string) => {
@@ -826,6 +881,22 @@ function Console({ user }: { user: User }) {
       setError("Couldn't save the decision — reverting.");
       await reload();
       refreshSelected(id);
+    }
+  };
+
+  /**
+   * Set a verdict straight from a list row. Wraps the same optimistic path the detail sheet
+   * uses, so a decision made here and one made there behave identically; the only addition
+   * is a per-row busy id, because a row's buttons sit under the cursor and are trivially
+   * double-clickable while the write is still in flight.
+   */
+  const onQuickDecision = async (id: string, decision: BidDecision) => {
+    if (decidingId) return;
+    setDecidingId(id);
+    try {
+      await onSetDecision(id, decision);
+    } finally {
+      setDecidingId(null);
     }
   };
 
@@ -913,10 +984,28 @@ function Console({ user }: { user: User }) {
   type SortKey = "title" | "agency" | "response_deadline" | "priority_score";
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  /**
+   * Click a column to sort it; click again to reverse; click a third time to drop back to
+   * the server's default order.
+   *
+   * The third state is what let the separate "Sort" dropdown be deleted. That dropdown
+   * offered exactly the four keys these headers already carry, so the surface had two
+   * controls driving one piece of state — and the only thing it could express that a
+   * header could not was "Default". Now the headers own it.
+   */
   const onSort = useCallback((key: SortKey) => {
     setSortKey((prevKey) => {
-      setSortDir((prevDir) => (prevKey === key && prevDir === "asc" ? "desc" : "asc"));
-      return key;
+      if (prevKey !== key) {
+        setSortDir("asc");
+        return key;
+      }
+      let cleared = false;
+      setSortDir((prevDir) => {
+        if (prevDir === "asc") return "desc";
+        cleared = true;
+        return "asc";
+      });
+      return cleared ? null : key;
     });
   }, []);
 
@@ -986,10 +1075,29 @@ function Console({ user }: { user: User }) {
             stay put while the view morphs. Fired by switchView(); an unrouted update
             renders instantly. */}
         <PageTransition>
-      {view === "dashboard" ? (
+      {view === "today" ? (
+        <section className="graph-pane">
+          <TodayView
+            onOpenOpportunity={openOpp}
+            onOpenDocuments={openOppDocuments}
+            onPrepCall={prepCallFor}
+            onOpenMail={() => navigate("dashboard")}
+          />
+        </section>
+      ) : view === "dashboard" ? (
         <section className="graph-pane">
           {/* isPending, never isFetching: the 5s poll must not blank the agenda. */}
-          <DashboardView opps={bidOpps} loading={bidsQ.isPending} onOpen={openOpp} />
+          <DashboardView
+            opps={bidOpps}
+            loading={bidsQ.isPending}
+            onOpen={openOpp}
+            // Every figure on the Dashboard is a population; handing the matching status to
+            // the Pipeline is what turns "1,552 undecided" into somewhere to go.
+            onNavigatePipeline={(status) => {
+              setFilter(status);
+              navigate("pipeline");
+            }}
+          />
         </section>
       ) : view === "callplan" ? (
         <section className="graph-pane">
@@ -1026,7 +1134,11 @@ function Console({ user }: { user: User }) {
               extraAction={{ label: "Select folders", onClick: () => setSpPickerOpen(true) }}
             />
           )}
-          <SharePointGraph />
+          <SharePointGraph
+            connected={spConnected}
+            connecting={spConnecting}
+            onConnect={onConnectSharePoint}
+          />
         </section>
       ) : view === "org" ? (
         <section className="graph-pane">
@@ -1091,30 +1203,6 @@ function Console({ user }: { user: User }) {
               </div>
             );
           })()}
-          <div className="sort-wrap">
-            <label className="sort-label" htmlFor="opp-sort">Sort</label>
-            <select
-              id="opp-sort"
-              className="sort-select"
-              value={sortKey ?? ""}
-              onChange={(e) => setSortKey((e.target.value || null) as SortKey | null)}
-            >
-              <option value="">Default</option>
-              <option value="priority_score">Priority</option>
-              <option value="response_deadline">Deadline</option>
-              <option value="title">Opportunity</option>
-              <option value="agency">Agency</option>
-            </select>
-            <button
-              type="button"
-              className="sort-dir"
-              disabled={!sortKey}
-              title={sortDir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
-              onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-            >
-              {sortDir === "asc" ? "↑" : "↓"}
-            </button>
-          </div>
         </div>
         <div className="rows">
           <table className="opp-table">
@@ -1226,10 +1314,29 @@ function Console({ user }: { user: User }) {
                         )}
                       </td>
                       <td className="col-agency">{o.agency || "—"}</td>
-                      <td className="col-stage">
-                        <span className={`badge ${chip ? chip.cls : badgeClass(o.bid_decision)}`}>
+                      <td className="col-stage" onClick={(e) => e.stopPropagation()}>
+                        <span className={`badge row-badge ${chip ? chip.cls : badgeClass(o.bid_decision)}`}>
                           {chip ? chip.label : o.bid_decision ?? "New"}
                         </span>
+                        {/* An in-flight row (ingesting / capture running) has no verdict to
+                            set yet, so it keeps the plain chip and no controls. */}
+                        {!chip && (
+                          <span className="row-dec">
+                            {(["Bid", "Watch", "No-Bid"] as BidDecision[]).map((d) => (
+                              <button
+                                key={d}
+                                type="button"
+                                className={`rd-btn ${d === o.bid_decision ? `on ${badgeClass(d)}` : ""}`}
+                                disabled={decidingId === o.id}
+                                aria-pressed={d === o.bid_decision}
+                                title={`Mark ${d}`}
+                                onClick={() => onQuickDecision(o.id, d)}
+                              >
+                                {d === "No-Bid" ? "No-bid" : d}
+                              </button>
+                            ))}
+                          </span>
+                        )}
                       </td>
                       <td className={`col-deadline num ${overdue ? "overdue" : ""}`}>
                         {fmtDate(o.response_deadline)}
@@ -1305,17 +1412,18 @@ function Console({ user }: { user: User }) {
           title="Drag to resize"
         />
         <div className="sheet-actions">
+          {/* The sheet now opens wide, so this narrows it for reading beside the list —
+              the inverse of what it used to do. `null` means "the CSS default", which is
+              the wide one. */}
           <button
             className="sheet-btn"
             onClick={() =>
-              setDetailWidth(
-                detailWidth ? null : Math.min(1180, Math.round(window.innerWidth * 0.94)),
-              )
+              setDetailWidth(detailWidth ? null : Math.min(720, Math.round(window.innerWidth * 0.82)))
             }
-            aria-label={detailWidth ? "Collapse" : "Expand"}
-            title={detailWidth ? "Collapse" : "Expand"}
+            aria-label={detailWidth ? "Widen the panel" : "Narrow the panel"}
+            title={detailWidth ? "Widen" : "Narrow"}
           >
-            {detailWidth ? "⤡" : "⤢"}
+            {detailWidth ? "⤢" : "⤡"}
           </button>
           <button
             className="sheet-btn"
@@ -1459,347 +1567,45 @@ function ConnectBar({
 // The Dashboard: an at-a-glance view of the pipeline — what's pending, what's
 // done, what's in pursuit — plus a due-date agenda (keyed on the response
 // deadline, with human-relative labels like "Due tomorrow" / "Due Aug 2028").
-function DashboardView({
-  opps,
-  loading,
-  onOpen,
-}: {
-  opps: Opportunity[];
-  loading: boolean;
-  onOpen: (id: string) => void;
-}) {
-  // Dashboard shows ONLY the opportunities marked Bid (your active pursuits).
-  const bids = useMemo(() => opps.filter((o) => o.bid_decision === "Bid"), [opps]);
-
-  // Deadline agenda over the bids, soonest first. Overdue is excluded entirely;
-  // bids without a deadline fall into their own group so they're never hidden.
-  const agenda = useMemo(() => {
-    const rows = bids
-      .map((o) => ({ o, due: dueLabel(o.response_deadline) }))
-      .filter((r) => r.due.days == null || (r.due.days ?? 0) >= 0) // drop overdue
-      .sort((a, b) => (a.due.days ?? Infinity) - (b.due.days ?? Infinity));
-    const inRange = (r: (typeof rows)[number], lo: number, hi: number) =>
-      r.due.days != null && r.due.days >= lo && r.due.days <= hi;
-    const groups: { key: string; label: string; rows: typeof rows }[] = [
-      { key: "week", label: "Due this week", rows: rows.filter((r) => inRange(r, 0, 7)) },
-      { key: "month", label: "Due this month", rows: rows.filter((r) => inRange(r, 8, 31)) },
-      { key: "later", label: "Due later", rows: rows.filter((r) => (r.due.days ?? -1) > 31) },
-      { key: "none", label: "No deadline", rows: rows.filter((r) => r.due.days == null) },
-    ];
-    return groups.filter((g) => g.rows.length > 0);
-  }, [bids]);
-
-  const dueThisWeek = useMemo(
-    () =>
-      bids.filter((o) => {
-        const d = dueLabel(o.response_deadline).days;
-        return d != null && d >= 0 && d <= 7;
-      }).length,
-    [bids],
-  );
-  const capturedBids = useMemo(() => bids.filter((o) => !!o.captured_at).length, [bids]);
-
-  // Two ways to narrow the right-hand panel, mutually exclusive so the header never lies:
-  //   selectedDay    — a calendar day was clicked (YYYY-MM-DD, local)
-  //   selectedBucket — a donut slice was clicked (week/month/later/none)
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [selectedBucket, setSelectedBucket] = useState<string | null>(null);
-  // Picking a day clears a bucket and vice versa — only one filter drives the panel at a time.
-  const pickDay = (day: string | null) => {
-    setSelectedBucket(null);
-    setSelectedDay(day);
-  };
-  const pickBucket = (key: string) => {
-    setSelectedDay(null);
-    setSelectedBucket((prev) => (prev === key ? null : key)); // click the active slice to clear
-  };
-  const selectedDayBids = useMemo(
-    () =>
-      !selectedDay
-        ? []
-        : bids.filter((o) => {
-            if (!o.response_deadline) return false;
-            const d = new Date(o.response_deadline);
-            if (isNaN(d.getTime())) return false;
-            return toLocalIso(new Date(d.getFullYear(), d.getMonth(), d.getDate())) === selectedDay;
-          }),
-    [bids, selectedDay],
-  );
-
-  const stats: { label: string; value: number; tone?: string }[] = [
-    { label: "Active pursuits", value: bids.length, tone: "bid" },
-    { label: "Captured", value: capturedBids, tone: "bid" },
-    { label: "Due this week", value: dueThisWeek, tone: dueThisWeek > 0 ? "watch" : "" },
-  ];
-
-  // id -> title, for the mail-triage cards to show which pursuit an incoming mail belongs to.
-  const opportunityTitles = useMemo(
-    () => Object.fromEntries(opps.map((o) => [o.id, o.title])),
-    [opps],
-  );
-
-  // Part-to-whole over the SAME buckets the agenda below is grouped by, so the ring and the
-  // list can never tell different stories. Reusing `agenda` also inherits its rule that
-  // overdue is not a bucket — hence "upcoming" on the centre figure rather than a bare total.
-  const deadlineMix = useMemo(
-    () => agenda.map((g) => ({ key: g.key, value: g.rows.length })),
-    [agenda],
-  );
-
-  return (
-    <div className="dash">
-      <div className="dash-head">
-        <div>
-          <h1>Dashboard</h1>
-          <div className="dash-sub">
-            Your active pursuits — opportunities marked <b>Bid</b>, by deadline.
-          </div>
-        </div>
-      </div>
-
-      <div className="dash-top">
-        <div className="dash-stats dash-stats-3">
-          {stats.map((s) => (
-            <div className="dash-stat" key={s.label}>
-              <div className={`ds-n ${s.tone ?? ""}`}>{s.value}</div>
-              <div className="ds-l">{s.label}</div>
-            </div>
-          ))}
-        </div>
-
-        {deadlineMix.length > 0 && (
-          <section className="dash-chart-card rounded-lg border border-border bg-card p-4">
-            <h2 className="mb-1 text-[13px] font-medium">Pursuit load by deadline</h2>
-            <DonutStat
-              data={deadlineMix}
-              config={DEADLINE_SLICES}
-              totalLabel="upcoming"
-              height={188}
-              onSelect={pickBucket}
-              activeKey={selectedBucket}
-            />
-          </section>
-        )}
-      </div>
-
-      <MailTriagePanel opportunityTitles={opportunityTitles} onOpenOpportunity={onOpen} />
-
-      <div className="dash-cal2">
-        <DashCalendar bids={bids} selectedDay={selectedDay} onSelectDay={pickDay} />
-
-        <div className="dash-col">
-          {selectedDay ? (
-            <>
-              <div className="dash-col-head">
-                <span>Due {fmtDate(selectedDay)}</span>
-                <button className="sel-link" onClick={() => setSelectedDay(null)}>
-                  Clear
-                </button>
-              </div>
-              {selectedDayBids.length === 0 ? (
-                <div className="dash-empty">No active pursuits due this day.</div>
-              ) : (
-                <div className="dash-agenda">
-                  {selectedDayBids.map((o) => (
-                    <button className="dash-row" key={o.id} onClick={() => onOpen(o.id)}>
-                      <div className="dr-main">
-                        <div className="dr-title">{o.title}</div>
-                        <div className="dr-sub">{o.agency ?? "—"}</div>
-                      </div>
-                      <span className={`due-chip ${dueLabel(o.response_deadline).tone}`}>
-                        {dueLabel(o.response_deadline).text}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <div className="dash-col-head">
-                <span>
-                  {selectedBucket
-                    ? agenda.find((g) => g.key === selectedBucket)?.label ??
-                      "Active pursuits · by deadline"
-                    : "Active pursuits · by deadline"}
-                </span>
-                {selectedBucket && (
-                  <button className="sel-link" onClick={() => setSelectedBucket(null)}>
-                    Clear
-                  </button>
-                )}
-              </div>
-              {loading ? (
-                <div className="dash-empty">Loading…</div>
-              ) : bids.length === 0 ? (
-                <div className="dash-empty">
-                  No active pursuits yet. Mark an opportunity <b>Bid</b> to see it here.
-                </div>
-              ) : agenda.length === 0 ? (
-                <div className="dash-empty">No upcoming deadlines on your active pursuits.</div>
-              ) : (
-                <div className="dash-agenda">
-                  {(selectedBucket
-                    ? agenda.filter((g) => g.key === selectedBucket)
-                    : agenda
-                  ).map((g) => (
-                    <div className="agenda-group" key={g.key}>
-                      <div className={`agenda-label ${g.key}`}>
-                        {g.label} <span className="c">{g.rows.length}</span>
-                      </div>
-                      {g.rows.map(({ o, due }) => (
-                        <button className="dash-row" key={o.id} onClick={() => onOpen(o.id)}>
-                          <div className="dr-main">
-                            <div className="dr-title">{o.title}</div>
-                            <div className="dr-sub">{o.agency ?? "—"}</div>
-                          </div>
-                          <span className={`due-chip ${due.tone}`}>{due.text}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Month calendar for the Dashboard — marks the days that have Bid opportunities due
-// (today-or-future only; overdue is never marked). Clicking a marked day selects it.
-function DashCalendar({
-  bids,
-  selectedDay,
-  onSelectDay,
-}: {
-  bids: Opportunity[];
-  selectedDay: string | null;
-  onSelectDay: (iso: string | null) => void;
-}) {
-  const [cursor, setCursor] = useState(() => {
-    const t = new Date();
-    return { y: t.getFullYear(), m: t.getMonth() };
-  });
-
-  // iso-day -> count of bids due that day (drop overdue).
-  const byDay = useMemo(() => {
-    const map = new Map<string, number>();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    for (const o of bids) {
-      if (!o.response_deadline) continue;
-      const d = new Date(o.response_deadline);
-      if (isNaN(d.getTime())) continue;
-      const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-      if (day.getTime() < today.getTime()) continue; // no overdue
-      const iso = toLocalIso(day);
-      map.set(iso, (map.get(iso) ?? 0) + 1);
-    }
-    return map;
-  }, [bids]);
-
-  // 6-week grid (42 cells) starting on the Sunday on/before the 1st.
-  const cells = useMemo(() => {
-    const first = new Date(cursor.y, cursor.m, 1);
-    const start = new Date(cursor.y, cursor.m, 1 - first.getDay());
-    return Array.from({ length: 42 }, (_, i) =>
-      new Date(start.getFullYear(), start.getMonth(), start.getDate() + i),
-    );
-  }, [cursor]);
-
-  const todayIso = toLocalIso(new Date());
-  const monthLabel = new Date(cursor.y, cursor.m, 1).toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
-  const step = (delta: number) =>
-    setCursor((c) => {
-      const m = c.m + delta;
-      if (m < 0) return { y: c.y - 1, m: 11 };
-      if (m > 11) return { y: c.y + 1, m: 0 };
-      return { y: c.y, m };
-    });
-
-  return (
-    <div className="dash-cal">
-      <div className="dcal-head">
-        <button className="dcal-nav" onClick={() => step(-1)} aria-label="Previous month">
-          ‹
-        </button>
-        <div className="dcal-month">{monthLabel}</div>
-        <button className="dcal-nav" onClick={() => step(1)} aria-label="Next month">
-          ›
-        </button>
-        <button
-          className="dcal-today"
-          onClick={() => {
-            const t = new Date();
-            setCursor({ y: t.getFullYear(), m: t.getMonth() });
-          }}
-        >
-          Today
-        </button>
-      </div>
-      <div className="dcal-grid">
-        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((w) => (
-          <div className="dcal-wd" key={w}>
-            {w}
-          </div>
-        ))}
-        {cells.map((d, i) => {
-          const iso = toLocalIso(d);
-          const count = byDay.get(iso) ?? 0;
-          const inMonth = d.getMonth() === cursor.m;
-          return (
-            <button
-              key={i}
-              className={`dcal-day ${inMonth ? "" : "muted"} ${count ? "has" : ""} ${
-                iso === todayIso ? "today" : ""
-              } ${iso === selectedDay ? "sel" : ""}`}
-              onClick={() => (count ? onSelectDay(iso === selectedDay ? null : iso) : undefined)}
-              disabled={!count}
-              title={count ? `${count} due` : undefined}
-            >
-              <span className="dcal-num">{d.getDate()}</span>
-              {count > 0 && <span className="dcal-dot">{count}</span>}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function CallPlanView() {
-  const [calls, setCalls] = useState<CallPlanItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [prepOpp, setPrepOpp] = useState<string | null>(null);
+  // A QUERY, not useState+useEffect+fetch. Every tab switch remounts this component, and the
+  // old shape refetched the whole call sheet from zero behind a blank loading state each
+  // time — five round trips across six navigations, on the app's slowest endpoint. Cached,
+  // returning to the tab is instant and the refresh happens behind the rendered list.
+  const qc = useQueryClient();
+  const callsQ = useQuery(callPlanQuery());
+  const calls = callsQ.data ?? NO_CALLS;
+  const loading = callsQ.isPending;
+  // Seeded from the store when Today's "Prep the call" navigated here, so the dialog is
+  // already open on arrival. Read once at mount and cleared, so coming back to the Call Plan
+  // later doesn't re-open a dialog the rep already closed.
+  const prepCallFor = useUiStore((s) => s.prepCallFor);
+  const setPrepCallFor = useUiStore((s) => s.setPrepCallFor);
+  const [prepOpp, setPrepOpp] = useState<string | null>(prepCallFor);
   const [filters, setFilters] = useState<CallFilters>(EMPTY_CALL_FILTERS);
   const pushToast = useToastStore((s) => s.push);
 
-  const load = useCallback(async () => {
-    try {
-      setCalls(await fetchCallPlan());
-    } catch {
-      pushToast("Couldn't load the call plan — is the backend running?");
-    } finally {
-      setLoading(false);
-    }
-  }, [pushToast]);
   useEffect(() => {
-    load();
-  }, [load]);
+    if (callsQ.isError) pushToast("Couldn't load the call plan — is the backend running?");
+  }, [callsQ.isError, pushToast]);
+
+  // Consume the hand-off exactly once. The local state above already picked it up on mount;
+  // clearing it here stops a later visit re-opening the same dialog.
+  useEffect(() => {
+    if (prepCallFor) setPrepCallFor(null);
+  }, [prepCallFor, setPrepCallFor]);
 
   const update = async (callId: string, status: string) => {
-    setCalls((prev) => prev.map((c) => (c.call_id === callId ? { ...c, status } : c))); // optimistic
+    // Optimistic against the CACHE now, so the row updates instantly and a background
+    // refetch cannot resurrect the old status mid-flight.
+    qc.setQueryData<CallPlanItem[]>(queryKeys.callPlan, (prev) =>
+      (prev ?? []).map((c) => (c.call_id === callId ? { ...c, status } : c)),
+    );
     try {
       await setCallStatus(callId, status);
     } catch {
       pushToast("Couldn't update the call — reverting.");
-      load();
+      void qc.invalidateQueries({ queryKey: queryKeys.callPlan });
     }
   };
 
@@ -1867,8 +1673,8 @@ function CallPlanView() {
           </span>
         </h2>
         <div className="cp-sub">
-          Every pursuit that has been through capture, plus the calls the Analyst recommends —
-          your consolidated call sheet.
+          The pursuits you&apos;ve marked <b>Bid</b>, and who to speak to on each — your
+          consolidated call sheet.
         </div>
       </div>
 
@@ -1942,7 +1748,10 @@ function CallPlanView() {
                     c.captured && <span className="cp-status done">Captured</span>
                   ) : c.status === "Planned" ? (
                     <>
-                      <button className="mini-btn" onClick={() => update(c.call_id!, "Done")}>
+                      <button
+                        className="mini-btn secondary"
+                        onClick={() => update(c.call_id!, "Done")}
+                      >
                         Mark done
                       </button>
                       <button className="sel-link" onClick={() => update(c.call_id!, "Dismissed")}>
@@ -2041,15 +1850,23 @@ function Detail({
                   <span>{opp.set_aside}</span>
                 </>
               )}
-              <span className="sep">·</span>
-              <span className={`badge ${badgeClass(opp.bid_decision)}`}>
-                {opp.bid_decision ?? "Unanalyzed"}
-              </span>
+              {/* The verdict is stated ONCE. When there is one, the Decision control below
+                  says it and lets you change it, so repeating it as a badge here was the
+                  same word twice — and its separator was printed unconditionally, leaving a
+                  stray "·" floating on its own line whenever the fields above it were
+                  absent. The badge now appears only for the state the control cannot
+                  express: no verdict yet. */}
+              {!opp.bid_decision && (
+                <>
+                  <span className="sep">·</span>
+                  <span className="badge none">Unanalyzed</span>
+                </>
+              )}
             </div>
           </div>
           {opp.priority_score != null && (
             <div className="verdict-card">
-              <div className="vp" style={{ color: priColor(opp.priority_score) }}>
+              <div className="vp" style={{ color: priInk(opp.priority_score) }}>
                 {opp.priority_score}
               </div>
               <div className="vl">Priority</div>
@@ -2400,7 +2217,7 @@ function ContactsTab({
                 )}
                 {c.reason && <div className="rec-body">{c.reason}</div>}
                 {c.suggested_outreach && (
-                  <div className="rec-body" style={{ color: "var(--accent)" }}>
+                  <div className="rec-body" style={{ color: "var(--bid-ink)" }}>
                     ↳ {c.suggested_outreach}
                   </div>
                 )}
@@ -2856,6 +2673,9 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
   // Held as the raw comma-separated string the admin types; split server-side on save.
   const [keywords, setKeywords] = useState("");
   const [savingOrg, setSavingOrg] = useState(false);
+  // Its own flag, not savingOrg: the SAM.gov re-pull is the slow path (live fetch + site
+  // scrape + the research agent) and should say so rather than hide behind "Saving…".
+  const [refreshingSam, setRefreshingSam] = useState(false);
   const [orgMsg, setOrgMsg] = useState<string | null>(null);
   const [subTab, setSubTab] = useState<"settings" | "team">("settings");
   const [err, setErr] = useState<string | null>(null);
@@ -2888,8 +2708,14 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
     setKeywords((org.keywords ?? []).join(", "));
   }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Single action: save the name + UEI, then automatically pull the company's
-  // details from SAM.gov (if a UEI is set).
+  // Single action: save the name, UEI and keywords — and re-pull the SAM.gov profile ONLY
+  // when the UEI itself changed.
+  //
+  // This used to run the lookup on every save where a UEI was merely present, which made
+  // editing the keywords one of the slowest actions in the product: /me/uei-lookup busts
+  // the Redis profile cache, re-fetches SAM.gov live, scrapes the company's website and
+  // runs the company-research LLM agent. None of that can be affected by a keyword edit —
+  // keywords are a ranking signal the agents read straight off the org document.
   const saveOrg = async () => {
     setSavingOrg(true);
     setErr(null);
@@ -2901,7 +2727,9 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
         keywords: keywords, // raw comma-separated; the server splits + de-dupes
       });
       let merged = updated;
-      if (uei.trim()) {
+      const nextUei = uei.trim().toUpperCase();
+      const prevUei = (org?.uei ?? "").trim().toUpperCase();
+      if (nextUei && nextUei !== prevUei) {
         try {
           const details = await organizationsApi.lookupUei();
           merged = { ...updated, company_details: details };
@@ -2921,6 +2749,24 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
       setErr(errText(e, "Couldn't save the organisation."));
     } finally {
       setSavingOrg(false);
+    }
+  };
+
+  /** The SAM.gov re-pull, on purpose rather than as a side effect of every save. */
+  const refreshSamProfile = async () => {
+    setRefreshingSam(true);
+    setErr(null);
+    setOrgMsg(null);
+    try {
+      const details = await organizationsApi.lookupUei();
+      qc.setQueryData(queryKeys.organization, (prev: OrgBundle | undefined) =>
+        prev ? { ...prev, org: { ...prev.org, company_details: details } } : prev,
+      );
+      setOrgMsg("Company details re-pulled from SAM.gov.");
+    } catch (e) {
+      setErr(errText(e, "Couldn't reach SAM.gov."));
+    } finally {
+      setRefreshingSam(false);
     }
   };
 
@@ -3000,7 +2846,8 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
                   style={{ fontFamily: "var(--font-mono)" }}
                 />
                 <div style={{ fontSize: 11.5, color: "var(--faint)" }}>
-                  On save we pull your company&apos;s registration (legal name, CAGE, NAICS, status) from SAM.gov.
+                  Change it and we pull your registration (legal name, CAGE, NAICS, status) from
+                  SAM.gov on save. Already correct? Use Refresh to re-pull it.
                 </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -3028,7 +2875,21 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
                     "Save"
                   )}
                 </button>
-                {orgMsg && <span style={{ color: "var(--bid)", fontSize: 13 }}>{orgMsg}</span>}
+                <button
+                  className="btn ghost"
+                  onClick={refreshSamProfile}
+                  disabled={savingOrg || refreshingSam || !uei.trim()}
+                  title="Re-pull this company's SAM.gov registration and regenerate its profile"
+                >
+                  {refreshingSam ? (
+                    <>
+                      <span className="spin" /> Refreshing…
+                    </>
+                  ) : (
+                    "Refresh from SAM.gov"
+                  )}
+                </button>
+                {orgMsg && <span style={{ color: "var(--bid-ink)", fontSize: 13 }}>{orgMsg}</span>}
               </div>
             </div>
 
@@ -3109,7 +2970,7 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
                 {inviting ? "Sending…" : "Send invite"}
               </button>
             </form>
-            {inviteMsg && <div style={{ color: "var(--bid)", fontSize: 13, marginTop: 8 }}>{inviteMsg}</div>}
+            {inviteMsg && <div style={{ color: "var(--bid-ink)", fontSize: 13, marginTop: 8 }}>{inviteMsg}</div>}
 
             <div className="sec-title">Members{members.length ? ` · ${members.length}` : ""}</div>
             {loading ? (

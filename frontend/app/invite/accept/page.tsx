@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import AuthShell from '@/app/auth/AuthShell';
 import { invitationsApi, AcceptInvitationRequest } from '@/lib/api/invitations';
 import { useAuthStore } from '@/lib/stores/authStore';
 import { authApi } from '@/lib/api/auth';
@@ -141,228 +142,227 @@ function AcceptInvitationContent() {
 
   if (validationStatus === 'loading') {
     return (
-      <div style={styles.page}>
-        <div style={styles.shell}>
-          <div style={styles.brand}>
-            <div className="word" style={styles.word}>
-              Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
-            </div>
-          </div>
-          <div style={styles.card}>
-            <h1 style={styles.title}>Validating invitation…</h1>
-            <p style={styles.subtitle}>One moment while we check your link.</p>
-          </div>
-        </div>
-      </div>
+      <AuthShell facts={false}>
+        <span className="auth-working">
+          <i />
+          Checking
+        </span>
+        <h1 className="auth-h1" style={{ marginTop: 14 }}>
+          Validating your invitation
+        </h1>
+        <p className="auth-status-sub">One moment while we check the link.</p>
+      </AuthShell>
     );
   }
 
   if (validationStatus === 'invalid' || validationStatus === 'expired') {
     return (
-      <div style={styles.page}>
-        <div style={styles.shell}>
-          <div style={styles.brand}>
-            <div className="word" style={styles.word}>
-              Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
-            </div>
-          </div>
-          <div style={styles.card}>
-            <h1 style={styles.title}>
-              {validationStatus === 'expired' ? 'Invitation expired' : 'Invalid invitation'}
-            </h1>
-            <p style={styles.subtitle}>{error || 'This invitation link is no longer valid.'}</p>
-            <p style={{ ...styles.muted, textAlign: 'left', marginTop: 10 }}>
-              Please ask your organization administrator for a new invitation.
-            </p>
-            <button
-              className="btn primary"
-              style={{ ...styles.submit, marginTop: 18 }}
-              onClick={() => router.push('/auth/login')}
-            >
-              Go to sign in
-            </button>
-          </div>
+      <AuthShell facts={false}>
+        <h1 className="auth-h1">
+          {validationStatus === 'expired' ? 'This invitation has expired' : 'Invitation not valid'}
+        </h1>
+        <p className="auth-status-sub">{error || 'This invitation link is no longer valid.'}</p>
+        <div className="auth-note" style={{ marginTop: 20 }}>
+          Ask your organisation&apos;s administrator to send a new one — invitations are
+          single-use and time-limited.
         </div>
-      </div>
+        <div className="auth-actions">
+          <button className="btn primary auth-submit" onClick={() => router.push('/auth/login')}>
+            Go to sign in
+          </button>
+        </div>
+      </AuthShell>
     );
   }
 
   const isExistingUser = !!invitationData?.user_exists;
 
   return (
-    <div style={styles.page}>
-      <div style={styles.shell}>
-        <div style={styles.brand}>
-          <div className="word" style={styles.word}>
-            Collecct<span style={{ color: 'var(--accent-2)' }}>.</span>
+    <AuthShell facts={false}>
+      <h1 className="auth-h1">You&apos;re invited</h1>
+      <p className="auth-sub">
+        {isExistingUser
+          ? 'Accept this invitation to join the team.'
+          : 'Create your account to join the team.'}
+      </p>
+
+      {/* The invitation's own facts, ruled like a record — who, where, and as what. */}
+      {invitationData && (
+        <dl className="auth-kv">
+          <div>
+            <dt>Organisation</dt>
+            <dd>{invitationData.organization_name}</dd>
           </div>
-        </div>
+          <div>
+            <dt>Invited by</dt>
+            <dd>{invitationData.invited_by_name}</dd>
+          </div>
+          <div>
+            <dt>Email</dt>
+            <dd>{invitationData.email}</dd>
+          </div>
+          <div>
+            <dt>Role</dt>
+            <dd>
+              <span className="pill">{invitationData.role}</span>
+            </dd>
+          </div>
+          {invitationData.expiresAt && (
+            <div>
+              <dt>Expires</dt>
+              <dd>{formatDate(invitationData.expiresAt)}</dd>
+            </div>
+          )}
+        </dl>
+      )}
 
-        <div style={styles.card}>
-          <h1 style={styles.title}>You&apos;re invited</h1>
-          <p style={styles.subtitle}>
-            {isExistingUser
-              ? 'Accept this invitation to join the team.'
-              : 'Create your account to join the team.'}
-          </p>
+      <form onSubmit={handleSubmit}>
+        {error && (
+          <div className="auth-error" role="alert" style={{ marginTop: 20, marginBottom: 0 }}>
+            {error}
+          </div>
+        )}
 
-          {invitationData && (
-            <div style={styles.inviteInfo}>
-              <div style={styles.infoRow}>
-                <span style={styles.infoKey}>Organization</span>
-                <span style={styles.infoVal}>{invitationData.organization_name}</span>
+        <div className="auth-fields">
+          {!isExistingUser && (
+            <>
+              <div className="auth-row2">
+                <div className="auth-group">
+                  <label className="auth-label" htmlFor="firstName">
+                    First name
+                  </label>
+                  <input
+                    id="firstName"
+                    type="text"
+                    className="auth-input"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    required
+                    autoComplete="given-name"
+                  />
+                </div>
+                <div className="auth-group">
+                  <label className="auth-label" htmlFor="lastName">
+                    Last name
+                  </label>
+                  <input
+                    id="lastName"
+                    type="text"
+                    className="auth-input"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    required
+                    autoComplete="family-name"
+                  />
+                </div>
               </div>
-              <div style={styles.infoRow}>
-                <span style={styles.infoKey}>Invited by</span>
-                <span style={styles.infoVal}>{invitationData.invited_by_name}</span>
+
+              <div className="auth-group">
+                <label className="auth-label" htmlFor="password">
+                  Password
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  className="auth-input"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                />
               </div>
-              <div style={styles.infoRow}>
-                <span style={styles.infoKey}>Email</span>
-                <span style={styles.infoVal}>{invitationData.email}</span>
+
+              <div className="auth-group">
+                <label className="auth-label" htmlFor="confirmPassword">
+                  Confirm password
+                </label>
+                <input
+                  id="confirmPassword"
+                  type="password"
+                  className="auth-input"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                />
               </div>
-              <div style={styles.infoRow}>
-                <span style={styles.infoKey}>Role</span>
-                <span style={styles.roleBadge}>{invitationData.role}</span>
-              </div>
-              {invitationData.expiresAt && (
-                <div style={styles.expires}>Expires {formatDate(invitationData.expiresAt)}</div>
-              )}
+                <ul className="auth-reqs">
+                  <li className={password.length >= 8 ? 'met' : undefined}>
+                    <span className="tick" aria-hidden="true">
+                      {password.length >= 8 ? '✓' : '–'}
+                    </span>
+                    At least 8 characters
+                  </li>
+                  <li
+                    className={
+                      confirmPassword.length > 0 && password === confirmPassword
+                        ? 'met'
+                        : undefined
+                    }
+                  >
+                    <span className="tick" aria-hidden="true">
+                      {confirmPassword.length > 0 && password === confirmPassword
+                        ? '✓'
+                        : '–'}
+                    </span>
+                    Both entries match
+                  </li>
+                </ul>
+
+              <label className="auth-check">
+                <input
+                  type="checkbox"
+                  checked={termsAccepted}
+                  onChange={(e) => setTermsAccepted(e.target.checked)}
+                />
+                <span>I agree to the Terms and Conditions and Privacy Policy.</span>
+              </label>
+            </>
+          )}
+
+          {isExistingUser && (
+            <div className="auth-note">
+              You already have an account with this email. Accept to join{' '}
+              <strong>{invitationData?.organization_name}</strong>.
             </div>
           )}
 
-          <form onSubmit={handleSubmit} style={styles.form}>
-            {error && <div style={styles.errorBox}>{error}</div>}
-
-            {!isExistingUser && (
-              <>
-                <div style={styles.row2}>
-                  <div style={styles.group}>
-                    <label style={styles.label} htmlFor="firstName">
-                      First name
-                    </label>
-                    <input
-                      id="firstName"
-                      type="text"
-                      style={styles.input}
-                      placeholder="John"
-                      value={firstName}
-                      onChange={(e) => setFirstName(e.target.value)}
-                      required
-                      autoComplete="given-name"
-                    />
-                  </div>
-                  <div style={styles.group}>
-                    <label style={styles.label} htmlFor="lastName">
-                      Last name
-                    </label>
-                    <input
-                      id="lastName"
-                      type="text"
-                      style={styles.input}
-                      placeholder="Doe"
-                      value={lastName}
-                      onChange={(e) => setLastName(e.target.value)}
-                      required
-                      autoComplete="family-name"
-                    />
-                  </div>
-                </div>
-
-                <div style={styles.group}>
-                  <label style={styles.label} htmlFor="password">
-                    Password
-                  </label>
-                  <input
-                    id="password"
-                    type="password"
-                    style={styles.input}
-                    placeholder="At least 8 characters"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    autoComplete="new-password"
-                  />
-                </div>
-
-                <div style={styles.group}>
-                  <label style={styles.label} htmlFor="confirmPassword">
-                    Confirm password
-                  </label>
-                  <input
-                    id="confirmPassword"
-                    type="password"
-                    style={styles.input}
-                    placeholder="Re-enter your password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    required
-                    autoComplete="new-password"
-                  />
-                </div>
-
-                <label style={styles.checkRow}>
-                  <input
-                    type="checkbox"
-                    checked={termsAccepted}
-                    onChange={(e) => setTermsAccepted(e.target.checked)}
-                    style={styles.checkbox}
-                  />
-                  <span style={styles.checkLabel}>
-                    I agree to the Terms and Conditions and Privacy Policy.
-                  </span>
-                </label>
-              </>
-            )}
-
-            {isExistingUser && (
-              <div style={styles.infoBox}>
-                You already have an account with this email. Accept to join{' '}
-                <strong>{invitationData?.organization_name}</strong>.
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="btn primary"
-              style={styles.submit}
-              disabled={isSubmitting}
-            >
-              {isSubmitting && <span className="spin" />}
-              {isSubmitting
-                ? 'Joining…'
-                : isExistingUser
-                  ? 'Accept invitation'
-                  : 'Accept & create account'}
-            </button>
-          </form>
-
-          <div style={styles.divider}>
-            <span style={styles.dividerLine} />
-            <span style={styles.dividerText}>or</span>
-            <span style={styles.dividerLine} />
-          </div>
-
-          {msError && <div style={styles.errorBox}>{msError}</div>}
-          <button
-            type="button"
-            className="btn ghost"
-            style={styles.submit}
-            onClick={handleMicrosoftAccept}
-            disabled={msBusy}
-          >
-            {msBusy && <span className="spin" />}
-            {msBusy ? 'Redirecting…' : 'Continue with Microsoft'}
+          <button type="submit" className="btn primary auth-submit" disabled={isSubmitting}>
+            {isSubmitting && <span className="spin" />}
+            {isSubmitting
+              ? 'Joining…'
+              : isExistingUser
+                ? 'Accept invitation'
+                : 'Accept & create account'}
           </button>
-
-          <div style={styles.footer}>
-            Already have an account?{' '}
-            <Link href="/auth/login" style={styles.linkStrong}>
-              Sign in
-            </Link>
-          </div>
         </div>
+      </form>
+
+      <div className="auth-or">
+        <i />
+        <span>or</span>
+        <i />
       </div>
-    </div>
+
+      {msError && (
+        <div className="auth-error" role="alert">
+          {msError}
+        </div>
+      )}
+      <button
+        type="button"
+        className="btn ghost auth-alt"
+        onClick={handleMicrosoftAccept}
+        disabled={msBusy}
+      >
+        {msBusy && <span className="spin" />}
+        {msBusy ? 'Redirecting…' : 'Continue with Microsoft'}
+      </button>
+
+      <div className="auth-foot">
+        Already have an account? <Link href="/auth/login">Sign in</Link>
+      </div>
+    </AuthShell>
   );
 }
 
@@ -373,141 +373,3 @@ export default function AcceptInvitationPage() {
     </Suspense>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: '100vh',
-    height: 'auto',
-    overflowY: 'auto',
-    background: 'var(--paper)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  shell: { width: '100%', maxWidth: 440 },
-  brand: { textAlign: 'center', marginBottom: 26 },
-  word: {
-    fontFamily: 'var(--font-display)',
-    fontSize: 32,
-    fontWeight: 500,
-    letterSpacing: '-0.02em',
-    lineHeight: 1,
-    color: 'var(--ink)',
-  },
-  card: {
-    background: 'var(--surface)',
-    border: '1px solid var(--line)',
-    borderRadius: 16,
-    padding: '30px 30px 26px',
-    boxShadow: '0 12px 34px rgba(24, 21, 17, 0.06)',
-  },
-  title: {
-    fontFamily: 'var(--font-display)',
-    fontSize: 24,
-    fontWeight: 500,
-    letterSpacing: '-0.015em',
-    color: 'var(--ink)',
-  },
-  subtitle: { marginTop: 6, fontSize: 13.5, color: 'var(--muted)', lineHeight: 1.5 },
-  inviteInfo: {
-    marginTop: 20,
-    background: 'var(--surface-2)',
-    border: '1px solid var(--line)',
-    borderRadius: 12,
-    padding: '14px 16px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 9,
-  },
-  infoRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  infoKey: {
-    fontSize: 10.5,
-    letterSpacing: '0.07em',
-    textTransform: 'uppercase',
-    color: 'var(--faint)',
-  },
-  infoVal: { fontSize: 13, color: 'var(--ink)', fontWeight: 500, textAlign: 'right' },
-  roleBadge: {
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: '0.06em',
-    textTransform: 'uppercase',
-    padding: '3px 9px',
-    borderRadius: 999,
-    background: 'var(--accent-soft)',
-    color: 'var(--accent)',
-  },
-  expires: {
-    marginTop: 4,
-    paddingTop: 9,
-    borderTop: '1px solid var(--line)',
-    fontSize: 11.5,
-    color: 'var(--faint)',
-  },
-  form: { marginTop: 20, display: 'flex', flexDirection: 'column', gap: 16 },
-  row2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 },
-  group: { display: 'flex', flexDirection: 'column', gap: 6 },
-  label: {
-    fontSize: 11,
-    letterSpacing: '0.07em',
-    textTransform: 'uppercase',
-    color: 'var(--faint)',
-  },
-  input: {
-    width: '100%',
-    padding: '10px 12px',
-    background: 'var(--surface-2)',
-    border: '1px solid var(--line-strong)',
-    borderRadius: 9,
-    fontSize: 13.5,
-    color: 'var(--ink)',
-    fontFamily: 'var(--font-sans)',
-    outline: 'none',
-  },
-  checkRow: { display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' },
-  checkbox: {
-    marginTop: 2,
-    width: 15,
-    height: 15,
-    accentColor: 'var(--accent)',
-    cursor: 'pointer',
-  },
-  checkLabel: { fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.45 },
-  errorBox: {
-    background: 'var(--watch-soft)',
-    border: '1px solid var(--line-strong)',
-    borderRadius: 9,
-    padding: '10px 14px',
-    fontSize: 13,
-    color: '#b4453a',
-  },
-  infoBox: {
-    background: 'var(--accent-soft)',
-    border: '1px solid var(--line)',
-    borderRadius: 9,
-    padding: '10px 14px',
-    fontSize: 12.5,
-    color: 'var(--accent)',
-    lineHeight: 1.5,
-  },
-  submit: {
-    width: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: 4,
-  },
-  divider: {
-    marginTop: 18,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-  },
-  dividerLine: { flex: 1, height: 1, background: 'var(--line)' },
-  dividerText: { fontSize: 11.5, color: 'var(--faint)', letterSpacing: '0.03em' },
-  muted: { fontSize: 11.5, color: 'var(--faint)', lineHeight: 1.5 },
-  footer: { marginTop: 20, textAlign: 'center', fontSize: 13, color: 'var(--muted)' },
-  linkStrong: { color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 },
-};

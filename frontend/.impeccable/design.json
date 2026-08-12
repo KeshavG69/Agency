@@ -1,0 +1,413 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-11T00:00:00.000Z",
+  "title": "Design System: Collecct",
+  "extensions": {
+    "colorMeta": {
+      "go-green": {
+        "role": "primary",
+        "displayName": "Go Green",
+        "canonical": "#006b4f",
+        "darkValue": "#006b4f",
+        "tonalRamp": [
+          "#04170f",
+          "#062a1d",
+          "#08402c",
+          "#00563f",
+          "#006b4f",
+          "#2f9e78",
+          "#86cfb5",
+          "#e4f4ee"
+        ]
+      },
+      "watch-amber": {
+        "role": "secondary",
+        "displayName": "Watch Amber",
+        "canonical": "#b45309",
+        "darkValue": "#c07e22",
+        "tonalRamp": [
+          "#241002",
+          "#3d1c04",
+          "#5c2b06",
+          "#8a3f07",
+          "#b45309",
+          "#d98324",
+          "#eab676",
+          "#fbeddc"
+        ]
+      },
+      "stop-red": {
+        "role": "tertiary",
+        "displayName": "Stop Red",
+        "canonical": "#ae2e24",
+        "darkValue": "#ae2e24",
+        "tonalRamp": [
+          "#210806",
+          "#390f0b",
+          "#571712",
+          "#83221a",
+          "#ae2e24",
+          "#cf6058",
+          "#e39d97",
+          "#f8e6e4"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#171717",
+        "darkValue": "#f5f5f5",
+        "tonalRamp": [
+          "#0f0f0f",
+          "#171717",
+          "#292929",
+          "#4a4a4a",
+          "#6b6b6b",
+          "#a0a0a0",
+          "#e2e2e2",
+          "#ffffff"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#e2e2e2",
+        "darkValue": "#2a2a2a",
+        "tonalRamp": [
+          "#1f1f1f",
+          "#2a2a2a",
+          "#3d3d3d",
+          "#6b6b6b",
+          "#a0a0a0",
+          "#cfcfcf",
+          "#e2e2e2",
+          "#f4f4f4"
+        ]
+      },
+      "surface-2": {
+        "role": "neutral",
+        "displayName": "Tonal Step",
+        "canonical": "#f4f4f4",
+        "darkValue": "#292929",
+        "tonalRamp": [
+          "#0f0f0f",
+          "#1f1f1f",
+          "#292929",
+          "#4a4a4a",
+          "#8f8f8f",
+          "#d6d6d6",
+          "#f4f4f4",
+          "#ffffff"
+        ]
+      },
+      "deadline-week": {
+        "role": "tertiary",
+        "displayName": "Deadline — This Week",
+        "canonical": "#006b4f",
+        "darkValue": "#34d399",
+        "tonalRamp": [
+          "#04170f",
+          "#062a1d",
+          "#08402c",
+          "#00563f",
+          "#006b4f",
+          "#2f9e78",
+          "#86cfb5",
+          "#e4f4ee"
+        ]
+      },
+      "go-green-ink": {
+        "role": "primary",
+        "displayName": "Go Green Ink",
+        "canonical": "#006b4f",
+        "darkValue": "#40be96",
+        "tonalRamp": [
+          "#04170f",
+          "#062a1d",
+          "#08402c",
+          "#00563f",
+          "#006b4f",
+          "#2f9e78",
+          "#40be96",
+          "#e4f4ee"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Wordmark and top-level page titles. No separate display face — the sans, larger, tracked tight."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Section and modal titles."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Card and record titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "The global default, set once on html/body at 13px. Everything inherits it."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Table column headers and field labels. Uppercase, tracked 0.03em."
+      },
+      "micro-label": {
+        "displayName": "Micro-label",
+        "purpose": "Badges, pills, status chips. Uppercase 10px/700 tracked 0.07em."
+      },
+      "numeric": {
+        "displayName": "Numeric",
+        "purpose": "Geist Mono. Marks a value as machine-derived — score, ID, code. Never prose."
+      }
+    },
+    "shadows": [
+      {
+        "name": "2xs",
+        "value": "0 1px 2px rgb(0 0 0 / 0.04)",
+        "darkValue": "0 1px 2px rgb(0 0 0 / 0.2)",
+        "purpose": "Resting lift on cards and inline panels."
+      },
+      {
+        "name": "sm",
+        "value": "0 1px 3px rgb(0 0 0 / 0.06)",
+        "darkValue": "0 1px 3px rgb(0 0 0 / 0.28)",
+        "purpose": "Raised containers; hover response on interactive cards."
+      },
+      {
+        "name": "md",
+        "value": "0 8px 24px rgb(0 0 0 / 0.08)",
+        "darkValue": "0 8px 24px rgb(0 0 0 / 0.36)",
+        "purpose": "Dropdowns, popovers, menus — anything overlaying siblings."
+      },
+      {
+        "name": "lg",
+        "value": "0 16px 40px rgb(0 0 0 / 0.12)",
+        "darkValue": "0 16px 40px rgb(0 0 0 / 0.44)",
+        "purpose": "Modals and dialogs, always over the overlay scrim."
+      },
+      {
+        "name": "nav-active",
+        "value": "inset 0 -2px 0 var(--accent)",
+        "purpose": "The active top-nav underline. Emphasis without a thicker border."
+      },
+      {
+        "name": "sticky-head",
+        "value": "inset 0 -1px 0 var(--border)",
+        "purpose": "The rule under a sticky table header — a border-bottom does not paint reliably while rows composite over it."
+      },
+      {
+        "name": "overlay-scrim",
+        "value": "rgb(0 0 0 / 0.18)",
+        "darkValue": "rgb(0 0 0 / 0.55)",
+        "purpose": "Modal backdrop. Must be heavier in dark or it vanishes."
+      }
+    ],
+    "motion": [
+      {
+        "name": "duration-exit",
+        "value": "150ms",
+        "purpose": "Fast — the old thing is already stale."
+      },
+      {
+        "name": "duration-enter",
+        "value": "210ms",
+        "purpose": "Entrances."
+      },
+      {
+        "name": "duration-move",
+        "value": "400ms",
+        "purpose": "2.7x exit. Position carries continuity; opacity is only a veil."
+      },
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.23, 1, 0.32, 1)",
+        "purpose": "Default easing for state transitions."
+      },
+      {
+        "name": "ease-spring",
+        "value": "cubic-bezier(0.32, 0.72, 0, 1)",
+        "purpose": "Layout and position changes."
+      },
+      {
+        "name": "icon-spring",
+        "value": "240ms cubic-bezier(0.34, 1.56, 0.64, 1)",
+        "purpose": "The one overshoot spring behind all sixteen icon hover motions."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "shell-collapse",
+        "value": "1100px"
+      },
+      {
+        "name": "toolbar-wrap",
+        "value": "900px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The action of a surface. One per region.",
+      "html": "<button class=\"ds-btn ds-btn-primary\">Generate call plan</button>",
+      "css": ".ds-btn { font-family: var(--font-sans, system-ui, sans-serif); font-size: 13px; font-weight: 600; padding: 10px 18px; border: none; border-radius: 5px; cursor: pointer; transition: transform 0.12s cubic-bezier(0.23,1,0.32,1), background 0.18s, opacity 0.18s; } .ds-btn-primary { background: var(--primary, #006b4f); color: #fff; } .ds-btn-primary:hover { background: #00583f; } .ds-btn-primary:focus-visible { outline: 2px solid var(--ring, #006b4f); outline-offset: 2px; } .ds-btn-primary:active { transform: scale(0.98); } .ds-btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary and cancel actions. Hairline border, no fill.",
+      "html": "<button class=\"ds-btn ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost { font-family: var(--font-sans, system-ui, sans-serif); font-size: 13px; font-weight: 600; padding: 10px 18px; border-radius: 5px; cursor: pointer; background: transparent; color: var(--foreground, #171717); border: 1px solid var(--border, #e2e2e2); transition: background 0.18s; } .ds-btn-ghost:hover { background: var(--card, #fff); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--ring, #006b4f); outline-offset: 2px; }"
+    },
+    {
+      "name": "Verdict Badge",
+      "kind": "chip",
+      "refersTo": "badge-bid",
+      "description": "The Analyst's decision. Soft 8% fill of its own signal color; never appears without its evidence nearby.",
+      "html": "<span class=\"ds-badge ds-badge-bid\">Bid</span><span class=\"ds-badge ds-badge-watch\">Watch</span><span class=\"ds-badge ds-badge-nobid\">No-Bid</span>",
+      "css": ".ds-badge { display: inline-block; font-family: var(--font-sans, system-ui, sans-serif); font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; margin-right: 6px; } .ds-badge-bid { color: var(--primary, #006b4f); background: color-mix(in oklab, var(--primary, #006b4f) 8%, var(--background, #fff)); } .ds-badge-watch { color: var(--watch, #b45309); background: color-mix(in oklab, var(--watch, #b45309) 8%, var(--background, #fff)); } .ds-badge-nobid { color: var(--muted-foreground, #6b6b6b); background: color-mix(in oklab, var(--muted-foreground, #6b6b6b) 8%, var(--background, #fff)); }"
+    },
+    {
+      "name": "Metadata Pill",
+      "kind": "chip",
+      "refersTo": "pill",
+      "description": "Categorical metadata carrying no judgement — NAICS, set-aside, agency.",
+      "html": "<span class=\"ds-pill\">541519</span><span class=\"ds-pill\">SDVOSB</span>",
+      "css": ".ds-pill { display: inline-block; font-family: var(--font-sans, system-ui, sans-serif); font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-foreground, #6b6b6b); background: var(--muted-surface, #f4f4f4); border: 1px solid var(--border, #e2e2e2); padding: 3px 9px; border-radius: 999px; margin-right: 6px; }"
+    },
+    {
+      "name": "Risk Meter",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "Three bars whose lit count IS the level, so it reads pre-attentively without the word. The physical form of the show-your-evidence rule.",
+      "html": "<div class=\"ds-risk\"><div class=\"ds-risk-head\"><span class=\"ds-risk-label\">Risk</span><span class=\"ds-risk-bars ds-r-medium\"><i class=\"on\"></i><i class=\"on\"></i><i></i></span><span class=\"ds-risk-level ds-r-medium\">Medium</span></div><ul class=\"ds-risk-list\"><li><span class=\"ds-risk-sev ds-s-high\">High</span>No citable CPARS for this scope</li><li><span class=\"ds-risk-sev ds-s-low\">Low</span>Response window is 21 days</li></ul></div>",
+      "css": ".ds-risk { font-family: var(--font-sans, system-ui, sans-serif); padding: 12px 14px; border: 1px solid var(--border, #e2e2e2); border-radius: 6px; background: var(--muted-surface, #f4f4f4); box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); } .ds-risk-head { display: flex; align-items: center; gap: 10px; } .ds-risk-label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-foreground, #6b6b6b); } .ds-risk-bars { display: inline-flex; gap: 3px; } .ds-risk-bars i { width: 20px; height: 5px; border-radius: 999px; background: var(--border, #e2e2e2); } .ds-risk-bars.ds-r-medium i.on { background: var(--watch, #b45309); } .ds-risk-level { font-size: 12px; font-weight: 700; } .ds-risk-level.ds-r-medium { color: var(--watch, #b45309); } .ds-risk-list { list-style: none; margin: 10px 0 0; padding: 0; font-size: 12px; color: var(--foreground, #171717); } .ds-risk-list li { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--border, #e2e2e2); } .ds-risk-sev { font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 6px; border-radius: 999px; } .ds-risk-sev.ds-s-high { color: var(--watch, #b45309); background: color-mix(in oklab, var(--watch, #b45309) 8%, var(--background, #fff)); } .ds-risk-sev.ds-s-low { color: var(--muted-foreground, #6b6b6b); background: color-mix(in oklab, var(--muted-foreground, #6b6b6b) 8%, var(--background, #fff)); }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input-search",
+      "description": "The green focus border IS the focus indicator; no ring is drawn.",
+      "html": "<input class=\"ds-input-search\" type=\"search\" placeholder=\"Search opportunities\" />",
+      "css": ".ds-input-search { font-family: var(--font-sans, system-ui, sans-serif); font-size: 13px; color: var(--foreground, #171717); background: var(--background, #fff); border: 1px solid var(--border, #e2e2e2); border-radius: 5px; padding: 7px 11px; width: 260px; transition: border-color 0.18s; } .ds-input-search::placeholder { color: var(--muted-foreground, #6b6b6b); } .ds-input-search:focus { outline: none; border-color: var(--primary, #006b4f); }"
+    },
+    {
+      "name": "Top Navigation",
+      "kind": "nav",
+      "refersTo": "nav-item-top",
+      "description": "56px bar. Active item is marked by an inset green underline, never a border.",
+      "html": "<header class=\"ds-topbar\"><span class=\"ds-brand\">Collecct<span class=\"ds-dot\">.</span></span><nav class=\"ds-nav\"><button class=\"ds-nav-item ds-on\">Dashboard</button><button class=\"ds-nav-item\">Pipeline</button><button class=\"ds-nav-item\">Call Plan</button><button class=\"ds-nav-item\">Contacts</button></nav></header>",
+      "css": ".ds-topbar { display: flex; align-items: center; gap: 22px; height: 56px; padding: 0 18px; background: var(--background, #fff); border-bottom: 1px solid var(--border, #e2e2e2); font-family: var(--font-sans, system-ui, sans-serif); } .ds-brand { font-size: 21px; font-weight: 500; letter-spacing: -0.02em; color: var(--foreground, #171717); } .ds-dot { color: var(--primary, #006b4f); } .ds-nav { display: flex; align-items: center; gap: 4px; } .ds-nav-item { font: inherit; font-size: 13.5px; font-weight: 500; padding: 7px 14px; border: none; background: transparent; border-radius: 5px; color: var(--muted-foreground, #6b6b6b); cursor: pointer; transition: background 0.16s, color 0.16s; } .ds-nav-item:hover { color: var(--foreground, #171717); background: var(--muted-surface, #f4f4f4); } .ds-nav-item.ds-on { color: var(--foreground, #171717); background: var(--muted-surface, #f4f4f4); box-shadow: inset 0 -2px 0 var(--primary, #006b4f); } .ds-nav-item:focus-visible { outline: 2px solid var(--primary, #006b4f); outline-offset: 2px; }"
+    },
+    {
+      "name": "Data Table",
+      "kind": "card",
+      "refersTo": "table-header-cell",
+      "description": "The primary layout of the product. Sticky header draws its rule as an inset shadow, never a border-bottom.",
+      "html": "<table class=\"ds-table\"><thead><tr><th>Opportunity</th><th>Agency</th><th class=\"ds-num\">Score</th></tr></thead><tbody><tr><td>Enterprise IT Support Services</td><td>DLA</td><td class=\"ds-num ds-mono\">87</td></tr><tr><td>Base Operations Support</td><td>USACE</td><td class=\"ds-num ds-mono\">64</td></tr></tbody></table>",
+      "css": ".ds-table { width: 100%; border-collapse: collapse; font-family: var(--font-sans, system-ui, sans-serif); font-size: 13px; font-variant-numeric: tabular-nums; } .ds-table thead th { position: sticky; top: 0; background: var(--muted-surface, #f4f4f4); box-shadow: inset 0 -1px 0 var(--border, #e2e2e2); padding: 10px 14px; text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted-foreground, #6b6b6b); white-space: nowrap; } .ds-table tbody td { padding: 10px 14px; border-bottom: 1px solid var(--border, #e2e2e2); color: var(--foreground, #171717); } .ds-table tbody tr { transition: background 0.13s cubic-bezier(0.23,1,0.32,1); } .ds-table tbody tr:hover { background: var(--muted-surface, #f4f4f4); } .ds-table .ds-num { text-align: right; } .ds-table .ds-mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; font-weight: 500; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Contracting Officer's Desk",
+    "overview": "Collecct looks like government-contracting paperwork that someone finally made comfortable to work in. It borrows the discipline of the source material — ruled tables, uppercase micro-labels, tabular figures that line up down a column, official restraint in color — and then removes the parts that make federal documents miserable: the cramped margins, the undifferentiated wall of text, the sense that nothing on the page is more important than anything else.\n\nThe result is a quiet, dense, high-information surface. Body text sits at 13px and micro labels at 10–11px, because a capture rep is reading a hundred opportunities, not an article. Nearly everything is neutral: white or near-black paper, one hairline rule, one tonal step. Into that neutrality, exactly one warm color enters — a deep forest green (#006b4f) that means go. When you see green, a decision has been made or an action is available. Nothing else in the system is allowed to be green.\n\nDepth is soft and layered rather than flat: cards, panels, and popovers sit on the paper as real objects with a resting shadow, and the shadow scale grows with how far off the page a thing is meant to be. Motion is fast and restrained — a 150ms exit, a 210ms enter, a 400ms move, because position is what carries continuity and opacity is only a veil.",
+    "keyCharacteristics": [
+      "Two typefaces, both Geist: sans for everything readable, mono for every number.",
+      "Neutral-dominant palette; one accent, one alarm, one caution.",
+      "Tabular figures globally — every count, currency, and score aligns.",
+      "Uppercase, wide-tracked micro-labels as the organizing device.",
+      "5px corners as the default; pills only for status, never for containers.",
+      "Light and dark are peers, not a theme and its afterthought."
+    ],
+    "rules": [
+      {
+        "name": "The One Green Rule",
+        "body": "The accent covers ≤10% of any screen. It marks decisions and actions — nothing decorative, no accent-tinted surfaces, no green section headers. A Bid badge is only legible as a signal because the surrounding page has no other green in it.",
+        "section": "colors"
+      },
+      {
+        "name": "The Ink-Is-Not-Fill Rule",
+        "body": "A color that works as a background does not automatically work as lettering. Green text uses --bid-ink, green fills use --primary; border-color on a focus state uses --ring. Writing color: var(--accent) is the bug this rule exists to prevent — it renders at 2.5:1 in dark mode.",
+        "section": "colors"
+      },
+      {
+        "name": "The Reserved Signal Rule",
+        "body": "bid, nobid, watch, and the deadline ramp are semantic tokens. Never borrow one for a chart series, an illustration, or a mood.",
+        "section": "colors"
+      },
+      {
+        "name": "The Soft-Fill Rule",
+        "body": "Status backgrounds are the signal color mixed 8% into the page (color-mix(in oklab, var(--bid) 8%, var(--background))) — never a raw tint constant, so they stay correct in both modes automatically.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "font-variant-numeric: tabular-nums is set once on body, not per-cell. Almost nothing here is running prose, and every count, dollar column, and score needs figures that line up. Do not override it.",
+        "section": "typography"
+      },
+      {
+        "name": "The Mono-for-Meaning Rule",
+        "body": "Geist Mono is not a style choice; it marks a value as machine-derived — a score, an ID, a code. Never set prose in the mono, and never set a score in the sans.",
+        "section": "typography"
+      },
+      {
+        "name": "The Two-Case Rule",
+        "body": "Text is sentence case or uppercase-tracked, never Title Case. Title Case in a govcon UI reads as a document heading and fights the real hierarchy.",
+        "section": "typography"
+      },
+      {
+        "name": "The Frame Rule",
+        "body": "The page never scrolls. New surfaces get their own scroll container inside the frame; anything that makes body scroll is a bug.",
+        "section": "layout"
+      },
+      {
+        "name": "The Distance Rule",
+        "body": "Pick a shadow by how far the element is from the page, never by how important it is. Importance is expressed in type and color; distance is expressed in shadow.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Paired-Depth Rule",
+        "body": "A shadow never replaces the hairline rule. Layered surfaces carry both — the rule defines the edge, the shadow defines the gap.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Hairline Rule",
+        "body": "Every border is 1px in the line token. If a divider needs more weight, the answer is a tonal surface change or an inset shadow, never a thicker stroke.",
+        "section": "shapes"
+      },
+      {
+        "name": "The Verdict-With-Evidence Rule",
+        "body": "A bid_decision, priority_score, or risk_level never appears alone. Wherever one is shown, its factors or rationale must be one interaction away at most — hover, adjacent, or expandable in place.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do keep the accent scarce — buttons, active nav, focus, and Bid verdicts. Everything else is neutral.",
+      "Do set every number in Geist Mono and leave tabular-nums alone.",
+      "Do use uppercase, 0.03–0.07em tracked micro-labels as the organizing device for dense regions.",
+      "Do build status fills with color-mix(in oklab, var(--signal) 8%, var(--background)) so both themes resolve automatically.",
+      "Do give every new surface its own scroll container; the frame never scrolls.",
+      "Do author against the semantic tokens (--ink, --line, --surface-2), never raw hex — the light/dark pairing lives in the token, not in your rule.",
+      "Do pick shadows by distance from the page, and pair them with the hairline rule.",
+      "Do draw emphasis with an inset shadow (inset 0 -2px 0) rather than a heavier border."
+    ],
+    "donts": [
+      "Don't reuse bid, nobid, watch, or the deadline ramp as a chart series color.",
+      "Don't introduce a third typeface, or a display face. Headings are the sans, larger, with negative tracking.",
+      "Don't use pill radius on containers — pills mean status.",
+      "Don't use borders thicker than 1px, dashed dividers, or double rules.",
+      "Don't write Title Case in UI copy.",
+      "Don't tint a surface with the accent, or use green as a section-header color.",
+      "Don't style scrollbars per-pane; they are defined once globally.",
+      "Don't add a border-bottom to a sticky table header — use box-shadow: inset 0 -1px 0.",
+      "Don't ship a verdict, score, or risk level without the evidence behind it.",
+      "Don't write color: var(--accent) — green lettering uses --bid-ink, green fills use --primary."
+    ]
+  }
+}
