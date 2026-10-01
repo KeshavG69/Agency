@@ -90,16 +90,17 @@ def _map_columns_via_llm(headers: list[str], sample_rows: list[tuple]) -> dict[s
         "at most once."
     )
     resp = httpx.post(
-        f"{settings.OPENROUTER_BASE_URL}/chat/completions",
+        f"{settings.llm_base_url}/chat/completions",
         headers={
-            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+            "Authorization": f"Bearer {settings.llm_api_key}",
             "Content-Type": "application/json",
         },
         json={
-            "model": settings.EXTRACTION_MODEL,
+            "model": settings.llm_model(settings.EXTRACTION_MODEL),
             "messages": [{"role": "user", "content": prompt}],
             "response_format": {"type": "json_object"},
             "temperature": 0,
+            **settings.llm_extra_body,
         },
         timeout=60.0,
     )

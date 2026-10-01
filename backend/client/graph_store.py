@@ -338,6 +338,7 @@ def update_correspondence(
     counts: dict[str, int],
     last_seen: dict[str, str] | None = None,
     mode: str = "overwrite",
+    last_subject: dict[str, str] | None = None,
 ) -> int:
     """Write the relationship signal onto ONE employee's slice of the graph.
 
@@ -360,6 +361,12 @@ def update_correspondence(
     `last_contact` is always a MAX (`greatest`), never a blind overwrite, so an overlapping
     or out-of-order sweep can never move it backwards.
 
+    `last_subject` (the subject line of that most-recent message) rides along and is written
+    ONLY when `last_contact` actually advances, so the stored subject always belongs to the
+    stored date — the two can never drift apart and describe different messages. It exists
+    because "quiet 47 days" is a number, not a reason: the last thing the two of them
+    actually said is the evidence a rep checks before sending anything.
+
     Only updates contacts already in the graph — the sweep is a signal pass, not an
     import path, so a stranger who emailed once does not silently become a CRM contact.
     """
@@ -367,9 +374,13 @@ def update_correspondence(
     if not owner or not (organization_id or "").strip() or not counts:
         return 0
     seen = last_seen or {}
+    subjects = last_subject or {}
     rows = [
         {"email": e, "owner_email": owner, "corr_count": int(n),
-         "last_contact": seen.get(e)}
+         "last_contact": seen.get(e),
+         # Trimmed here rather than at read time: a 300-char subject helps nobody and this
+         # is written once per sweep but read on every nudge.
+         "last_subject": (subjects.get(e) or "")[:160] or None}
         for e, n in counts.items()
         if e
     ]
@@ -384,6 +395,16 @@ def update_correspondence(
         UNWIND $rows AS row
         MATCH (p:Person {{email: row.email, owner_email: row.owner_email}})
         SET p.corr_count = {count_expr},
+            p.last_subject = CASE
+                WHEN row.last_contact IS NULL THEN p.last_subject
+                WHEN p.last_contact IS NULL THEN row.last_subject
+                WHEN row.last_contact >= p.last_contact THEN row.last_subject
+                // Backfill: `last_subject` is newer than `last_contact` as a field, so every
+                // contact written before it exists has a date but no subject. Without this
+                // arm the sweep would only ever fill it for contacts who send NEW mail —
+                // i.e. never for the silent ones the relationship engine actually selects.
+                WHEN p.last_subject IS NULL THEN row.last_subject
+                ELSE p.last_subject END,
             p.last_contact = CASE
                 WHEN row.last_contact IS NULL THEN p.last_contact
                 WHEN p.last_contact IS NULL THEN row.last_contact
@@ -394,6 +415,50 @@ def update_correspondence(
         params={"rows": rows},
     )
     return int(res.result_set[0][0]) if res.result_set else 0
+
+
+def record_touch(
+    owner_email: str,
+    organization_id: str,
+    contact_email: str,
+    when: str,
+    subject: str | None = None,
+) -> bool:
+    """Record that this employee just reached out to this contact — right now, not next sweep.
+
+    WHY THIS IS NOT LEFT TO THE MAIL SWEEP. The sweep is the general path for learning what
+    happened in a mailbox, but it is periodic and (depending on how the mail listing resolves
+    folders) may not see the rep's own SENT items at all. Two things break if an outbound
+    touch is invisible: the card keeps saying "quiet 47 days" about someone the rep emailed
+    this morning, and — because the relationship engine's dedupe key is built from
+    `last_contact` — the contact could never become eligible for a future nudge. Writing the
+    touch at the moment the human sends closes both, deterministically.
+
+    `last_contact` still only ever moves FORWARD (max), so this can never rewind history.
+    """
+    owner = (owner_email or "").strip().lower()
+    email = (contact_email or "").strip().lower()
+    if not owner or not email or not (organization_id or "").strip() or not when:
+        return False
+    g = get_graph(organization_id)
+    res = g.query(
+        """
+        MATCH (p:Person {email: $email, owner_email: $owner})
+        SET p.corr_count = coalesce(p.corr_count, 0) + 1,
+            p.last_subject = CASE
+                WHEN p.last_contact IS NULL THEN $subject
+                WHEN $when > p.last_contact THEN $subject
+                ELSE p.last_subject END,
+            p.last_contact = CASE
+                WHEN p.last_contact IS NULL THEN $when
+                WHEN $when > p.last_contact THEN $when
+                ELSE p.last_contact END
+        RETURN count(p)
+        """,
+        params={"email": email, "owner": owner, "when": when,
+                "subject": (subject or "")[:160] or None},
+    )
+    return bool(res.result_set and res.result_set[0][0])
 
 
 def update_company_for_domain(
@@ -632,6 +697,44 @@ def stats(organization_id: str) -> dict:
     people = g.ro_query("MATCH (p:Person) RETURN count(p)").result_set[0][0]
     companies = g.ro_query("MATCH (c:Company) RETURN count(c)").result_set[0][0]
     return {"people": people, "companies": companies}
+
+
+def list_relationship_signals(owner_email: str, organization_id: str) -> list[dict]:
+    """Every external contact in ONE employee's network with the two cadence signals —
+    `corr_count` (warmth) and `last_contact` (recency) — plus enough to render a nudge.
+
+    This is the read the relationship engine's cadence pass runs: one query, no scoring,
+    no model. The arithmetic that turns these rows into "who is overdue" lives in
+    `utils/cadence.py`, kept out of the query so it is deterministic and testable without a
+    graph. Rows with no `last_contact` are returned as-is; cadence skips them.
+    """
+    owner = (owner_email or "").strip().lower()
+    if not owner or not (organization_id or "").strip():
+        return []
+    g = get_graph(organization_id)
+    rows = g.ro_query(
+        "MATCH (p:Person {owner_email: $owner}) "
+        "OPTIONAL MATCH (p)-[:WORKS_AT]->(c:Company) "
+        "RETURN p.email, p.name, p.title, coalesce(c.name, p.company), "
+        "p.corr_count, p.last_contact, p.last_subject",
+        params={"owner": owner},
+    ).result_set
+    by_email: dict[str, dict] = {}
+    for email, name, title, company, corr, last, last_subject in rows:
+        if not email:
+            continue
+        if email in by_email and not company:
+            continue  # keep the row that found an employer (a person may have >1 WORKS_AT)
+        by_email[email] = {
+            "email": email,
+            "name": name,
+            "title": title,
+            "company": company,
+            "corr_count": int(corr or 0),
+            "last_contact": last,
+            "last_subject": last_subject,
+        }
+    return list(by_email.values())
 
 
 def get_network(owner_email: str, organization_id: str) -> dict:

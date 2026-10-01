@@ -48,7 +48,12 @@ EvidenceKind = Literal[
     "sharepoint.authored-doc",
     "outlook.meeting-attend",
     "company.own-website",
+    # A colleague typed it in by hand. The human is the ultimate primary source — this is
+    # the only source there is for things a mailbox never states outright ("we played golf").
+    # Above the VERIFIED floor on its own, so a manual note is a fact, not a suggestion.
+    "human.manual-entry",
     # SUPPORTING — true, but consistent with many people/companies, so never enough alone.
+    "llm.mail-personal-extraction",
     "web.cited-claim",
     "outlook.address-book",
     "handle.name-form",
@@ -116,7 +121,20 @@ WEIGHTS: dict[EvidenceKind, Weighting] = {
     "company.own-website": Weighting(
         0.85, True, "the company's own website says so"
     ),
+    # A rep recorded it themselves. 0.90 — a human who was there outranks any inferred
+    # source, and clears the VERIFIED floor alone so a hand-entered note is written, not
+    # queued for someone to re-confirm what they just typed.
+    "human.manual-entry": Weighting(
+        0.90, True, "a colleague recorded it by hand"
+    ),
     # --- supporting ---------------------------------------------------------------
+    # A model read a personal detail ("mentioned golf") out of a mail body. NON-PRIMARY on
+    # purpose: an inference from prose is a SUGGESTION the rep confirms, never an auto-applied
+    # fact — the model can misread a throwaway line. A rep's own manual note (primary) or a
+    # second mention corroborates it upward. 0.45 -> lands POSSIBLE, i.e. offered, not written.
+    "llm.mail-personal-extraction": Weighting(
+        0.45, False, "a model read it from an email between you"
+    ),
     "web.cited-claim": Weighting(0.40, False, "a cited web source states it"),
     "outlook.address-book": Weighting(
         0.35, False, "it is saved on their Outlook contact card"

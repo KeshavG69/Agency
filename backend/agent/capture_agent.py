@@ -32,6 +32,7 @@ from utils.s3_upload_tool import build_s3_upload_tool
 from utils.sharepoint_tools import load_sharepoint_tools, sharepoint_tool_instructions
 from utils.sharepoint_writer import file_to_capture_docs
 from utils.structured import coerce_output
+from utils.dates import RECORD_BOOKKEEPING_FIELDS, date_context
 
 logger = logging.getLogger(__name__)
 
@@ -317,9 +318,12 @@ def generate_capture(opp: dict, employee_email: str | None = None) -> tuple[Capt
     agent = build_capture_agent(
         str(opp.get("organization_id") or ""), employee_email, opp=opp, real_uploads=real_uploads
     )
-    _skip = {"extra", "document_text"}  # document_text is appended cleanly below
+    # document_text is appended cleanly below. The bookkeeping timestamps are dropped: they
+    # describe when our system touched the record, and without a clock the model read
+    # `analyzed_at` as "today" and dated a plan run on 2 Oct as 7 July.
+    _skip = {"extra", "document_text", *RECORD_BOOKKEEPING_FIELDS}
     lines = [f"- {k}: {v}" for k, v in opp.items() if v not in (None, "", {}) and k not in _skip]
-    message = "OPPORTUNITY:\n" + "\n".join(lines) + document_context(opp)
+    message = date_context() + "\n\nOPPORTUNITY:\n" + "\n".join(lines) + document_context(opp)
     # arun(): the doc-gen tools (python_repl_tool, upload tool) are async.
     result = asyncio.run(agent.arun(message))
     return coerce_output(result.content, CaptureOutput), real_uploads

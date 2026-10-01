@@ -58,12 +58,22 @@ def parse_document(src: str, *, max_chars: int | None = None, timeout: float = 6
     return text
 
 
-def document_context(opp: dict, max_chars: int = 2000000) -> str:  # ~500k tokens @ ~4 chars/token
+def document_context(opp: dict, max_chars: int | None = None) -> str:
     """A prompt block carrying the opportunity's parsed solicitation text.
 
     Returns "" when there's no document, so callers can append it unconditionally.
     Every agent appends this so its answers are grounded in the real solicitation.
+
+    The cap defaults to DOC_DIGEST_STUFF_MAX_CHARS — the same ceiling the digest stores text
+    under — so the two cannot drift. This used to be a hard-coded 2,000,000 (~500k tokens),
+    left behind when the digest cap was cut to fit the self-hosted model's 64k context; once
+    SAM.gov documents started arriving, that stale default would have put a prompt several
+    times larger than the model's window on every agent call.
     """
+    from app.settings import settings
+
+    if max_chars is None:
+        max_chars = settings.DOC_DIGEST_STUFF_MAX_CHARS
     text = (opp.get("document_text") or "").strip()
     if not text:
         return ""

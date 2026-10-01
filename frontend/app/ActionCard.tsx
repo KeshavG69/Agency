@@ -27,6 +27,8 @@ const KIND_LABEL: Record<ActionKind, string> = {
   review_docs: "Review",
   submit: "Submit",
   reply_mail: "Reply",
+  relationship_touch: "Reconnect",
+  relationship_personal: "Personal",
 };
 
 const SNOOZE_OPTIONS: { label: string; days: number }[] = [
@@ -47,6 +49,8 @@ export interface ActionHandlers {
   onOpenDocuments: (a: ActionItem) => void;
   onOpenOpportunity: (a: ActionItem) => void;
   onReplyMail: (a: ActionItem) => void;
+  /** Open the relationship nudge (the drafted outreach + its evidence) for review. */
+  onOpenNudge: (a: ActionItem) => void;
 }
 
 export default function ActionCard({
@@ -181,6 +185,14 @@ function primary(a: ActionItem, h: ActionHandlers, busy?: boolean) {
       return (
         <button className="act-btn" onClick={() => h.onReplyMail(a)} disabled={busy}>
           Draft a reply
+        </button>
+      );
+    case "relationship_touch":
+    case "relationship_personal":
+      // The draft is already written; the button opens it for a look before the rep sends.
+      return (
+        <button className="act-btn" onClick={() => h.onOpenNudge(a)} disabled={busy}>
+          Review &amp; send
         </button>
       );
     case "submit":

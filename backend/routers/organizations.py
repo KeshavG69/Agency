@@ -50,6 +50,22 @@ def _membership(target: dict, org_id: ObjectId) -> dict | None:
     )
 
 
+class CadenceSettings(BaseModel):
+    """How often this firm expects to be in front of a contact.
+
+    Exposed because the right rhythm differs by firm AND by the mail history an org actually
+    has: with only two months of correspondence ingested, nobody can be 90 days overdue, so a
+    fixed default makes the relationship engine look broken. Admin-only, like every other org
+    setting. All values are days / message counts and must be positive.
+    """
+
+    warm_threshold: int | None = None      # emails exchanged to count as "warm"
+    warm_days: int | None = None           # expected rhythm for a warm contact
+    developing_threshold: int | None = None
+    developing_days: int | None = None
+    lapsed_after_days: int | None = None   # past this, treat as lapsed, not "going cold"
+
+
 class OrgUpdateRequest(BaseModel):
     name: str | None = None
     uei: str | None = None  # SAM.gov Unique Entity ID (govcon identifier)
@@ -58,6 +74,7 @@ class OrgUpdateRequest(BaseModel):
     # given to the agents as the second half of the fit lens, so a matching opportunity is
     # ranked HIGHER rather than a non-matching one being dropped.
     keywords: str | list[str] | None = None
+    relationship_cadence: CadenceSettings | None = None
 
 
 @router.get("/me")
@@ -89,6 +106,22 @@ async def update_organization(body: OrgUpdateRequest, current_user: dict = Depen
             if k and k.lower() not in {s.lower() for s in seen}:
                 seen[k] = None
         updates["keywords"] = list(seen)
+    if body.relationship_cadence is not None:
+        from utils.cadence import CADENCE_SETTING_KEYS
+
+        given = body.relationship_cadence.model_dump(exclude_none=True)
+        bad = [k for k, v in given.items() if int(v) <= 0]
+        if bad:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cadence values must be positive: {', '.join(sorted(bad))}",
+            )
+        # Merge onto whatever is stored so setting one field does not clear the others.
+        org_now = get_organization_crud().get_by_id(current_user["organization_id"]) or {}
+        current = ((org_now.get("settings") or {}).get("relationship_cadence") or {})
+        merged = {**current, **{k: int(v) for k, v in given.items() if k in CADENCE_SETTING_KEYS}}
+        updates["settings.relationship_cadence"] = merged
+
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nothing to update")
     updates["updated_at"] = datetime.utcnow()

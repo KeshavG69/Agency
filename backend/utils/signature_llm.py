@@ -88,7 +88,7 @@ def extract_signature_llm(
         return None
     if is_automated_address(sender_email):
         return None
-    if not settings.OPENROUTER_API_KEY:
+    if not settings.llm_ready:
         return None
 
     text = body
@@ -102,19 +102,23 @@ def extract_signature_llm(
 
     try:
         resp = httpx.post(
-            f"{settings.OPENROUTER_BASE_URL}/chat/completions",
+            f"{settings.llm_base_url}/chat/completions",
             headers={
-                "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                "Authorization": f"Bearer {settings.llm_api_key}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": settings.SIGNATURE_MODEL,
+                "model": settings.llm_model(settings.SIGNATURE_MODEL),
                 "messages": [{
                     "role": "user",
                     "content": _PROMPT.format(sender=sender_email, body=text),
                 }],
                 "response_format": {"type": "json_object"},
                 "temperature": 0,
+                # Disables the model's chain-of-thought on a self-hosted server (no-op on a
+                # hosted one). This is extraction, not reasoning: thinking only spends the
+                # token budget, and exhausting it returns an empty body with HTTP 200.
+                **settings.llm_extra_body,
             },
             timeout=timeout,
         )

@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { FactRow } from "@/components/agent/FactSuggestion";
+import { PersonalFacts } from "@/components/agent/PersonalFacts";
 import { contactFactsQuery } from "@/lib/queries";
 
 /** The fields worth showing on a contact card, in the order a rep reads them. */
@@ -28,6 +29,7 @@ export function ContactFacts({ email }: { email: string }) {
 
   const facts = q.data?.facts ?? {};
   const suggestions = q.data?.suggestions ?? [];
+  const personal = q.data?.personal ?? {};
 
   const rows = FIELDS.map((field) => ({
     field,
@@ -36,19 +38,19 @@ export function ContactFacts({ email }: { email: string }) {
   })).filter((r) => r.value || r.suggestion);
 
   // Never show a spinner here. The card is already useful without this block, and a
-  // spinner per contact would make a list of ten people flicker on every open.
-  if (rows.length === 0) return null;
+  // spinner per contact would make a list of ten people flicker on every open. Wait for
+  // the first load, though — rendering the personal add-form before data would let a rep
+  // type into a form that then re-mounts under them.
+  if (q.isPending) return null;
 
   return (
     <div className="mt-2 border-t pt-2">
       {rows.map((r) => (
-        <FactRow
-          key={r.field}
-          field={r.field}
-          value={r.value}
-          suggestion={r.suggestion}
-        />
+        <FactRow key={r.field} field={r.field} value={r.value} suggestion={r.suggestion} />
       ))}
+      {/* The relationship lane always renders — it carries its own add-a-note form and empty
+          state, so a contact with no personal facts yet is where a rep starts one. */}
+      <PersonalFacts email={email} personal={personal} suggestions={suggestions} />
     </div>
   );
 }

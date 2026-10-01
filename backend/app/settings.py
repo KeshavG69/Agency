@@ -107,12 +107,99 @@ class Settings(BaseSettings):
     # model call; otherwise each document is summarized in ONE call (natural boundaries),
     # then the per-document digests are merged.
     DOC_DIGEST_MODEL: str = "openai/gpt-5.6-luna"
-    # ~500k tokens @ ~4 chars/token. <= this total => keep verbatim, no LLM call.
-    DOC_DIGEST_STUFF_MAX_CHARS: int = 2000000
+    # ~50k tokens @ ~4 chars/token. <= this total => keep verbatim, no LLM call.
+    # Sized to FIT A CONTEXT WINDOW, not to the model's advertised maximum: the self-hosted
+    # Gemma runs with n_ctx=65536 (even though the weights train to 262k), so the old 2,000,000
+    # chars (~500k tokens) would have been stuffed verbatim into a prompt eight times too big
+    # for the server — which fails at request time, after the whole document was assembled.
+    DOC_DIGEST_STUFF_MAX_CHARS: int = 200000
 
     # Capture agent — text-to-image generation via OpenRouter's Image API (POST /images).
+    # NOTE: image generation always stays on OpenRouter — a self-hosted text model (Gemma)
+    # cannot serve it — so this one deliberately does NOT follow LLM_BASE_URL below.
     IMAGE_GEN_MODEL: str = "openai/gpt-image-2"
     IMAGE_GEN_SIZE: str = "1024x1024"
+
+    # ---- Text-model provider (optional self-hosted override) -------------------------
+    # Every TEXT/chat call — agents, signature + personal extraction, Excel ingest, the
+    # REPL tool — resolves its endpoint through the three properties below. They default
+    # to OpenRouter, so leaving these unset changes nothing.
+    #
+    # To run the whole system against a self-hosted OpenAI-compatible server (e.g. Gemma
+    # behind vLLM / llama.cpp / Ollama on the lab box):
+    #
+    #   LLM_BASE_URL=http://localhost:8020/v1     # the SSM port-forward, from a laptop
+    #   LLM_API_KEY=local                         # most local servers ignore it
+    #   LLM_MODEL=google/gemma-3-27b-it           # whatever GET /v1/models reports
+    #
+    # IMPORTANT — "localhost" is relative to whatever runs THIS process. It is correct when
+    # the backend runs on the same machine as the port-forward. If the backend runs on the
+    # NJ server (Orionhub) or in a container, localhost is that box's own loopback and will
+    # not reach the tunnel: use the address that box can actually reach the model on (e.g.
+    # its Tailscale IP, http://100.x.y.z:8020/v1, or the container-host address).
+    #
+    # `scripts/check_llm.py` verifies whatever is configured before you run the agents.
+    LLM_BASE_URL: str = ""
+    LLM_API_KEY: str = ""
+    # When set, this model id REPLACES every per-agent model below. A single self-hosted
+    # server typically serves one model, and without this you would have to override
+    # ANALYST_MODEL, CRM_MODEL, MAIL_MODEL, SIGNATURE_MODEL … individually and keep them
+    # in sync. Leave empty to keep the per-agent models above.
+    LLM_MODEL: str = ""
+
+    # Reasoning ("thinking") models emit a chain of thought BEFORE the answer, and it is
+    # charged against the same token budget. Measured on the lab box's gemma-4-31B, one
+    # one-sentence answer cost 272 completion tokens with thinking vs 24 without — 11x the
+    # tokens and 3.8x the wall-clock, for the same answer. Worse, when the budget runs out
+    # mid-thought the reply comes back HTTP 200 with an EMPTY content field, which reads
+    # downstream as "the model returned nothing" rather than as an error.
+    #
+    # Off by default: almost every call this system makes is extraction or short drafting,
+    # where thinking buys nothing. Set LLM_ENABLE_THINKING=true for judgement-heavy work.
+    #
+    # Only `chat_template_kwargs.enable_thinking` actually works on llama.cpp — the
+    # `reasoning_budget` and top-level `thinking` parameters are accepted and SILENTLY
+    # IGNORED (both verified against the live server).
+    LLM_ENABLE_THINKING: bool = False
+
+    @property
+    def llm_extra_body(self) -> dict:
+        """Non-standard JSON body fields for the chat API.
+
+        Returns {} for a hosted provider: `chat_template_kwargs` is a llama.cpp extension,
+        and sending it to OpenRouter is at best ignored and at worst a 400. It is applied
+        ONLY when we are pointed at a self-hosted server.
+        """
+        if not self.llm_is_self_hosted:
+            return {}
+        return {"chat_template_kwargs": {"enable_thinking": bool(self.LLM_ENABLE_THINKING)}}
+
+    @property
+    def llm_base_url(self) -> str:
+        """The endpoint every text/chat call uses."""
+        return (self.LLM_BASE_URL or self.OPENROUTER_BASE_URL).rstrip("/")
+
+    @property
+    def llm_api_key(self) -> str:
+        """The key for that endpoint. Self-hosted servers usually ignore auth, but the
+        OpenAI SDK refuses an empty key outright — so a placeholder stands in."""
+        if self.LLM_BASE_URL:
+            return self.LLM_API_KEY or "local"
+        return self.OPENROUTER_API_KEY
+
+    @property
+    def llm_ready(self) -> bool:
+        """Is a text model reachable at all? Self-hosting needs no API key, so the old
+        `if not OPENROUTER_API_KEY: give up` guard would wrongly disable everything."""
+        return bool(self.LLM_BASE_URL or self.OPENROUTER_API_KEY)
+
+    def llm_model(self, configured: str) -> str:
+        """`configured` unless a single self-hosted model overrides everything."""
+        return self.LLM_MODEL or configured
+
+    @property
+    def llm_is_self_hosted(self) -> bool:
+        return bool(self.LLM_BASE_URL)
 
 
     class Config:

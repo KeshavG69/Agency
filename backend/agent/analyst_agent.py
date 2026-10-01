@@ -11,7 +11,6 @@ from its UEI) are fed into the context; the agent returns a structured AnalystVe
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from agno.agent import Agent
 
@@ -23,6 +22,7 @@ from models.verdict import AnalystVerdict
 from utils.agno_tools import create_exa_web_search_tool, create_reasoning_tool
 from utils.doc_parse import document_context
 from utils.structured import coerce_output
+from utils.dates import date_context, utc_today
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,7 @@ def build_analyst_agent(organization_id: str | None = None) -> Agent:
 
 
 def _format_opportunity(opp: dict, today: str) -> str:
-    lines = [f"Today's date: {today}", "", "OPPORTUNITY:"]
+    lines = [date_context(today), "", "OPPORTUNITY:"]
     for key in _OPP_FIELDS:
         val = opp.get(key)
         if val not in (None, ""):
@@ -175,7 +175,8 @@ def analyze_opportunity(
     flaky one-off. Retry the run a few times before giving up; a fresh run almost
     always produces clean JSON.
     """
-    today = today or datetime.now().strftime("%Y-%m-%d")
+    # UTC, not datetime.now(): the server's local date can be a day ahead (see utils/dates.py).
+    today = today or utc_today()
     organization_id = str(opp.get("organization_id") or "")
     message = _format_opportunity(opp, today)
     last_err: Exception | None = None

@@ -162,6 +162,59 @@ class OrganizationCRUD:
         return slug
 
 
+def iter_active_memberships():
+    """Yield (email, organization_id) for every ACTIVE org membership of every user — the
+    correct way for a beat task to fan out "one job per employee mailbox".
+
+    WHY THIS EXISTS. A user document has NO top-level `organization_id`: membership lives in
+    `organizations[]` (plus `current_organization_id`), and `organization_id` is only derived
+    per-request by auth/dependencies.py. Two beat dispatchers used to query
+    `{"organization_id": {"$exists": True}}`, which matches nobody — so the daily mail sweep
+    and the relationship sweep silently dispatched ZERO jobs. Iterating memberships here, in
+    one place, is the fix: a user in two orgs yields twice, because each org has its own
+    contact graph for that mailbox.
+    """
+    db = get_mongodb_client().get_database()
+    for user in db["users"].find(
+        {"email": {"$exists": True}, "organizations.organization_id": {"$exists": True}},
+        {"email": 1, "organizations": 1},
+    ):
+        email = (user.get("email") or "").strip().lower()
+        if not email:
+            continue
+        for membership in user.get("organizations") or []:
+            org = str(membership.get("organization_id") or "").strip()
+            # A membership with no explicit status predates the field; treat it as active.
+            if org and (membership.get("status") or "active") == "active":
+                yield email, org
+
+
+def user_display_name(email: str) -> str:
+    """The user's real display name ("Rajesh Parikh"), or "" when it cannot be resolved.
+
+    Used wherever an agent drafts a message a human will send under their own name. It
+    exists because three drafting agents (outreach, reply, relationship) used to sign off with
+    a "[Your Name]" placeholder — telling the model "you do not know who is sending this" while
+    the acting employee's email was being passed in the whole time. A rep who sends without
+    editing mails a template to a customer.
+
+    Case-insensitive on purpose: email signup stores the address as typed (auth/crud.py does
+    not lowercase it), so an exact lowercase match silently misses those users.
+    """
+    addr = (email or "").strip()
+    if not addr:
+        return ""
+    import re
+
+    user = get_mongodb_client().get_database()["users"].find_one(
+        {"email": {"$regex": f"^{re.escape(addr)}$", "$options": "i"}},
+        {"firstName": 1, "lastName": 1},
+    ) or {}
+    return " ".join(
+        p for p in ((user.get("firstName") or "").strip(), (user.get("lastName") or "").strip()) if p
+    )
+
+
 def get_organization_crud() -> OrganizationCRUD:
     """
     Get or create OrganizationCRUD instance (singleton pattern)

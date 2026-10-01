@@ -4,6 +4,8 @@ The frontend mail artifact posts the (possibly edited) draft here when the user
 clicks Send. This is the ONLY place email actually goes out, and only ever in
 response to that explicit click — never automatically.
 """
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -13,6 +15,15 @@ from models.mail import MailDraft
 from utils.composio_utils import send_outlook_email
 
 router = APIRouter(prefix="/api/mail", tags=["mail"])
+
+# Unfilled template tokens a drafting agent leaves for the human to complete. TARGETED, not
+# "any [bracketed] text": a real email can legitimately contain brackets, and blocking a
+# legitimate send is its own failure. These are the shapes the agents actually emit.
+_UNFILLED_PLACEHOLDER = re.compile(
+    r"\[\s*(?:Your|Insert|Recipient|Contact)\b[^\]]*\]"
+    r"|\[\s*(?:Name|Title|Company|Company Name|Phone|Date)\s*\]",
+    re.IGNORECASE,
+)
 
 
 class CollisionRequest(BaseModel):
@@ -44,6 +55,17 @@ def send_mail(draft: MailDraft, current_user: dict = Depends(get_current_user)) 
         raise HTTPException(status_code=400, detail="A recipient ('to') is required.")
     if not draft.subject.strip() or not draft.body.strip():
         raise HTTPException(status_code=400, detail="Subject and body are required.")
+    # The last line of defence against mailing a TEMPLATE to a customer. The drafting agents
+    # now sign with the rep's real name, but a placeholder can still arrive — an unresolved
+    # name, a model that disobeyed, a hand-edited draft. Every outbound path (outreach, reply,
+    # relationship nudge) sends through here, so this one check covers all of them.
+    leftover = _UNFILLED_PLACEHOLDER.findall(f"{draft.subject}\n{draft.body}")
+    if leftover:
+        raise HTTPException(
+            status_code=422,
+            detail=(f"This email still has an unfilled placeholder ({', '.join(dict.fromkeys(leftover))}). "
+                    "Replace it before sending — nothing was sent."),
+        )
 
     result = send_outlook_email(draft.outlook_send_args(user_id="me"),
                                 user_id=current_user["email"].lower())

@@ -40,8 +40,11 @@ def generate_image(
     Raises on any failure (missing key, HTTP error, no image in the response) so the caller can
     surface it to the model instead of embedding a broken image.
     """
+    # DELIBERATELY still OpenRouter, not settings.llm_* like every text call: image
+    # generation cannot be served by a self-hosted text model (Gemma), so pointing
+    # LLM_BASE_URL at the lab box must not drag this along with it.
     if not settings.OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY is not set")
+        raise RuntimeError("OPENROUTER_API_KEY is not set (image generation always uses OpenRouter)")
     if not (prompt or "").strip():
         raise ValueError("prompt is empty")
 
