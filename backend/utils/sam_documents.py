@@ -194,12 +194,30 @@ def list_attachments(notice_id: str) -> Optional[list[dict]]:
     return [a for g in groups for a in (g.get("attachments") or [])]
 
 
+def _is_deleted(a: dict) -> bool:
+    """True when SAM.gov considers this attachment gone — by EITHER signal.
+
+    `deletedFlag` is not enough. When a notice is replaced, its old files keep
+    `deletedFlag='0'` and an empty `deletedDate`, and carry only `effectiveDeletedDate`. Those
+    files are listed (even with `excludeDeleted=true`) yet their download returns HTTP 400 —
+    which is how a live backfill reported a dozen real packages as "no readable documents".
+    """
+    if str(a.get("deletedFlag") or "0") not in ("0", "false", "False"):
+        return True
+    eff = str(a.get("effectiveDeletedDate") or "").strip()
+    if eff:
+        from datetime import datetime, timezone
+
+        return eff[:19] <= datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return False
+
+
 def fingerprint(raw: list[dict]) -> str:
     """Identity of the notice's CURRENT document set. Changes when an amendment adds or
     replaces a file — which is exactly when the text must be rebuilt."""
     ids = sorted(
         str(a.get("resourceId")) for a in raw
-        if a.get("type") == "file" and str(a.get("deletedFlag") or "0") in ("0", "false", "False")
+        if a.get("type") == "file" and not _is_deleted(a)
     )
     return hashlib.sha1("|".join(ids).encode()).hexdigest()[:16] if ids else ""
 
@@ -216,7 +234,7 @@ def select_attachments(raw: list[dict]) -> list[Attachment]:
         )
         if a.get("type") != "file":
             att.reason = "a link, not a file"
-        elif str(a.get("deletedFlag") or "0") not in ("0", "false", "False"):
+        elif _is_deleted(a):
             att.reason = "deleted / superseded"
         elif (a.get("accessLevel") or "public") != "public" or str(a.get("explicitAccess") or "0") not in ("0", "false"):
             att.reason = "not public (requires SAM.gov access)"
@@ -292,7 +310,8 @@ def fetch_solicitation_documents(
     texts: list[str] = []
     # Parse in priority order so, if anything fails, the PWS is the last thing to be lost.
     for a in sorted((x for x in atts if x.selected), key=lambda x: (x.tier, x.posted)):
-        text = parse_document(a.download_url, max_chars=MAX_CHARS_PER_FILE, timeout=90.0)
+        text = parse_document(a.download_url, max_chars=MAX_CHARS_PER_FILE, timeout=90.0,
+                              filename=a.name)  # the format hint LiteParse needs for non-PDF
         if not text:
             a.selected, a.reason = False, "could not be read"
             continue
@@ -302,7 +321,11 @@ def fetch_solicitation_documents(
 
     result.attachments = [a.manifest() for a in atts]
     if not texts:
-        result.error = "no readable documents"
+        # Two different outcomes, and only one of them is final:
+        #   nothing was selectable (links only, forms only, superseded) -> nothing to do, ever
+        #   files WERE selected but none could be downloaded/parsed       -> worth retrying
+        tried = any(m["reason"] == "could not be read" for m in result.attachments)
+        result.error = "unreadable files" if tried else "nothing to parse"
         return result
     try:
         result.text = digest_documents(texts)

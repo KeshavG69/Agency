@@ -72,6 +72,10 @@ _INDEXES: list[tuple[str, list, dict]] = [
     # calls / tasks / documents: fetched per opportunity for the detail pane.
     ("calls", [("opportunity_id", ASCENDING)], {}),
     ("tasks", [("opportunity_id", ASCENDING)], {}),
+    # The get-or-create lookup in create_call / create_task. Non-unique for now: the existing
+    # duplicate rows would make a unique index fail to build. Make it unique after cleanup.
+    ("calls", [("opportunity_id", ASCENDING), ("name", ASCENDING)], {}),
+    ("tasks", [("opportunity_id", ASCENDING), ("name", ASCENDING)], {}),
     ("documents", [("opportunity_id", ASCENDING), ("type", ASCENDING)], {}),
     # call briefs: one per (org, opportunity, contact, rep) — the upsert key. The dialog reads
     # by (org, opportunity, rep), which this index's prefix serves.

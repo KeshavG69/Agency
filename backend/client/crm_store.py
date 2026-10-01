@@ -174,6 +174,7 @@ class CRMStore:
         attachments: list[dict],
         parsed: int,
         error: str | None = None,
+        read_attempts: int = 0,
     ) -> bool:
         """Record one attempt to pull a SAM.gov notice's documents. Org-scoped.
 
@@ -195,6 +196,7 @@ class CRMStore:
                     "documents_fingerprint": fingerprint,
                     "documents_fetched_at": now,
                     "sam_documents": {"parsed": parsed, "attachments": attachments, "error": error},
+                    "documents_read_attempts": read_attempts,
                     "updated_at": now,
                 }},
             )
@@ -345,18 +347,30 @@ class CRMStore:
             {"$set": {"outreach_drafts": drafts, "outreach_drafted_at": _utc_now()}},
         )
 
-    def apply_verdict(self, opportunity_id: str, verdict: AnalystVerdict) -> None:
+    def apply_verdict(self, opportunity_id: str, verdict: AnalystVerdict) -> bool:
+        """Write an Analyst verdict. Returns True when a HUMAN decision was kept instead.
+
+        A rep's manual call (`set_decision`, which sets `decision_overridden`) outranks the
+        Analyst — the same rule the facts store enforces for a human-typed value. This used to
+        overwrite `bid_decision` unconditionally; set_decision's "stamps analyzed_at so the batch
+        won't clobber it" only guarded the unanalyzed sweep, not the automatic re-check (or any
+        re-analysis), both of which re-run this exact write. So a scheduled re-check could flip
+        a rep's Bid back to Watch without anyone noticing.
+
+        Split into two writes on purpose. The ANALYSIS (priority, rationale, risk) is always
+        refreshed — new documents can surface new risks, and that is evidence the rep should see.
+        The DECISION (bid_decision, stage) is applied only when no human owns it.
+        """
+        oid = ObjectId(opportunity_id)
         self.opps.update_one(
-            {"_id": ObjectId(opportunity_id)},
+            {"_id": oid},
             {"$set": {
-                "bid_decision": verdict.bid_decision,
                 "priority_score": verdict.priority_score,
                 "analyst_rationale": verdict.rationale,
                 # Structured risk — the same judgement the rationale explains in prose, kept
                 # as fields so the UI can render a meter and the list can filter on it.
                 "risk_level": verdict.risk_level,
                 "risk_factors": [f.model_dump() for f in verdict.risk_factors],
-                "stage": verdict.recommended_stage,
                 "analyzed_at": _utc_now(),
                 # Analyst-done is the single choke point where a manual opp leaves the
                 # "Ingesting" section: it gains a verdict and the flag clears in one write.
@@ -364,6 +378,11 @@ class CRMStore:
                 "ingest_error": None,
             }},
         )
+        res = self.opps.update_one(
+            {"_id": oid, "decision_overridden": {"$ne": True}},
+            {"$set": {"bid_decision": verdict.bid_decision, "stage": verdict.recommended_stage}},
+        )
+        return res.matched_count == 0
 
     # Bid_decision -> pipeline stage, mirroring the Analyst's mapping.
     _DECISION_STAGE = {"Bid": "Qualify", "Watch": "Discover", "No-Bid": "No-Bid"}
@@ -394,7 +413,27 @@ class CRMStore:
         )
         return res.matched_count > 0
 
+    # WHY THESE ARE GET-OR-CREATE. Both used to be plain inserts, called by the Analyst on
+    # every verdict. The Analyst does not run once per opportunity: Watch verdicts schedule an
+    # automatic re-check, and every re-check re-ran the full task — adding ANOTHER identical
+    # call or "Revisit" task each time. The live database had accumulated 4,198 surplus calls
+    # and 2,018 surplus tasks, with single opportunities carrying the same item 30 times.
+    #
+    # Now: one per (opportunity, name). A re-run refreshes the content — but ONLY while the item
+    # is untouched (still Planned / Not Started). Once a rep has acted on it, it is theirs, and a
+    # later verdict must not rewrite or resurrect it.
+
     def create_call(self, opportunity_id: str, name: str, talking_point: str) -> str:
+        existing = self.calls.find_one(
+            {"opportunity_id": opportunity_id, "name": name}, {"_id": 1, "status": 1},
+        )
+        if existing:
+            if (existing.get("status") or "Planned") == "Planned":
+                self.calls.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {"talking_point": talking_point, "updated_at": _utc_now()}},
+                )
+            return str(existing["_id"])
         res = self.calls.insert_one({
             "opportunity_id": opportunity_id,
             "name": name,
@@ -408,6 +447,17 @@ class CRMStore:
         self, opportunity_id: str, name: str, description: str = "",
         due_date: str | None = None,
     ) -> str:
+        existing = self.tasks.find_one(
+            {"opportunity_id": opportunity_id, "name": name}, {"_id": 1, "status": 1},
+        )
+        if existing:
+            if (existing.get("status") or "Not Started") == "Not Started":
+                self.tasks.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {"description": description, "due_date": due_date,
+                              "updated_at": _utc_now()}},
+                )
+            return str(existing["_id"])
         res = self.tasks.insert_one({
             "opportunity_id": opportunity_id,
             "name": name,

@@ -33,6 +33,11 @@ from client.crm_store import get_crm_store
 logger = logging.getLogger(__name__)
 
 
+# How many times a package whose files would not read is retried before it is recorded as
+# final. Covers transient download/parse failures without re-fetching a broken file forever.
+MAX_READ_ATTEMPTS = 3
+
+
 def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -60,8 +65,13 @@ def attach_documents(opportunity_id: str, organization_id: str, *, force: bool =
         return {"status": "listing_failed", "changed": False}
 
     current = fingerprint(raw)
-    if not force and opp.get("documents_fetched_at") and current == (opp.get("documents_fingerprint") or ""):
+    recorded = opp.get("documents_fingerprint") or ""
+    # A withheld (empty) fingerprint means the last attempt was retryable — never "unchanged".
+    if not force and opp.get("documents_fetched_at") and recorded and current == recorded:
         return {"status": "unchanged", "changed": False}
+    if not force and opp.get("documents_fetched_at") and not current and not recorded \
+            and (opp.get("sam_documents") or {}).get("error") in ("nothing to parse", "no attachments"):
+        return {"status": "unchanged", "changed": False}  # still nothing there to read
 
     docs = fetch_solicitation_documents(opp["notice_id"], raw=raw)
     changed = False
@@ -69,9 +79,20 @@ def attach_documents(opportunity_id: str, organization_id: str, *, force: bool =
         changed = crm.set_document_text(
             opportunity_id, organization_id, docs.text, document_url=docs.document_url,
         )
+    # A read failure (files selected, none downloadable/parseable) is usually transient — a
+    # timeout, a 5xx. Recording its fingerprint would make it final: the next run sees the same
+    # file set and skips it forever. So the fingerprint is withheld and the attempt counted;
+    # after MAX_READ_ATTEMPTS it is recorded for real, so a genuinely broken file cannot be
+    # re-downloaded every single day.
+    # Counts CONSECUTIVE read failures: any other outcome resets it, so one hiccup months after
+    # a few early failures is not mistaken for a file that is permanently broken.
+    attempts = (int(opp.get("documents_read_attempts") or 0) + 1) if docs.error == "unreadable files" else 0
+    final = docs.error != "unreadable files" or attempts >= MAX_READ_ATTEMPTS
     crm.record_document_fetch(
-        opportunity_id, organization_id, fingerprint=docs.fingerprint,
+        opportunity_id, organization_id,
+        fingerprint=docs.fingerprint if final else "",
         attachments=docs.attachments, parsed=docs.parsed, error=docs.error,
+        read_attempts=attempts,
     )
     logger.info("SAM documents %s (%s): parsed %d file(s) -> %d chars%s",
                 opportunity_id, opp["notice_id"], docs.parsed, len(docs.text),
