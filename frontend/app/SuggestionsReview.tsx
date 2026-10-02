@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { FactRow } from "@/components/agent/FactSuggestion";
+import { PersonalFacts } from "@/components/agent/PersonalFacts";
 import { contactFactsQuery } from "@/lib/queries";
+import { PERSONAL_FACT_FIELDS, type PersonalFactField } from "@/lib/intelligence";
 import { fetchSuggestionContacts, type SuggestionContact } from "@/lib/intelligence";
 
 const PAGE = 50;
@@ -129,6 +131,12 @@ function ContactReviewDialog({
   const q = useQuery({ ...contactFactsQuery(email), refetchOnWindowFocus: false });
   const facts = q.data?.facts ?? {};
   const suggestions = q.data?.suggestions ?? [];
+  const personal = q.data?.personal ?? {};
+  // Personal-lane suggestions render inside PersonalFacts; keep them out of the
+  // professional list above so a scanned "golf" doesn't appear as a title/company row.
+  const professionalSuggestions = suggestions.filter(
+    (s) => !PERSONAL_FACT_FIELDS.includes(s.field as PersonalFactField),
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -162,18 +170,25 @@ function ContactReviewDialog({
         <div className="rev-body">
           {q.isPending ? (
             <div className="cl-foot">Loading…</div>
-          ) : suggestions.length === 0 ? (
-            <div className="cl-empty">All settled for this contact. 🎉</div>
           ) : (
-            suggestions.map((s) => (
-              <FactRow
-                key={`${s.field}-${s.id}`}
-                field={s.field}
-                value={facts[s.field]}
-                suggestion={s}
-                onDecided={() => onSettled(email)}
-              />
-            ))
+            <>
+              {professionalSuggestions.length === 0 ? (
+                <div className="cl-empty">No open questions on the professional side.</div>
+              ) : (
+                professionalSuggestions.map((s) => (
+                  <FactRow
+                    key={`${s.field}-${s.id}`}
+                    field={s.field}
+                    value={facts[s.field]}
+                    suggestion={s}
+                    onDecided={() => onSettled(email)}
+                  />
+                ))
+              )}
+              {/* The relationship lane: scanned personal suggestions, settled facts, and the
+                  add-a-note form — always available, even when nothing professional is open. */}
+              <PersonalFacts email={email} personal={personal} suggestions={suggestions} />
+            </>
           )}
         </div>
       </div>

@@ -17,7 +17,10 @@ import { useCollecctCache } from "@/lib/cache";
 import { cn } from "@/lib/cn";
 import { decideFact, type ContactFact, type FactField } from "@/lib/intelligence";
 
-const FIELD_LABELS: Record<FactField, string> = {
+// Partial: only the fields with a non-obvious label need one here. Personal fields
+// (interests, shared_activity, …) fall through to `fieldLabel`'s humaniser, which renders
+// them correctly ("Shared activity"), so listing them would be redundant.
+const FIELD_LABELS: Partial<Record<FactField, string>> = {
   title: "Title",
   company: "Company",
   industry: "Industry",

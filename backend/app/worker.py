@@ -23,8 +23,10 @@ import tasks.mail_sweep_tasks  # noqa: E402,F401
 import tasks.mail_tasks  # noqa: E402,F401
 import tasks.manual_upload_tasks  # noqa: E402,F401
 import tasks.notify_tasks  # noqa: E402,F401
+import tasks.relationship_tasks  # noqa: E402,F401
 import tasks.resync_tasks  # noqa: E402,F401
 import tasks.sam_radar_tasks  # noqa: E402,F401
+import tasks.sam_document_tasks  # noqa: E402,F401
 import tasks.sharepoint_tasks  # noqa: E402,F401
 
 celery_app.autodiscover_tasks(packages=["tasks"], force=True)
@@ -89,6 +91,14 @@ celery_app.conf.beat_schedule = {
     "mail-sweep-daily": {
         "task": "mail_sweep.daily",
         "schedule": crontab(hour=7, minute=0),
+    },
+    # The relationship engine: sweep each network for warm contacts going quiet and live
+    # personal hooks, draft the outreach, gate it, and leave open nudges for the action plan
+    # to surface. 09:00 — AFTER the mail sweep (so personal facts and last_contact are fresh)
+    # and before the action plan, so the morning's nudges land on the SAME day's Today list.
+    "relationship-sweep-daily": {
+        "task": "relationship.daily",
+        "schedule": crontab(hour=9, minute=0),
     },
     # The human to-do list: for every pursuit, what does a person owe it, and on what day —
     # worked backwards from the response deadline. 12:00 is an hour after the SAM.gov scan,

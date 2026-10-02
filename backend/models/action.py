@@ -39,6 +39,10 @@ ActionKind = Literal[
     "review_docs",      # capture produced documents nobody has looked at
     "submit",           # get the response in
     "reply_mail",       # off-chain: a customer wrote and is waiting
+    # Relationship engine — NOT tied to a pursuit. A drafted outreach the rep approves with
+    # one tap; ref_id points at the RelationshipNudge that carries the draft + its evidence.
+    "relationship_touch",     # a warm contact has gone quiet past its cadence
+    "relationship_personal",  # a live personal hook worth pulling (golf, family, a date)
 ]
 
 # critical = we are past the point this step should have been done

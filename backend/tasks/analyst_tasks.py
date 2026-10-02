@@ -39,10 +39,15 @@ def analyze_opportunity_task(self, opp: dict) -> dict:
             raise
         raise self.retry(exc=exc)
 
-    crm.apply_verdict(opp["id"], verdict)
+    human_owned = crm.apply_verdict(opp["id"], verdict)
 
     name = opp.get("title") or "opportunity"
-    if verdict.bid_decision == "Bid" and verdict.call_action:
+    # A pursuit whose decision a rep made by hand is theirs to run: the Analyst refreshes its
+    # analysis but does not create calls or "Revisit" tasks on it, and does not schedule a
+    # re-check whose only purpose is to re-decide what a human already decided.
+    if human_owned:
+        pass
+    elif verdict.bid_decision == "Bid" and verdict.call_action:
         crm.create_call(
             opp["id"],
             name=f"Call: {name}",
@@ -55,11 +60,13 @@ def analyze_opportunity_task(self, opp: dict) -> dict:
     # trail can show WHY we walked away — the question a rep actually asks later.
     record_event(
         str(opp.get("organization_id") or ""), "analyst", "opportunity", str(opp["id"]),
-        f"{verdict.bid_decision} — priority {verdict.priority_score}",
+        (f"Analysis refreshed — the rep's decision stands (Analyst would say {verdict.bid_decision})"
+         if human_owned else f"{verdict.bid_decision} — priority {verdict.priority_score}"),
         verdict.rationale, ok=verdict.bid_decision != "No-Bid",
     )
 
-    _schedule_recheck(opp, verdict)
+    if not human_owned:
+        _schedule_recheck(opp, verdict)
     # A verdict is what turns an opportunity into somebody's task, so refresh the day's plan.
     # Debounced org-wide, so a 300-opportunity batch buys exactly one sweep, not 300.
     if opp.get("organization_id"):

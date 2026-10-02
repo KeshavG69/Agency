@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import ActionCard, { type ActionHandlers } from "@/app/ActionCard";
+import NudgeDialog from "@/app/NudgeDialog";
 import {
   analyzeSelected,
   approveCapture,
@@ -53,6 +54,8 @@ export default function TodayView({
   // The endpoint still accepts ?scope=org for an admin; nothing in the UI asks for it.
   const scope = "mine" as const;
   const [busyId, setBusyId] = useState<string | null>(null);
+  // The relationship nudge open in the dialog, by its ref_id (the RelationshipNudge id).
+  const [openNudgeId, setOpenNudgeId] = useState<string | null>(null);
   const qc = useQueryClient();
   const pushToast = useToastStore((s) => s.push);
 
@@ -139,6 +142,9 @@ export default function TodayView({
       onOpenDocuments: (a) => a.opportunity_id && onOpenDocuments(a.opportunity_id),
       onOpenOpportunity: (a) => a.opportunity_id && onOpenOpportunity(a.opportunity_id),
       onReplyMail: () => onOpenMail(),
+      // Opens the drafted outreach; the card STAYS until the rep sends or dismisses in the
+      // dialog (which closes the paired action server-side). ref_id is the nudge id.
+      onOpenNudge: (a) => a.ref_id && setOpenNudgeId(a.ref_id),
     }),
     [act, close, onPrepCall, onOpenDocuments, onOpenOpportunity, onOpenMail],
   );
@@ -216,6 +222,15 @@ export default function TodayView({
             </span>
           ))}
         </div>
+      )}
+
+      {openNudgeId && (
+        <NudgeDialog
+          nudgeId={openNudgeId}
+          onClose={() => setOpenNudgeId(null)}
+          // The dialog closed the paired card server-side; refresh so it leaves the list.
+          onResolved={() => qc.invalidateQueries({ queryKey: ["actions"] })}
+        />
       )}
     </div>
   );

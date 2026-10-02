@@ -58,23 +58,31 @@ def _ingest(organization_id: str, opps: list, analyze: bool = True) -> dict:
     except Exception:  # noqa: BLE001 — best-effort; the upsert retry below covers a miss
         pass
     created = updated = 0
+    touched: list[str] = []  # ids of every notice written this run — they get documents next
     for o in opps:
         action = None
         for attempt in range(3):  # remote DB occasionally resets a connection mid-batch
             try:
-                action, _ = crm.upsert_opportunity(o, organization_id)
+                action, crm_id = crm.upsert_opportunity(o, organization_id)
+                touched.append(crm_id)
                 break
             except Exception as exc:  # noqa: BLE001
                 if attempt == 2:
                     logger.warning("SAM Radar: upsert failed for %s: %s", o.notice_id, exc)
         created += action == "created"
         updated += action == "updated"
-    # `analyze` is OFF for the on-demand "Pull from SAM.gov" flow: the user reviews the
-    # matched opportunities and hand-picks which to send to the Analyst. The scheduled
-    # daily scan keeps it ON (hands-off morning verdicts).
-    if analyze and (created or updated):
-        from tasks.analyst_tasks import run_analyst_batch  # lazy: avoid task import cycle
-        run_analyst_batch.delay(organization_id)
+    # Documents FIRST, then the Analyst — in one task (tasks/sam_document_tasks.py). This used
+    # to fire the Analyst straight away, so every SAM.gov verdict was formed from the notice
+    # summary alone: 0 of 10,317 notices ever had their PWS read. Running both in order means
+    # a new notice is judged once, on its actual documents.
+    #
+    # `analyze` is OFF for the on-demand "Pull from SAM.gov" flow: the user reviews the matched
+    # opportunities and hand-picks which to send to the Analyst. Documents are still fetched
+    # there, so they are already on the record when the rep picks one. The scheduled daily
+    # scan keeps it ON (hands-off morning verdicts).
+    if touched:
+        from tasks.sam_document_tasks import ingest_then_analyze  # lazy: avoid task import cycle
+        ingest_then_analyze.delay(organization_id, touched, analyze=analyze)
     # Fresh notices are unread pursuits, which is an "analyse this" task on somebody's day.
     # Fired even when `analyze` is off (the hand-picked flow) — that is precisely the case
     # where a human owes them a read, so the card is the whole point.

@@ -43,11 +43,30 @@ from models.evidence import Evidence, score_evidence
 
 logger = logging.getLogger(__name__)
 
-# Fields a fact may describe. Anything else is rejected, so a stray agent cannot invent
-# columns on a contact record.
-FACT_FIELDS = frozenset(
+# Professional fields — WHAT this person is. Single-valued: a person holds one title, one
+# employer, so a newer verified value RETIRES the old one (that supersede is how a job
+# change shows up for free).
+PROFESSIONAL_FACT_FIELDS = frozenset(
     {"title", "company", "industry", "phone", "seniority", "function", "linkedin", "website"}
 )
+
+# Personal / relationship fields — the HUMAN thread the relationship engine pulls on. These
+# are MULTI-VALUED and append-only: a contact can be into golf AND cycling, and every shared
+# activity is its own dated row — so these fields NEVER supersede one another (see
+# MULTI_VALUED_FIELDS below). "we played golf" almost never lands in a mailbox, so the
+# reliable source here is a rep's manual note; the mail scan proposes the rest.
+PERSONAL_FACT_FIELDS = frozenset(
+    {"interests", "shared_activity", "family", "key_date", "personal_note"}
+)
+
+# Fields a fact may describe. Anything else is rejected, so a stray agent cannot invent
+# columns on a contact record.
+FACT_FIELDS = PROFESSIONAL_FACT_FIELDS | PERSONAL_FACT_FIELDS
+
+# Fields that hold MANY simultaneous values. For these, a new APPLIED value coexists with
+# the others instead of retiring them — accepting "cycling" must not bury "golf". The
+# single-valued professional fields keep their supersede-on-newer behaviour.
+MULTI_VALUED_FIELDS = PERSONAL_FACT_FIELDS
 
 APPLIED, PROPOSED, DISMISSED, SUPERSEDED = "APPLIED", "PROPOSED", "DISMISSED", "SUPERSEDED"
 
@@ -141,13 +160,16 @@ class FactsStore:
             return FactOutcome(False, None, scored.rationale or "too weak to store", scored.score)
 
         # (1) A human owns this field. A stronger source does not get to overrule them.
-        current = self.facts.find_one(
-            {"organization_id": org, "email": addr, "field": field, "status": APPLIED}
-        )
-        if current and current.get("decided_by") and current.get("value") != val:
-            return FactOutcome(
-                False, PROPOSED, "a human set this field", scored.score, scored.band
+        # Multi-valued fields hold many human-owned values at once (golf AND cycling), so a
+        # different existing value is a peer, not a conflict — the guard is single-valued only.
+        if field not in MULTI_VALUED_FIELDS:
+            current = self.facts.find_one(
+                {"organization_id": org, "email": addr, "field": field, "status": APPLIED}
             )
+            if current and current.get("decided_by") and current.get("value") != val:
+                return FactOutcome(
+                    False, PROPOSED, "a human set this field", scored.score, scored.band
+                )
 
         status = APPLIED if scored.band == "VERIFIED" else PROPOSED
         now = _utc_now()
@@ -169,8 +191,9 @@ class FactsStore:
         )
 
         # A newer verified value retires the old one rather than deleting it — which is
-        # also how a job change shows up for free, as a SUPERSEDED row.
-        if status == APPLIED:
+        # also how a job change shows up for free, as a SUPERSEDED row. Multi-valued fields
+        # (interests, shared activities) are exempt: a new one coexists, never buries.
+        if status == APPLIED and field not in MULTI_VALUED_FIELDS:
             self.facts.update_many(
                 {
                     "organization_id": org,
@@ -252,11 +275,13 @@ class FactsStore:
                 tally["skipped"] += 1
                 continue
 
-            # (1) a human owns this field
-            current = applied_now.get((addr, field))
-            if current and current.get("decided_by") and current.get("value") != val:
-                tally["skipped"] += 1
-                continue
+            # (1) a human owns this field (single-valued only — a multi-valued field holds
+            # many human-owned values side by side, so a different one is a peer, not a clash)
+            if field not in MULTI_VALUED_FIELDS:
+                current = applied_now.get((addr, field))
+                if current and current.get("decided_by") and current.get("value") != val:
+                    tally["skipped"] += 1
+                    continue
 
             status = APPLIED if scored.band == "VERIFIED" else PROPOSED
             ops.append(UpdateOne(
@@ -272,10 +297,12 @@ class FactsStore:
                 upsert=True,
             ))
             if status == APPLIED:
-                supersede.add((addr, field, val))
-                # Keep the in-memory snapshot honest: a later claim for the same field in
-                # this same batch must see what we just decided, not the pre-batch state.
-                applied_now[(addr, field)] = {"value": val, "decided_by": None}
+                # Multi-valued fields coexist; only single-valued ones retire their peers.
+                if field not in MULTI_VALUED_FIELDS:
+                    supersede.add((addr, field, val))
+                    # Keep the in-memory snapshot honest: a later claim for the same field in
+                    # this same batch must see what we just decided, not the pre-batch state.
+                    applied_now[(addr, field)] = {"value": val, "decided_by": None}
                 tally["applied"] += 1
             else:
                 tally["proposed"] += 1
@@ -322,6 +349,40 @@ class FactsStore:
                 out[field] = self.record_fact(organization_id, email, field, value, evidence)
         return out
 
+    def record_manual_fact(
+        self, organization_id: str, email: str, field: str, value: Optional[str],
+        user_email: str,
+    ) -> FactOutcome:
+        """A rep records a fact by hand — most often a personal one the mailbox never states
+        ("played golf 2026-08-03", "daughter at Purdue").
+
+        The human who was there is a PRIMARY source (`human.manual-entry`, 0.90), so it lands
+        APPLIED, and we stamp `decided_by` so invariant (1) protects it from then on: no agent,
+        however sure, overwrites what a person typed. Everything else — the band gate, the
+        multi-valued exemption, the dismissed check — is the same path every other fact takes.
+        """
+        who = (user_email or "").strip().lower()
+        evidence = [
+            Evidence(
+                kind="human.manual-entry",
+                detail=f"recorded by {who}" if who else "recorded by a colleague",
+            )
+        ]
+        outcome = self.record_fact(organization_id, email, field, value, evidence)
+        # record_fact inserts with decided_by=None; a hand entry is a human decision by
+        # definition, so mark ownership on the exact (org, email, field, value) row it wrote.
+        if outcome.stored and who:
+            self.facts.update_one(
+                {
+                    "organization_id": (organization_id or "").strip(),
+                    "email": (email or "").strip().lower(),
+                    "field": field,
+                    "value": (value or "").strip(),
+                },
+                {"$set": {"decided_by": who, "decided_at": _utc_now()}},
+            )
+        return outcome
+
     # --- the human decision (the ONLY router-owned mutation) -----------------------
 
     def decide_fact(
@@ -350,42 +411,81 @@ class FactsStore:
             },
         )
         if accept:
-            self.facts.update_many(
-                {
-                    "organization_id": doc["organization_id"],
-                    "email": doc["email"],
-                    "field": doc["field"],
-                    "status": APPLIED,
-                    "_id": {"$ne": oid},
-                },
-                {"$set": {"status": SUPERSEDED, "updated_at": now}},
-            )
+            # Single-valued fields retire their peers on accept; multi-valued personal
+            # fields (interests, shared activities) coexist, so accepting one leaves the
+            # others standing.
+            if doc["field"] not in MULTI_VALUED_FIELDS:
+                self.facts.update_many(
+                    {
+                        "organization_id": doc["organization_id"],
+                        "email": doc["email"],
+                        "field": doc["field"],
+                        "status": APPLIED,
+                        "_id": {"$ne": oid},
+                    },
+                    {"$set": {"status": SUPERSEDED, "updated_at": now}},
+                )
             # Put it on the contact itself — accepting a suggestion used to change only this
             # collection, so the rep saw nothing change on the Contacts list and the value
-            # never reached the agents that read the graph.
-            try:
-                from client.graph_store import apply_facts_to_contacts
+            # never reached the agents that read the graph. Personal facts are exempt: they
+            # are not a property of the professional contact node, they live in this
+            # collection and are read from here by the relationship engine.
+            if doc["field"] in PROFESSIONAL_FACT_FIELDS:
+                try:
+                    from client.graph_store import apply_facts_to_contacts
 
-                apply_facts_to_contacts(
-                    doc["organization_id"], {doc["email"]: {doc["field"]: doc["value"]}}
-                )
-            except Exception as exc:  # noqa: BLE001 — the decision is already committed
-                logger.warning("decide_fact: writing the accepted fact to the graph failed: %s", exc)
+                    apply_facts_to_contacts(
+                        doc["organization_id"], {doc["email"]: {doc["field"]: doc["value"]}}
+                    )
+                except Exception as exc:  # noqa: BLE001 — the decision is already committed
+                    logger.warning("decide_fact: writing the accepted fact to the graph failed: %s", exc)
         return _serialize(self.facts.find_one({"_id": oid}) or {})
 
     # --- read path ------------------------------------------------------------------
 
     def applied_facts(self, organization_id: str, email: str) -> dict[str, str]:
-        """{field: value} for everything solid enough to show as fact."""
+        """{field: value} for the settled PROFESSIONAL facts — the single-valued truth the
+        agents and the contact graph read. Personal facts are multi-valued and live in a
+        separate shape (`personal_facts`); they are deliberately excluded here so a contact
+        with three interests cannot collapse into one arbitrary value on this dict."""
         rows = self.facts.find(
             {
                 "organization_id": (organization_id or "").strip(),
                 "email": (email or "").strip().lower(),
                 "status": APPLIED,
+                "field": {"$in": list(PROFESSIONAL_FACT_FIELDS)},
             },
             {"field": 1, "value": 1},
         )
         return {r["field"]: r["value"] for r in rows}
+
+    def personal_facts(self, organization_id: str, email: str) -> dict[str, list[dict]]:
+        """Applied PERSONAL facts for one contact, grouped by field.
+
+        Unlike `applied_facts` (single value per field), these are multi-valued — a contact
+        can hold several interests and a history of shared activities — so this returns a
+        dict of LISTS, newest first. Each entry keeps its id and decided_by so the UI can
+        show and remove a note. This is what the relationship engine reads for its hooks.
+        """
+        rows = self.facts.find(
+            {
+                "organization_id": (organization_id or "").strip(),
+                "email": (email or "").strip().lower(),
+                "status": APPLIED,
+                "field": {"$in": list(PERSONAL_FACT_FIELDS)},
+            }
+        ).sort("updated_at", -1)
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r["field"], []).append(
+                {
+                    "id": str(r["_id"]),
+                    "value": r.get("value"),
+                    "decided_by": r.get("decided_by"),
+                    "updated_at": r.get("updated_at"),
+                }
+            )
+        return out
 
     def suggestions(self, organization_id: str, email: str) -> list[dict]:
         """Open suggestions for one contact — what a rep is asked to settle."""

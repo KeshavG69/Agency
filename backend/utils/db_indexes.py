@@ -72,6 +72,10 @@ _INDEXES: list[tuple[str, list, dict]] = [
     # calls / tasks / documents: fetched per opportunity for the detail pane.
     ("calls", [("opportunity_id", ASCENDING)], {}),
     ("tasks", [("opportunity_id", ASCENDING)], {}),
+    # The get-or-create lookup in create_call / create_task. Non-unique for now: the existing
+    # duplicate rows would make a unique index fail to build. Make it unique after cleanup.
+    ("calls", [("opportunity_id", ASCENDING), ("name", ASCENDING)], {}),
+    ("tasks", [("opportunity_id", ASCENDING), ("name", ASCENDING)], {}),
     ("documents", [("opportunity_id", ASCENDING), ("type", ASCENDING)], {}),
     # call briefs: one per (org, opportunity, contact, rep) — the upsert key. The dialog reads
     # by (org, opportunity, rep), which this index's prefix serves.
@@ -119,6 +123,11 @@ _INDEXES: list[tuple[str, list, dict]] = [
     # agent events: append-only trail, read oldest-first for one record.
     ("agent_events",
      [("organization_id", ASCENDING), ("subject.id", ASCENDING), ("created_at", ASCENDING)], {}),
+    # relationship nudges: one row per (owner, contact, kind) via dedupe_key (unique, upsert
+    # target); the open-nudge read for a whole org, ordered most-overdue-first for the planner.
+    ("relationship_nudges", [("dedupe_key", ASCENDING)], {"unique": True}),
+    ("relationship_nudges",
+     [("organization_id", ASCENDING), ("status", ASCENDING), ("overdue_by", DESCENDING)], {}),
 ]
 
 # Indexes that an audit found are NEVER used and are safe to drop (not recreated by any store

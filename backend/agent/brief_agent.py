@@ -22,7 +22,8 @@ from app.settings import settings
 from client.llm_client import get_chat_llm_agno
 from models.call_brief import CallBrief
 from utils.doc_parse import document_context
-from utils.structured import coerce_output
+from utils.structured import run_structured
+from utils.dates import date_context
 
 
 def _instructions(company: str, profile: str, contact: dict, org_domain: str) -> str:
@@ -139,7 +140,6 @@ def run_call_brief(
     composio_utils.fetch_messages_for_domain).
     """
     organization_id = str(opp.get("organization_id") or "")
-    agent = build_call_brief_agent(organization_id, contact, org_domain)
 
     opp_lines = [
         f"- {k}: {v}"
@@ -153,7 +153,8 @@ def run_call_brief(
     contact_lines = [
         f"- {k}: {contact[k]}" for k in ("name", "email", "title", "company") if contact.get(k)
     ]
-    message = "THE PERSON YOU ARE PREPPING FOR:\n" + "\n".join(contact_lines)
+    message = date_context() + "\n\n"
+    message += "THE PERSON YOU ARE PREPPING FOR:\n" + "\n".join(contact_lines)
     message += f"\nTheir organisation: {org_domain}\n\n"
     message += "PURSUIT (the opportunity this call is about):\n" + "\n".join(opp_lines)
     message += document_context(opp)  # solicitation text, when the opp has one
@@ -161,5 +162,9 @@ def run_call_brief(
     message += _format_mail(mail, str(contact.get("email") or ""))
     message += "\n\nWrite the call brief as JSON."
 
-    result = agent.run(message)
-    return coerce_output(result.content, CallBrief)
+    # Retried: a network blip used to surface as the literal content "Connection error."
+    # and fail the whole brief on a JSON parse error (see utils/structured.run_structured).
+    return run_structured(
+        lambda: build_call_brief_agent(organization_id, contact, org_domain),
+        message, CallBrief, label=f"Call brief {contact.get('email')}",
+    )

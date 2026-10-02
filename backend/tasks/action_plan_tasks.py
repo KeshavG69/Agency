@@ -30,6 +30,8 @@ from typing import Callable, Optional
 from app.worker import celery_app
 from auth.database import get_mongodb_client
 from client.crm_store import get_crm_store
+from bson import ObjectId
+
 from models.action import dedupe_key
 
 logger = logging.getLogger(__name__)
@@ -330,8 +332,19 @@ def _users_by_email(organization_id: str) -> dict[str, str]:
     """email -> user id, for the org. Triage cards are keyed by mailbox address but actions
     are assigned by user id (mirroring an opportunity's own `assigned_to`)."""
     db = get_mongodb_client().get_database()
+    # Membership stores organization_id as an ObjectId (auth/crud.py), while every caller here
+    # holds it as the string it arrived as on the JWT. Querying the string matched NOBODY, so
+    # every off-chain action was written with `assigned_to: []` — and an unassigned action is
+    # visible to the whole org (see crm_store._action_visibility). For a relationship nudge
+    # that meant one rep's "Message Dave" card appeared on a colleague's Today, and whoever
+    # tapped it sent from THEIR mailbox. Match either representation.
+    ids: list = [organization_id]
+    try:
+        ids.append(ObjectId(str(organization_id)))
+    except Exception:  # noqa: BLE001 — a non-ObjectId org id is fine; the string form stands
+        pass
     cursor = db["users"].find(
-        {"organizations.organization_id": organization_id}, {"_id": 1, "email": 1},
+        {"organizations.organization_id": {"$in": ids}}, {"_id": 1, "email": 1},
     )
     return {(u.get("email") or "").lower(): str(u["_id"]) for u in cursor if u.get("email")}
 
@@ -431,11 +444,12 @@ def plan_for_org(organization_id: str) -> dict:
     crm.upsert_actions(plans)
 
     replies = _plan_mail_replies(organization_id, today)
+    nudges = _plan_relationship_nudges(organization_id, today)
     logger.info(
-        "action plan: org %s — %d actions written (%d replies), %d expired",
-        organization_id, len(plans) + replies, replies, expired,
+        "action plan: org %s — %d actions written (%d replies, %d relationship), %d expired",
+        organization_id, len(plans) + replies + nudges, replies, nudges, expired,
     )
-    return {"organization_id": organization_id, "written": len(plans) + replies,
+    return {"organization_id": organization_id, "written": len(plans) + replies + nudges,
             "expired": expired}
 
 
@@ -472,6 +486,42 @@ def _plan_mail_replies(organization_id: str, today: date) -> int:
             "due_on": today.isoformat(),
             "hard_deadline": deadline.isoformat() if deadline else None,
             "urgency": "high" if days_left is not None and 0 <= days_left <= 14 else "normal",
+            "infeasible": False,
+        })
+    crm.upsert_actions(plans)
+    return len(plans)
+
+
+def _plan_relationship_nudges(organization_id: str, today: date) -> int:
+    """Off-chain: the relationship engine has a drafted outreach waiting.
+
+    These are NOT tied to a pursuit — they come from the nightly relationship sweep
+    (tasks/relationship_tasks.py), one open nudge per row. Always due today; `normal` urgency
+    (a relationship touch is important, not time-critical the way a customer's question is).
+    The draft + its evidence live on the nudge; the card reads them via `ref_id`.
+    """
+    from client.nudge_store import get_nudge_store
+
+    crm = get_crm_store()
+    by_email = _users_by_email(organization_id)
+    plans: list[dict] = []
+    for n in get_nudge_store().open_for_org(organization_id):
+        owner = by_email.get((n.get("owner_email") or "").lower())
+        name = n.get("contact_name") or n.get("contact_email") or "a contact"
+        is_personal = n.get("kind") == "relationship_personal"
+        plans.append({
+            "dedupe_key": dedupe_key(organization_id, n["kind"], None, n["id"]),
+            "organization_id": organization_id,
+            "assigned_to": [owner] if owner else [],
+            "kind": n["kind"],
+            "opportunity_id": None,
+            "contact_email": n.get("contact_email"),
+            "ref_id": n["id"],
+            "title": (f"Message {name}" if is_personal else f"Reach out to {name}"),
+            "reason": n.get("reason") or "",
+            "due_on": today.isoformat(),
+            "hard_deadline": None,
+            "urgency": "normal",
             "infeasible": False,
         })
     crm.upsert_actions(plans)

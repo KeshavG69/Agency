@@ -20,11 +20,15 @@ export type EvidenceKind =
   | "outlook.thread-reply"
   | "gov-domain-rule"
   | "outlook.signature-block"
+  | "llm.signature-extraction"
   | "pdl.domain-company"
   | "sharepoint.authored-doc"
   | "outlook.meeting-attend"
   | "company.own-website"
+  // A colleague typed it in by hand — the human is the ultimate primary source.
+  | "human.manual-entry"
   // SUPPORTING — true, but consistent with many people, so never enough alone.
+  | "llm.mail-personal-extraction"
   | "web.cited-claim"
   | "outlook.address-book"
   | "handle.name-form"
@@ -48,7 +52,28 @@ export type FactField =
   | "seniority"
   | "function"
   | "linkedin"
-  | "website";
+  | "website"
+  // Personal / relationship lane — MULTI-VALUED and append-only (see backend
+  // PERSONAL_FACT_FIELDS). These feed the relationship engine's hooks.
+  | PersonalFactField;
+
+// The personal lane, kept as its own union so the notes UI can iterate it and label it, and
+// so `addManualFact` only ever accepts a personal field (professional facts come from
+// enrichment + the suggestion review flow, never free-typed).
+export type PersonalFactField =
+  | "interests"
+  | "shared_activity"
+  | "family"
+  | "key_date"
+  | "personal_note";
+
+export const PERSONAL_FACT_FIELDS: PersonalFactField[] = [
+  "interests",
+  "shared_activity",
+  "family",
+  "key_date",
+  "personal_note",
+];
 
 export type EvidenceBand = "VERIFIED" | "PROBABLE" | "POSSIBLE";
 export type FactStatus = "APPLIED" | "PROPOSED" | "DISMISSED" | "SUPERSEDED";
@@ -71,10 +96,21 @@ export interface ContactFact {
   decided_at?: string | null;
 }
 
+// One stored personal fact — multi-valued, so it keeps its own id (to remove it) and who
+// recorded it. Shape matches facts_store.personal_facts().
+export interface PersonalFactValue {
+  id: string;
+  value: string;
+  decided_by?: string | null;
+  updated_at?: string | null;
+}
+
 export interface ContactFactsResponse {
   email: string;
-  // Settled facts, {field: value} — safe to render as truth.
+  // Settled PROFESSIONAL facts, {field: value} — safe to render as truth.
   facts: Partial<Record<FactField, string>>;
+  // Settled PERSONAL facts, grouped by field — multi-valued, so a list per field.
+  personal: Partial<Record<PersonalFactField, PersonalFactValue[]>>;
   suggestions: ContactFact[];
 }
 
@@ -82,6 +118,21 @@ export async function fetchContactFacts(email: string): Promise<ContactFactsResp
   // The address is a path segment and can contain "+" and other reserved characters.
   const { data } = await apiClient.get(
     `/api/intelligence/contacts/${encodeURIComponent(email)}/facts`,
+  );
+  return data;
+}
+
+// Record a personal fact by hand ("played golf 8/3", "into cycling"). The human is a primary
+// source, so it lands as a settled, human-owned fact immediately. Personal fields only —
+// the backend rejects a professional field here (422).
+export async function addManualFact(
+  email: string,
+  field: PersonalFactField,
+  value: string,
+): Promise<{ stored: boolean; status: string; reason: string }> {
+  const { data } = await apiClient.post(
+    `/api/intelligence/contacts/${encodeURIComponent(email)}/facts`,
+    { field, value },
   );
   return data;
 }

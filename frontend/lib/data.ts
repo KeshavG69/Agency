@@ -645,7 +645,10 @@ export type ActionKind =
   | "call"
   | "review_docs"
   | "submit"
-  | "reply_mail";
+  | "reply_mail"
+  // Relationship engine — not tied to a pursuit. `ref_id` is the RelationshipNudge id.
+  | "relationship_touch"
+  | "relationship_personal";
 export type ActionUrgency = "critical" | "high" | "normal";
 
 export interface ActionItem {

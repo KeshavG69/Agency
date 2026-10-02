@@ -23,7 +23,8 @@ from client.llm_client import get_chat_llm_agno
 from models.contact import CRMResult
 from utils.agno_tools import create_exa_web_search_tool,create_reasoning_tool
 from utils.doc_parse import document_context
-from utils.structured import coerce_output
+from utils.structured import run_structured
+from utils.dates import date_context
 
 
 def _instructions(company: str, profile: str) -> str:
@@ -121,7 +122,6 @@ def recommend_contacts(
     The org graph is taken from the opportunity's `organization_id`.
     """
     organization_id = str(opp.get("organization_id") or "")
-    agent = build_crm_agent(employee_email, organization_id)
     opp_lines = [
         f"- {k}: {v}"
         for k, v in opp.items()
@@ -130,10 +130,12 @@ def recommend_contacts(
             "place_of_performance", "description",
         }
     ]
-    message = "OPPORTUNITY:\n" + "\n".join(opp_lines)
+    message = date_context() + "\n\nOPPORTUNITY:\n" + "\n".join(opp_lines)
     if proposal:
         message += f"\n\nPROPOSAL CONTEXT:\n{proposal}"
     message += document_context(opp)  # full solicitation (inherits default cap)
     message += "\n\nSearch the network and return the relevant contacts as JSON."
-    result = agent.run(message)
-    return coerce_output(result.content, CRMResult)
+    return run_structured(
+        lambda: build_crm_agent(employee_email, organization_id),
+        message, CRMResult, label=f"CRM contacts for {opp.get('id') or opp.get('title')}",
+    )

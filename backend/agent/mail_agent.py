@@ -33,11 +33,49 @@ from models.mail import MailDraft, ReplyDraft
 from utils.agno_tools import create_reasoning_tool
 from utils.composio_utils import sharepoint_entity
 from utils.sharepoint_tools import load_sharepoint_tools, sharepoint_tool_instructions
-from utils.structured import coerce_output
+from utils.structured import arun_structured
+from utils.dates import date_context
 
 logger = logging.getLogger(__name__)
 
-def _instructions(company: str, profile: str) -> str:
+def _sender(employee_email: str | None) -> str:
+    """The acting rep's real name for the sign-off; "" (-> placeholder) if it can't be read."""
+    if not employee_email:
+        return ""
+    try:
+        from utils.organizations import user_display_name
+
+        return user_display_name(employee_email)
+    except Exception as exc:  # noqa: BLE001 — a missing name degrades to a placeholder
+        logger.warning("Mail agent: could not resolve sender name for %s: %s", employee_email, exc)
+        return ""
+
+
+def _signoff_rule(company: str, sender_name: str) -> str:
+    """The sign-off instruction. Uses the acting rep's REAL name when we know it.
+
+    Both prompts used to say "you do NOT know who is sending this" and demand a "[Your Name]" /
+    "[Your Title]" placeholder — while the rep's email was being passed in the whole time. A
+    rep who clicks Send without editing mailed a template to a customer.
+
+    There is deliberately NO title line: users carry a name but no job title, and a
+    "[Your Title]" placeholder would leak exactly the same way. A placeholder is used only when
+    the name genuinely cannot be resolved, and `/api/mail/send` refuses to send one.
+    """
+    if sender_name:
+        return f"""SENDER — this is sent by {sender_name} of {company}. Never invent a title or a
+   phone number. Sign off EXACTLY like this — real name, no placeholders:
+       Best regards,
+       {sender_name}
+       {company}"""
+    return f"""SENDER — the sender's name is not on record. Never invent a name, title, or phone.
+   Sign off with this placeholder, which the rep MUST fill in before sending:
+       Best regards,
+       [Your Name]
+       {company}"""
+
+
+def _instructions(company: str, profile: str, sender_name: str = "") -> str:
     return f"""\
 You are the business-development outreach writer for {company}. You draft the
 short email we send a contact BEFORE the pricing proposal — to open or warm the deal.
@@ -62,13 +100,8 @@ HOW TO WRITE IT (the house style):
    read a specific document if needed. Only claim experience you find in SharePoint or that
    is in the COMPANY PROFILE above. If you can't substantiate a claim, leave it out.
 5. DRAFT ONLY. Do NOT send anything. Produce the draft for a human to review and send.
-6. SENDER — you do NOT know who is sending this. NEVER invent a sender name, title, or phone
-   (no made-up signatory). Do not open with a personal name.
-   Sign off with bracketed PLACEHOLDERS the user fills in before sending, exactly:
-       Best regards,
-       [Your Name]
-       [Your Title], {company}
-   The company name is real and may be used; everything personal stays a [placeholder].
+6. {_signoff_rule(company, sender_name)}
+   Never leave any other [bracketed] fill-in-the-blank anywhere in the email.
 
 {sharepoint_tool_instructions()}
 
@@ -118,7 +151,7 @@ def build_mail_agent(
             # SharePoint READ tools run under THIS ORG's SharePoint connection.
             *load_sharepoint_tools(sharepoint_entity(organization_id or "")),
         ],
-        instructions=_instructions(company, profile),
+        instructions=_instructions(company, profile, _sender(employee_email)),
         debug_mode=True,
     )
 
@@ -172,6 +205,7 @@ def _build_message(opp: dict, contact: dict, proposal: str | None, employee_emai
         f"- relationship: {_relationship_signal(contact.get('email'), employee_email, org_id)}"
     )
     message = (
+        date_context() + "\n\n"
         "OPPORTUNITY:\n" + "\n".join(opp_lines) + "\n\n"
         "RECIPIENT (the contact to email):\n" + "\n".join(c_lines)
     )
@@ -189,12 +223,14 @@ async def adraft_outreach(
     """Draft one outreach email (async). Each call gets its OWN agent — agents hold
     per-run state, so a fresh one per contact keeps concurrent drafts isolated.
     `employee_email` (the acting rep, from the payload) RBAC-scopes the SharePoint search."""
-    agent = build_mail_agent(
-        user_id, employee_email=employee_email,
-        organization_id=str(opp.get("organization_id") or ""),
+    draft = await arun_structured(
+        lambda: build_mail_agent(
+            user_id, employee_email=employee_email,
+            organization_id=str(opp.get("organization_id") or ""),
+        ),
+        _build_message(opp, contact, proposal, employee_email),
+        MailDraft, label=f"Outreach to {contact.get('email')}",
     )
-    result = await agent.arun(_build_message(opp, contact, proposal, employee_email))
-    draft = coerce_output(result.content, MailDraft)
     # Guarantee the draft is addressed even if the model omitted it.
     if not draft.to and contact.get("email"):
         draft.to = contact["email"]
@@ -258,7 +294,7 @@ def draft_outreach_batch(
 # even then it's a DRAFT sitting in their mailbox, never sent by us.
 
 
-def _reply_instructions(company: str, profile: str) -> str:
+def _reply_instructions(company: str, profile: str, sender_name: str = "") -> str:
     return f"""\
 You are the business-development rep for {company}, replying to an inbound email from a
 contact already engaged on one of our active pursuits.
@@ -277,11 +313,8 @@ HOW TO WRITE IT (the house style):
    actual past-performance / capability material if the reply needs to substantiate
    something. Never invent experience; if you can't substantiate a claim, leave it out.
 5. DRAFT ONLY. Do NOT send anything. Produce the reply text for a human to review.
-6. SENDER — you do NOT know who is sending this. Never invent a sender name, title, or
-   phone. Sign off with bracketed PLACEHOLDERS the user fills in before sending, exactly:
-       Best regards,
-       [Your Name]
-       [Your Title], {company}
+6. {_signoff_rule(company, sender_name)}
+   Never leave any other [bracketed] fill-in-the-blank anywhere in the reply.
 
 {sharepoint_tool_instructions()}
 
@@ -318,7 +351,7 @@ def build_reply_agent(
             create_reasoning_tool(),
             *load_sharepoint_tools(sharepoint_entity(organization_id or "")),
         ],
-        instructions=_reply_instructions(company, profile),
+        instructions=_reply_instructions(company, profile, _sender(employee_email)),
         debug_mode=True,
     )
 
@@ -335,6 +368,7 @@ def _build_reply_message(
     sender_email = incoming.get("sender_email")
     relationship = _relationship_signal(sender_email, employee_email, org_id)
     message = (
+        date_context() + "\n\n"
         "OPPORTUNITY (context for this thread):\n" + "\n".join(opp_lines) + "\n\n"
         "INCOMING EMAIL (the one you're replying to):\n"
         f"- from: {incoming.get('sender_name') or sender_email} <{sender_email}>\n"
@@ -350,12 +384,14 @@ async def adraft_reply(
     opp: dict, incoming: dict, user_id: str | None = None, employee_email: str | None = None,
 ) -> ReplyDraft:
     """Draft one suggested reply (async) to an incoming mail-triage message."""
-    agent = build_reply_agent(
-        user_id, employee_email=employee_email,
-        organization_id=str(opp.get("organization_id") or ""),
+    return await arun_structured(
+        lambda: build_reply_agent(
+            user_id, employee_email=employee_email,
+            organization_id=str(opp.get("organization_id") or ""),
+        ),
+        _build_reply_message(opp, incoming, employee_email),
+        ReplyDraft, label=f"Reply to {incoming.get('sender_email')}",
     )
-    result = await agent.arun(_build_reply_message(opp, incoming, employee_email))
-    return coerce_output(result.content, ReplyDraft)
 
 
 def draft_reply(

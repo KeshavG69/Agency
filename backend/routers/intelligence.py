@@ -54,11 +54,51 @@ def contact_facts(email: str, current_user: dict = Depends(get_current_user)) ->
         return {
             "email": email.strip().lower(),
             "facts": store.applied_facts(org, email),
+            "personal": store.personal_facts(org, email),
             "suggestions": store.suggestions(org, email),
         }
     except Exception as exc:  # noqa: BLE001
         logger.error("Reading contact facts failed for %s: %s", email, exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Could not read contact facts")
+
+
+class ManualFactRequest(BaseModel):
+    field: str
+    value: str
+
+
+@router.post("/contacts/{email}/facts")
+def add_manual_fact(
+    email: str, req: ManualFactRequest, current_user: dict = Depends(get_current_user)
+) -> dict:
+    """A rep records a fact by hand — chiefly a personal one the mailbox never states
+    ("played golf 2026-08-03", "into cycling", "daughter at Purdue").
+
+    The human is a primary source, so it lands as a settled, human-owned fact immediately;
+    no agent overwrites it afterwards. Personal fields are multi-valued, so a new note adds
+    to the contact rather than replacing what is already there.
+    """
+    from client.facts_store import PERSONAL_FACT_FIELDS
+
+    org = _org(current_user)
+    field = (req.field or "").strip()
+    # The manual-note surface is for the personal/relationship lane. Professional fields are
+    # settled through the suggestion review flow, not free-typed here.
+    if field not in PERSONAL_FACT_FIELDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"'{field}' is not a personal fact field; allowed: {sorted(PERSONAL_FACT_FIELDS)}",
+        )
+    if not (req.value or "").strip():
+        raise HTTPException(status_code=422, detail="A value is required")
+
+    outcome = get_facts_store().record_manual_fact(
+        org, email, field, req.value, user_email=current_user["email"].lower()
+    )
+    if not outcome.stored:
+        # The one expected non-store is a value a human previously dismissed — say so plainly.
+        raise HTTPException(status_code=409, detail=outcome.reason)
+    return {"stored": True, "status": outcome.status, "reason": outcome.reason}
 
 
 class DecideRequest(BaseModel):

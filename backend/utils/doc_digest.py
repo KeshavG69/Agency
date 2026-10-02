@@ -4,9 +4,9 @@ Strategy (chosen for govcon capture — a bid/no-bid decision that must not lose
 requirements): STUFF if small, else summarize ONE DOCUMENT PER CALL and merge.
 
 - SMALL: total parsed text <= DOC_DIGEST_STUFF_MAX_CHARS -> return it verbatim,
-  no model call. This ceiling matches the Analyst's own document_context cap
-  (utils.doc_parse.document_context default; both ~500k tokens), so small uploads
-  reach the Analyst losslessly.
+  no model call. `document_context` reads the SAME setting for its cap, so whatever is
+  stored verbatim reaches every agent losslessly (both currently ~50k tokens, sized to
+  fit the self-hosted model's 64k context).
 - LARGE: MAP each document (one call per document — natural boundaries, so a
   summary never mixes two documents) through DOC_DIGEST_MODEL into a faithful
   extraction-oriented digest (preserve solicitation #, agency, NAICS/PSC, set-aside,
