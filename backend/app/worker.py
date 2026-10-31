@@ -18,6 +18,7 @@ import tasks.analyst_tasks  # noqa: E402,F401
 import tasks.backfill_tasks  # noqa: E402,F401
 import tasks.capture_tasks  # noqa: E402,F401
 import tasks.contacts_tasks  # noqa: E402,F401
+import tasks.library_tasks  # noqa: E402,F401
 import tasks.crm_tasks  # noqa: E402,F401
 import tasks.mail_sweep_tasks  # noqa: E402,F401
 import tasks.mail_tasks  # noqa: E402,F401

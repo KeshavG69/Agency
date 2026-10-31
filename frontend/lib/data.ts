@@ -458,6 +458,113 @@ export async function fetchSharePointGraph(): Promise<SPGraph> {
   return data;
 }
 
+// ---- library analysis (what's IN each SharePoint file) -------------------------------
+
+export type LibraryCategory =
+  | "past_performance"
+  | "cpars"
+  | "resume"
+  | "past_proposal"
+  | "capture_plan"
+  | "capability_statement"
+  | "technical_approach"
+  | "management_plan"
+  | "pricing"
+  | "certification"
+  | "contract_legal"
+  | "solicitation"
+  | "other";
+
+export type LibraryStatus = "pending" | "analysing" | "done" | "needs_review" | "failed" | "skipped";
+
+/** Every fact sheet carries `evidence`: field -> the exact words it was read from. */
+type Grounded = { evidence?: Record<string, string> };
+export type LibraryContract = Grounded & {
+  title?: string | null;
+  customer?: string | null;
+  agency?: string | null;
+  contract_number?: string | null;
+  role?: string | null;
+  value_usd?: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  naics?: string | null;
+  scope?: string | null;
+  customer_poc?: string | null;
+  rating?: string | null;
+};
+export type LibraryPerson = Grounded & {
+  name?: string | null;
+  current_role?: string | null;
+  years_experience?: number | null;
+  clearance?: string | null;
+  certifications?: string[];
+  education?: string | null;
+  skills?: string[];
+};
+export type LibraryProposal = Grounded & {
+  agency?: string | null;
+  solicitation_number?: string | null;
+  title?: string | null;
+  volume?: string | null;
+  submitted_date?: string | null;
+  outcome?: string | null;
+};
+export type LibraryCertification = Grounded & {
+  name?: string | null;
+  issuer?: string | null;
+  number?: string | null;
+  expires?: string | null;
+};
+export type LibraryLegal = Grounded & {
+  kind?: string | null;
+  parties?: string[];
+  effective_date?: string | null;
+  expires?: string | null;
+};
+
+export interface LibraryDocument {
+  item_id: string;
+  name: string;
+  path?: string | null;
+  web_url?: string | null;
+  ext?: string | null;
+  size?: number | null;
+  status: LibraryStatus;
+  skip_reason?: string | null;
+  error?: string | null;
+  category?: LibraryCategory | null;
+  confidence?: number | null;
+  summary?: string | null;
+  contracts?: LibraryContract[];
+  people?: LibraryPerson[];
+  proposal?: LibraryProposal | null;
+  certifications?: LibraryCertification[];
+  legal?: LibraryLegal | null;
+  category_override?: LibraryCategory | null;
+  corrected_by?: string | null;
+  analysed_at?: string | null;
+}
+
+export interface LibraryCounts {
+  status: Partial<Record<LibraryStatus, number>>;
+  category: Partial<Record<LibraryCategory, number>>;
+}
+
+export async function fetchLibraryDocuments(): Promise<{ documents: LibraryDocument[]; counts: LibraryCounts }> {
+  const { data } = await apiClient.get("/api/library/documents");
+  return data;
+}
+
+export async function fixLibraryCategory(itemId: string, category: LibraryCategory): Promise<void> {
+  await apiClient.post(`/api/library/documents/${encodeURIComponent(itemId)}/category`, { category });
+}
+
+export async function rerunLibraryAnalysis(): Promise<{ retried_failed: number }> {
+  const { data } = await apiClient.post("/api/library/analyse");
+  return data;
+}
+
 // ---- Composio / Outlook connection ----
 export interface OutlookStatus {
   connected: boolean;

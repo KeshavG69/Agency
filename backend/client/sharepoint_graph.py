@@ -57,8 +57,21 @@ def _node_text(n: dict) -> str:
     return f"{n.get('type')}: {n.get('name')} | {n.get('path')}"
 
 
-def clear_structure(organization_id: str) -> None:
+def clear_structure(organization_id: str, keep_library: bool = False) -> None:
+    """Wipe one org's SharePoint graph.
+
+    `keep_library=True` is the sync's rebuild: only the folder map (SPNodes) goes; the library
+    analysis (passages, contracts, people — see client/library_graph.py) stays, and is re-linked
+    to the fresh SPNodes afterwards. The default is a DISCONNECT: the source is gone, so
+    everything derived from it goes too, including the per-file analysis in Mongo.
+    """
+    if keep_library:
+        _graph(organization_id).query("MATCH (n:SPNode) DETACH DELETE n")
+        return
     _graph(organization_id).query("MATCH (n) DETACH DELETE n")
+    from client.library_store import get_library_store
+
+    get_library_store().delete_org(organization_id)
 
 
 def upsert_structure(nodes: list[dict], organization_id: str) -> int:
@@ -76,11 +89,12 @@ def upsert_structure(nodes: list[dict], organization_id: str) -> int:
             "permitted_emails": n.get("permitted_emails") or [],
             "org_wide": bool(n.get("org_wide")),
             "unique_acl": bool(n.get("unique_acl")),
+            "version": n.get("version"), "modified": n.get("modified"),
         }
         for n in nodes
     ]
-    # Embeddings for semantic search (best-effort; skipped if no OpenAI key).
-    if settings.OPENAI_API_KEY:
+    # Embeddings for semantic search (best-effort; skipped when embeddings are off).
+    if settings.embeddings_enabled:
         try:
             embs = _embedder().embed_documents([_node_text(n) for n in nodes])
             for r, e in zip(rows, embs):
@@ -97,7 +111,7 @@ def upsert_structure(nodes: list[dict], organization_id: str) -> int:
               n.drive_id = r.drive_id, n.site_id = r.site_id, n.ext = r.ext, n.size = r.size,
               n.item_count = r.item_count, n.list_template = r.list_template,
               n.permitted_emails = r.permitted_emails, n.org_wide = r.org_wide,
-              n.unique_acl = r.unique_acl
+              n.unique_acl = r.unique_acl, n.version = r.version, n.modified = r.modified
         FOREACH (_ IN CASE WHEN r.embedding IS NULL THEN [] ELSE [1] END |
           SET n.embedding = vecf32(r.embedding)
         )
@@ -214,7 +228,7 @@ def search_structure(terms: list[str], organization_id: str, limit: int = 25) ->
 
 def reindex_embeddings(organization_id: str, batch: int = 200) -> int:
     """Embed all existing nodes in one org's graph (for nodes crawled before embeddings)."""
-    if not settings.OPENAI_API_KEY:
+    if not settings.embeddings_enabled:
         return 0
     g = _graph(organization_id)
     nodes = [

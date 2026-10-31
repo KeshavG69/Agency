@@ -1138,6 +1138,7 @@ function Console({ user }: { user: User }) {
             connected={spConnected}
             connecting={spConnecting}
             onConnect={onConnectSharePoint}
+            isAdmin={isAdmin}
           />
         </section>
       ) : view === "org" ? (

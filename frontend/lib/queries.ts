@@ -16,6 +16,7 @@ import {
   fetchCallPlan,
   fetchContactGraph,
   fetchFacets,
+  fetchLibraryDocuments,
   fetchOpportunity,
   fetchOpportunityCounts,
   fetchOpportunityPage,
@@ -70,6 +71,7 @@ export const queryKeys = {
   todayPlan: (scope: "mine" | "org") => ["actions", "today", scope] as const,
   contactGraph: ["contact-graph"] as const,
   sharePointGraph: ["sharepoint-graph"] as const,
+  library: ["library"] as const,
   organization: ["organization"] as const,
 } as const;
 
@@ -255,6 +257,22 @@ export function contactGraphQuery() {
 }
 
 /** The org's SharePoint structure graph. Same shape and reasoning as the contact graph. */
+/**
+ * The analysed library: each file's category, summary and facts, plus the counts behind the
+ * progress line and the category filters. Polls only while files are still being read.
+ */
+export function libraryQuery() {
+  return queryOptions({
+    queryKey: queryKeys.library,
+    queryFn: fetchLibraryDocuments,
+    staleTime: 30_000,
+    refetchInterval: (q) => {
+      const s = q.state.data?.counts.status;
+      return s && (s.pending ?? 0) + (s.analysing ?? 0) > 0 ? 5000 : false;
+    },
+  });
+}
+
 export function sharePointGraphQuery() {
   return queryOptions({
     queryKey: queryKeys.sharePointGraph,

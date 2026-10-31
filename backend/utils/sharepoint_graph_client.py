@@ -324,7 +324,7 @@ def crawl_site_graph(site_id: str, site_name: str, site_web_url: str | None = No
                       "path": lib_path, "web_url": dr.get("webUrl"),
                       "parent_id": site_id, "site_id": site_id, "drive_id": drive_id, **lib_roster})
 
-        select = "$select=id,name,size,folder,file,webUrl,sharepointIds"
+        select = "$select=id,name,size,folder,file,webUrl,sharepointIds,cTag,eTag,lastModifiedDateTime"
         stack = [("root", lib_id, lib_path, lib_roster, 0)]
         while stack and len(nodes) < max_items:
             folder_ref, parent_id, parent_path, parent_roster, depth = stack.pop()
@@ -354,6 +354,10 @@ def crawl_site_graph(site_id: str, site_name: str, site_web_url: str | None = No
                     "parent_id": parent_id, "site_id": site_id, "drive_id": drive_id,
                     "size": it.get("size"),
                     "ext": (name.rsplit(".", 1)[-1].lower() if not is_folder and "." in name else None),
+                    # cTag changes only when the CONTENT changes (eTag also moves on a rename
+                    # or metadata edit) — the library analysis re-reads a file only on a new one.
+                    "version": None if is_folder else (it.get("cTag") or it.get("eTag")),
+                    "modified": it.get("lastModifiedDateTime"),
                     **roster,
                 })
                 if is_folder and (max_depth is None or depth < max_depth):

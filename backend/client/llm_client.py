@@ -9,7 +9,7 @@ LLM_MODEL points the entire agent fleet at a self-hosted OpenAI-compatible serve
 
 - get_chat_llm      -> LangChain ChatOpenAI  (used by tools, e.g. the python REPL)
 - get_chat_llm_agno -> Agno OpenAIChat        (used by the agents)
-- get_embeddings    -> OpenAI embeddings      (optional, for later RAG)
+- get_embeddings    -> embeddings via OpenRouter (semantic search everywhere)
 """
 import threading
 from typing import Dict, Optional
@@ -27,7 +27,7 @@ from client.langfuse_client import init_langfuse  # noqa: E402
 
 init_langfuse()
 
-_DEFAULT_MODEL = "openai/gpt-5.4-mini"
+from app.settings import DEFAULT_TEXT_MODEL as _DEFAULT_MODEL  # noqa: E402
 
 
 class LLMClient:
@@ -97,13 +97,17 @@ class LLMClient:
             return self._agno_cache[key]
 
     def get_embeddings(self) -> OpenAIEmbeddings:
-        key = "text-embedding-3-small"
+        key = settings.EMBEDDING_MODEL
         with self._lock:
             if key not in self._emb_cache:
                 self._emb_cache[key] = OpenAIEmbeddings(
-                    openai_api_key=settings.OPENAI_API_KEY,
+                    openai_api_key=settings.OPENROUTER_API_KEY,
+                    openai_api_base=settings.OPENROUTER_BASE_URL,
                     model=key,
                     dimensions=1536,
+                    # Send plain strings: by default LangChain pre-tokenizes with tiktoken and
+                    # posts token-id arrays, which only OpenAI's own endpoint accepts.
+                    check_embedding_ctx_length=False,
                     request_timeout=60,
                     max_retries=3,
                 )

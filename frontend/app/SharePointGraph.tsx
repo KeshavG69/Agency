@@ -6,6 +6,7 @@ import { type SPNode } from "@/lib/data";
 import { sharePointGraphQuery } from "@/lib/queries";
 import { useUiStore } from "@/lib/stores/uiStore";
 import ForceGraph, { type NodeVisual } from "./ForceGraph";
+import LibraryCatalogue from "./LibraryCatalogue";
 
 const TYPE: Record<string, { color: string; r: number; square?: boolean }> = {
   site: { color: "var(--ink)", r: 9, square: true },
@@ -43,7 +44,7 @@ const card = (n: SPNode) => (
 );
 
 
-type ViewMode = "graph" | "list" | "site";
+type ViewMode = "catalogue" | "graph" | "list" | "site";
 type SortKey = "name" | "type" | "path" | "items";
 
 function SPList({ nodes }: { nodes: SPNode[] }) {
@@ -238,13 +239,17 @@ export default function SharePointGraph({
   connected,
   onConnect,
   connecting,
+  isAdmin,
 }: {
   connected?: boolean;
   onConnect?: () => void;
   connecting?: boolean;
+  /** Admins can retry files that couldn't be read. */
+  isAdmin?: boolean;
 } = {}) {
   const sharePointRefresh = useUiStore((s) => s.sharePointRefresh);
-  const [view, setView] = useState<ViewMode>("graph");
+  // What the documents ARE is the useful first view; the folder graph is one click away.
+  const [view, setView] = useState<ViewMode>("catalogue");
 
   // Watch ONLY while a crawl is actually in flight (a resync click, or landing back here
   // right after connecting — both bump `sharePointRefresh`). This used to poll every 5s for
@@ -293,6 +298,7 @@ export default function SharePointGraph({
 
   const s = data.stats;
   const tabs: { key: ViewMode; label: string }[] = [
+    { key: "catalogue", label: "By category" },
     { key: "graph", label: "Graph" },
     { key: "list", label: "List" },
     { key: "site", label: "By site" },
@@ -305,7 +311,7 @@ export default function SharePointGraph({
         {s
           ? `${s.sites} sites · ${s.libraries} libraries · ${s.folders} folders · ${s.files} files`
           : "SharePoint structure"}{" "}
-        · files hidden for clarity
+        {view === "catalogue" ? "" : "· files hidden for clarity"}
       </div>
     </div>
   );
@@ -362,6 +368,7 @@ export default function SharePointGraph({
         {heading}
         {tabBar}
       </div>
+      {view === "catalogue" && <LibraryCatalogue isAdmin={isAdmin} />}
       {view === "list" && <SPList nodes={data.nodes.filter((n) => n.type !== "site")} />}
       {view === "site" && <SPBySite nodes={data.nodes} edges={data.edges} />}
     </div>
