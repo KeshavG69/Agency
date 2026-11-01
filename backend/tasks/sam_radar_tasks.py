@@ -18,6 +18,7 @@ from agent.company_profile import _org
 from app.worker import celery_app
 from auth.database import get_mongodb_client
 from client.crm_store import get_crm_store
+from utils.org_settings import agency_allowed, org_settings
 from utils.sam_gov import bulk_opportunities_by_naics, entity_cached
 
 logger = logging.getLogger(__name__)
@@ -38,12 +39,13 @@ def _org_naics(organization_id: str) -> list[str]:
     return [str(c) for c in (details.get("naics") or []) if c]
 
 
-def _collect(buckets: dict, naics_codes: list[str]) -> list:
-    """Flatten the org's NAICS buckets into a deduped (by notice_id) opportunity list."""
+def _collect(buckets: dict, naics_codes: list[str], agencies: list[str] | None = None) -> list:
+    """Flatten the org's NAICS buckets into a deduped (by notice_id) opportunity list, keeping
+    only the agencies the org asked for (Organisation settings → SAM.gov feed; empty = all)."""
     seen: dict[str, object] = {}
     for code in naics_codes:
         for opp in buckets.get(code, []):
-            if opp.notice_id and opp.notice_id not in seen:
+            if opp.notice_id and opp.notice_id not in seen and agency_allowed(opp.agency, agencies or []):
                 seen[opp.notice_id] = opp
     return list(seen.values())
 
@@ -104,6 +106,10 @@ def scan_org_sam(self, organization_id: str, lookback_days: int = 1, analyze: bo
     `analyze` defaults to False: the pull only INGESTS the matched opportunities so the
     user can review + pick which to analyze. (The daily scan passes analyze=True.)
     """
+    feed = org_settings(organization_id)["sam_feed"]
+    if not feed["enabled"]:
+        logger.info("SAM Radar: org %s has the SAM.gov feed turned off — skipping", organization_id)
+        return {"organization_id": organization_id, "skipped": "feed off"}
     naics = _org_naics(organization_id)
     if not naics:
         logger.info("SAM Radar: org %s has no NAICS — skipping", organization_id)
@@ -113,7 +119,7 @@ def scan_org_sam(self, organization_id: str, lookback_days: int = 1, analyze: bo
     except Exception as exc:  # transient download/parse errors -> retry
         logger.warning("SAM Radar: bulk pull failed for org %s: %s", organization_id, exc)
         raise self.retry(exc=exc)
-    return _ingest(organization_id, _collect(buckets, naics), analyze=analyze)
+    return _ingest(organization_id, _collect(buckets, naics, feed["agencies"]), analyze=analyze)
 
 
 @celery_app.task(name="sam_radar.daily_scan")
@@ -124,15 +130,18 @@ def daily_scan(lookback_days: int = 1) -> dict:
     union: set[str] = set()
     for org in db["organizations"].find({}, {"_id": 1}):
         oid = str(org["_id"])
+        feed = org_settings(oid)["sam_feed"]
+        if not feed["enabled"]:
+            continue  # this org turned the SAM.gov feed off (Organisation settings)
         naics = _org_naics(oid)
         if naics:
-            orgs.append((oid, naics))
+            orgs.append((oid, naics, feed["agencies"]))
             union.update(naics)
     if not orgs:
         return {"orgs": 0}
 
     buckets = bulk_opportunities_by_naics(union, posted_within_days=lookback_days)  # one parse
-    results = [_ingest(oid, _collect(buckets, naics)) for oid, naics in orgs]
+    results = [_ingest(oid, _collect(buckets, naics, agencies)) for oid, naics, agencies in orgs]
     total_new = sum(r["created"] for r in results)
     logger.info("SAM Radar daily_scan: %d orgs, %d new opportunities", len(orgs), total_new)
     return {"orgs": len(orgs), "new": total_new, "results": results}

@@ -22,6 +22,7 @@ import {
   fetchOpportunityPage,
   fetchOpportunitySharePointFiles,
   fetchPostedDates,
+  fetchRequirements,
   fetchSharePointGraph,
   fetchTodayPlan,
   type CallPlanItem,
@@ -60,6 +61,7 @@ export const queryKeys = {
   bids: ["opportunities", "bids"] as const,
   opportunity: (id: string) => ["opportunity", id] as const,
   sharePointFiles: (id: string) => ["opportunity", id, "sharepoint-files"] as const,
+  requirements: (id: string) => ["opportunity", id, "requirements"] as const,
   counts: (p: PipelineParams) => ["counts", p] as const,
   facets: ["facets"] as const,
   postedDates: (p: PipelineParams) => ["posted-dates", p] as const,
@@ -257,6 +259,16 @@ export function contactGraphQuery() {
 }
 
 /** The org's SharePoint structure graph. Same shape and reasoning as the contact graph. */
+/** The required-documents checklist. Polls only while the files are being read. */
+export function requirementsQuery(id: string) {
+  return queryOptions({
+    queryKey: queryKeys.requirements(id),
+    queryFn: () => fetchRequirements(id),
+    staleTime: 15_000,
+    refetchInterval: (q) => (q.state.data?.status === "reading" ? 4000 : false),
+  });
+}
+
 /**
  * The analysed library: each file's category, summary and facts, plus the counts behind the
  * progress line and the category filters. Polls only while files are still being read.

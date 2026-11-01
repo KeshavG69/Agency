@@ -66,6 +66,24 @@ class CadenceSettings(BaseModel):
     lapsed_after_days: int | None = None   # past this, treat as lapsed, not "going cold"
 
 
+class SamFeedSettings(BaseModel):
+    """Which SAM.gov notices the daily radar brings in. `agencies` empty = every agency."""
+
+    enabled: bool | None = None
+    agencies: list[str] | None = None
+
+
+def _clean_list(raw: str | list[str]) -> list[str]:
+    """Comma-separated string or list -> trimmed, de-duped (case-insensitive), order kept."""
+    items = raw.split(",") if isinstance(raw, str) else raw
+    seen: dict[str, None] = {}
+    for k in items:
+        k = str(k).strip()
+        if k and k.lower() not in {s.lower() for s in seen}:
+            seen[k] = None
+    return list(seen)
+
+
 class OrgUpdateRequest(BaseModel):
     name: str | None = None
     uei: str | None = None  # SAM.gov Unique Entity ID (govcon identifier)
@@ -75,6 +93,23 @@ class OrgUpdateRequest(BaseModel):
     # ranked HIGHER rather than a non-matching one being dropped.
     keywords: str | list[str] | None = None
     relationship_cadence: CadenceSettings | None = None
+    # The contract vehicles this firm holds (GSA MAS, OASIS+ …) — picked from on a manual upload.
+    contract_vehicles: str | list[str] | None = None
+    sam_feed: SamFeedSettings | None = None
+    # "capture" = the full DoD-style pursuit (call the customer, capture docs); "gsa_quote" =
+    # the short RFQ turnaround: review, decide, check requirements, price, write, submit.
+    task_flow: str | None = None
+
+
+def _with_workflow(org: dict) -> dict:
+    """The org document plus its workflow settings RESOLVED (defaults filled in), so the UI
+    never has to know what an unset setting means."""
+    from utils.org_settings import SUGGESTED_VEHICLES, org_settings
+
+    org_id = str(org["_id"])  # read first: serialize_doc rewrites `_id` in place
+    out = serialize_doc(org)
+    out["workflow"] = {**org_settings(org_id), "suggested_vehicles": list(SUGGESTED_VEHICLES)}
+    return out
 
 
 @router.get("/me")
@@ -83,7 +118,7 @@ async def get_my_organization(current_user: dict = Depends(get_current_user)):
     org = get_organization_crud().get_by_id(current_user["organization_id"])
     if not org:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    return serialize_doc(org)
+    return _with_workflow(org)
 
 
 @router.patch("/me")
@@ -99,13 +134,21 @@ async def update_organization(body: OrgUpdateRequest, current_user: dict = Depen
         updates["uei"] = body.uei.strip().upper()
     if body.keywords is not None:
         # Accept the raw comma-separated string the form sends, or an already-split list.
-        raw = body.keywords.split(",") if isinstance(body.keywords, str) else body.keywords
-        seen: dict[str, None] = {}  # de-dupe case-insensitively, keep the admin's order/casing
-        for k in raw:
-            k = str(k).strip()
-            if k and k.lower() not in {s.lower() for s in seen}:
-                seen[k] = None
-        updates["keywords"] = list(seen)
+        updates["keywords"] = _clean_list(body.keywords)
+    if body.contract_vehicles is not None:
+        updates["settings.contract_vehicles"] = _clean_list(body.contract_vehicles)
+    if body.sam_feed is not None:
+        if body.sam_feed.enabled is not None:
+            updates["settings.sam_feed.enabled"] = body.sam_feed.enabled
+        if body.sam_feed.agencies is not None:
+            updates["settings.sam_feed.agencies"] = _clean_list(body.sam_feed.agencies)
+    if body.task_flow is not None:
+        from utils.org_settings import TASK_FLOWS
+
+        if body.task_flow not in TASK_FLOWS:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"task_flow must be one of {', '.join(TASK_FLOWS)}")
+        updates["settings.task_flow"] = body.task_flow
     if body.relationship_cadence is not None:
         from utils.cadence import CADENCE_SETTING_KEYS
 
@@ -131,7 +174,11 @@ async def update_organization(body: OrgUpdateRequest, current_user: dict = Depen
     if "uei" in updates:
         from utils.sam_gov import invalidate_entity
         invalidate_entity(updates["uei"])
-    return serialize_doc(get_organization_crud().get_by_id(current_user["organization_id"]))
+    # A new task flow changes which steps every pursuit owes — rebuild the plan now.
+    if "settings.task_flow" in updates:
+        from tasks.action_plan_tasks import plan_org_actions
+        plan_org_actions.delay(str(current_user["organization_id"]))
+    return _with_workflow(get_organization_crud().get_by_id(current_user["organization_id"]))
 
 
 @router.post("/me/uei-lookup")

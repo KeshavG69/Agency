@@ -26,6 +26,10 @@ const KIND_LABEL: Record<ActionKind, string> = {
   call: "Call",
   review_docs: "Review",
   submit: "Submit",
+  check_requirements: "Requirements",
+  get_pricing: "Pricing",
+  write_quote: "Write",
+  final_check: "Check",
   reply_mail: "Reply",
   relationship_touch: "Reconnect",
   relationship_personal: "Personal",
@@ -48,6 +52,7 @@ export interface ActionHandlers {
   onPrepCall: (a: ActionItem) => void;
   onOpenDocuments: (a: ActionItem) => void;
   onOpenOpportunity: (a: ActionItem) => void;
+  onOpenRequirements: (a: ActionItem) => void;
   onReplyMail: (a: ActionItem) => void;
   /** Open the relationship nudge (the drafted outreach + its evidence) for review. */
   onOpenNudge: (a: ActionItem) => void;
@@ -179,6 +184,12 @@ function primary(a: ActionItem, h: ActionHandlers, busy?: boolean) {
       return (
         <button className="act-btn" onClick={() => h.onOpenDocuments(a)} disabled={busy}>
           Open documents
+        </button>
+      );
+    case "check_requirements":
+      return (
+        <button className="act-btn" onClick={() => h.onOpenRequirements(a)} disabled={busy}>
+          Review the list
         </button>
       );
     case "reply_mail":

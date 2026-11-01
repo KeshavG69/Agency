@@ -83,6 +83,11 @@ export interface Opportunity {
   id: string;
   title: string;
   agency?: string;
+  contract_vehicle?: string | null; // GSA MAS, OASIS+ … (manual uploads)
+  sin?: string | null;
+  requirements_status?: ProposalRequirements["status"];
+  requirements_done?: number;
+  requirements_total?: number;
   naics?: string;
   set_aside?: string;
   estimated_value?: number | null;
@@ -369,13 +374,25 @@ export interface ManualOpportunityResult {
 // Multipart (files) → raw fetch + auth header, like uploadExcel. The backend uploads
 // the files, parses + digests them (small model), and runs the Analyst in the background.
 export async function createManualOpportunity(
-  fields: { title: string; number?: string; description?: string },
+  fields: {
+    title: string;
+    number?: string;
+    description?: string;
+    agency?: string;
+    dueDate?: string; // YYYY-MM-DD
+    contractVehicle?: string;
+    sin?: string;
+  },
   files: File[],
 ): Promise<ManualOpportunityResult> {
   const form = new FormData();
   form.append("title", fields.title);
   if (fields.number) form.append("number", fields.number);
   if (fields.description) form.append("description", fields.description);
+  if (fields.agency) form.append("agency", fields.agency);
+  if (fields.dueDate) form.append("due_date", fields.dueDate);
+  if (fields.contractVehicle) form.append("contract_vehicle", fields.contractVehicle);
+  if (fields.sin) form.append("sin", fields.sin);
   for (const f of files) form.append("files", f); // repeated key → FastAPI list[UploadFile]
   const res = await fetch(`${API_BASE}/api/opportunities/manual`, {
     method: "POST",
@@ -455,6 +472,92 @@ export interface SPGraph {
 
 export async function fetchSharePointGraph(): Promise<SPGraph> {
   const { data } = await apiClient.get("/api/sharepoint/graph");
+  return data;
+}
+
+// ---- required documents (what one solicitation says must be submitted) ----------------
+
+export type RequirementKind =
+  | "volume" | "plan" | "resume" | "form" | "certification" | "pricing"
+  | "past_performance" | "letter" | "attachment" | "other";
+
+export interface RequirementItem {
+  id: string;
+  title: string;
+  kind: RequirementKind;
+  detail?: string;
+  page_limit?: string | null;
+  page_limit_quote?: string;
+  format?: string | null;
+  source_ref?: string | null;
+  quote?: string;
+  verified: boolean; // false = the quote couldn't be confirmed in the files; a person should check
+  done: boolean;
+  note?: string;
+  files: { id: string; title: string }[];
+  added_by_person?: boolean;
+  dropped_by_reread?: boolean; // a re-read no longer lists this, but someone had worked on it
+}
+
+type Evidence = { evidence?: Record<string, string>; unverified?: string[] };
+
+export interface ProposalRequirements {
+  status: "none" | "reading" | "ready" | "approved" | "failed";
+  error?: string | null;
+  found_instructions?: boolean;
+  summary?: string;
+  submission?: Evidence & { due?: string | null; method?: string | null; address?: string | null;
+    file_rules?: string | null; questions_due?: string | null };
+  format_rules?: Evidence & { font?: string | null; margins?: string | null; page_size?: string | null;
+    page_counting?: string | null };
+  evaluation?: Evidence & { basis?: string | null; factors?: { name: string; importance?: string | null }[] };
+  past_performance?: Evidence & { references?: string | null; recency?: string | null;
+    relevancy?: string | null; prime_rule?: string | null; form?: string | null };
+  pass_fail_rules?: { rule: string; source_ref?: string | null; quote?: string; verified: boolean }[];
+  prohibited?: string[];
+  items: RequirementItem[];
+  files?: { read: string[]; not_read: string[]; from_summary: boolean; truncated: boolean };
+  approved_by?: string | null;
+  approved_at?: string | null;
+}
+
+const reqUrl = (id: string) => `/api/opportunities/${id}/requirements`;
+
+export async function fetchRequirements(id: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.get(reqUrl(id));
+  return data;
+}
+
+export async function readRequirements(id: string): Promise<void> {
+  await apiClient.post(`${reqUrl(id)}/read`);
+}
+
+export async function editRequirementItem(
+  id: string, itemId: string, fields: Partial<Pick<RequirementItem, "title" | "detail" | "page_limit" | "done" | "note">>,
+): Promise<ProposalRequirements> {
+  const { data } = await apiClient.patch(`${reqUrl(id)}/items/${itemId}`, fields);
+  return data;
+}
+
+export async function addRequirementItem(id: string, title: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/items`, { title });
+  return data;
+}
+
+export async function removeRequirementItem(id: string, itemId: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.delete(`${reqUrl(id)}/items/${itemId}`);
+  return data;
+}
+
+export async function attachRequirementFile(id: string, itemId: string, file: File): Promise<ProposalRequirements> {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await apiClient.post(`${reqUrl(id)}/items/${itemId}/file`, form);
+  return data;
+}
+
+export async function approveRequirements(id: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/approve`);
   return data;
 }
 
@@ -752,6 +855,11 @@ export type ActionKind =
   | "call"
   | "review_docs"
   | "submit"
+  // GSA quote flow (Organisation settings → Task flow): ticked off in order.
+  | "check_requirements"
+  | "get_pricing"
+  | "write_quote"
+  | "final_check"
   | "reply_mail"
   // Relationship engine — not tied to a pursuit. `ref_id` is the RelationshipNudge id.
   | "relationship_touch"

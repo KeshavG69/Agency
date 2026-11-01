@@ -30,7 +30,10 @@ def _is_url(src: str) -> bool:
 
 
 _KNOWN_EXT = (".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".txt", ".rtf",
-              ".csv", ".htm", ".html", ".odt", ".ods", ".odp")
+              ".csv", ".htm", ".html", ".odt", ".ods", ".odp", ".md")
+
+
+_PLAIN_TEXT_EXT = {".txt", ".csv", ".md"}
 
 
 def _ext_of(name: str | None) -> str | None:
@@ -88,6 +91,18 @@ def parse_document(
         return None
     src = src.strip()
     tmp_path: str | None = None
+    # Plain text needs no parser — and LiteParse rejects it ("unsupported file format: .txt"),
+    # which used to leave a .txt / .csv / .md upload with no text at all, silently.
+    if not _is_url(src) and (_ext_of(filename) or _ext_of(src)) in _PLAIN_TEXT_EXT:
+        try:
+            with open(src, "rb") as fh:
+                text = fh.read().decode("utf-8", errors="replace").strip()
+        except OSError as exc:
+            logger.warning("parse_document failed for %s: %s", (filename or src)[:120], exc)
+            return None
+        if not text:
+            return None
+        return text[:max_chars] + "\n\n…[truncated]" if max_chars and len(text) > max_chars else text
     try:
         if _is_url(src):
             with httpx.Client(timeout=timeout, follow_redirects=True) as client:
@@ -97,6 +112,11 @@ def parse_document(
             ext = (_ext_of(filename) or _ext_of(_download_name(resp))
                    or _ext_of(str(resp.url).split("?")[0]) or _ext_of(src.split("?")[0])
                    or _sniff_ext(data))
+            if ext in _PLAIN_TEXT_EXT:  # no parser needed (and LiteParse rejects these)
+                text = data.decode("utf-8", errors="replace").strip()
+                if not text:
+                    return None
+                return text[:max_chars] + "\n\n…[truncated]" if max_chars and len(text) > max_chars else text
             if ext in (None, ".pdf"):
                 result = _parser().parse(data)  # PDF (or unknown): bytes are supported
             else:

@@ -36,12 +36,14 @@ import { useToastStore } from "@/lib/stores/toastStore";
 
 export default function TodayView({
   onOpenOpportunity,
+  onOpenRequirements,
   onPrepCall,
   onOpenDocuments,
   onOpenMail,
 }: {
   /** Open the pursuit's detail sheet in the Pipeline, optionally on a given tab. */
   onOpenOpportunity: (opportunityId: string, tab?: "documents") => void;
+  onOpenRequirements: (opportunityId: string) => void;
   /** Open the Call Plan brief dialog for this pursuit. */
   onPrepCall: (opportunityId: string) => void;
   onOpenDocuments: (opportunityId: string) => void;
@@ -141,12 +143,13 @@ export default function TodayView({
       onPrepCall: (a) => a.opportunity_id && onPrepCall(a.opportunity_id),
       onOpenDocuments: (a) => a.opportunity_id && onOpenDocuments(a.opportunity_id),
       onOpenOpportunity: (a) => a.opportunity_id && onOpenOpportunity(a.opportunity_id),
+      onOpenRequirements: (a) => a.opportunity_id && onOpenRequirements(a.opportunity_id),
       onReplyMail: () => onOpenMail(),
       // Opens the drafted outreach; the card STAYS until the rep sends or dismisses in the
       // dialog (which closes the paired action server-side). ref_id is the nudge id.
       onOpenNudge: (a) => a.ref_id && setOpenNudgeId(a.ref_id),
     }),
-    [act, close, onPrepCall, onOpenDocuments, onOpenOpportunity, onOpenMail],
+    [act, close, onPrepCall, onOpenDocuments, onOpenOpportunity, onOpenRequirements, onOpenMail],
   );
 
   const replan = useMutation({

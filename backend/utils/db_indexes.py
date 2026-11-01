@@ -102,6 +102,9 @@ _INDEXES: list[tuple[str, list, dict]] = [
     ("actions", [("organization_id", ASCENDING), ("opportunity_id", ASCENDING),
                  ("status", ASCENDING)], {}),
 
+    # One checklist per opportunity.
+    ("proposal_requirements", [("organization_id", ASCENDING), ("opportunity_id", ASCENDING)], {"unique": True}),
+
     # ---- library analysis ----------------------------------------------------------
     # One row per SharePoint file per org (the sync upserts on it); the Library tab and the
     # agents' fact searches filter by category and by status.

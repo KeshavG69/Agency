@@ -170,8 +170,19 @@ def mark_done(action_id: str, current_user: dict = Depends(get_current_user)) ->
     ladder would recreate the same task tomorrow and never advance to `submit`.
     """
     action = _set(action_id, current_user, "done")
-    if action.get("kind") == "review_docs" and action.get("opportunity_id"):
-        get_crm_store().mark_capture_reviewed(action["opportunity_id"])
+    kind, opp_id = action.get("kind"), action.get("opportunity_id")
+    if kind == "review_docs" and opp_id:
+        get_crm_store().mark_capture_reviewed(opp_id)
+    # A submitted response is a terminal stage: the pursuit leaves the to-do chain and shows as
+    # Submitted in the pipeline.
+    if kind == "submit" and opp_id:
+        get_crm_store().set_stage(opp_id, str(current_user["organization_id"]), "Submitted")
+    # The GSA quote steps advance only when a person ticks one off, so raise the next one now
+    # rather than at tomorrow's run (or after the replan debounce).
+    from tasks.action_plan_tasks import GSA_MANUAL_KINDS, plan_org_actions
+
+    if kind in GSA_MANUAL_KINDS or kind == "submit":
+        plan_org_actions.delay(str(current_user["organization_id"]))
     return action
 
 

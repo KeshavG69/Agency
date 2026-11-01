@@ -71,7 +71,8 @@ SLIM_PROJECTION: dict[str, int] = {f: 1 for f in (
     "stage", "source", "link", "priority_score", "bid_decision", "decision_overridden",
     "analyzed_at", "capture_approved", "captured_at", "capture_error", "ingesting", "ingest_error",
     "assigned_to", "contacts_searched_at", "outreach_drafted_at", "poc_name", "poc_email",
-    "organization_id",
+    "organization_id", "contract_vehicle", "sin", "requirements_status", "requirements_done",
+    "requirements_total",
 )}
 
 
@@ -122,6 +123,11 @@ class CRMStore:
                 # Refresh the source opportunity fields, but never clobber the
                 # analyst's own state (stage placement + verdict) on re-upload.
                 doc.pop("stage", None)
+                # Fields only a person sets (a source re-pull never knows them) must not be
+                # blanked by the refresh.
+                for k in ("contract_vehicle", "sin"):
+                    if doc.get(k) is None:
+                        doc.pop(k, None)
                 self.opps.update_one({"_id": existing["_id"]}, {"$set": doc})
                 return "updated", str(existing["_id"])
 
@@ -559,6 +565,7 @@ class CRMStore:
         "bid_decision", "priority_score", "risk_level", "risk_factors", "ingesting",
         "capture_approved", "captured_at", "capture_failed_at", "capture_error",
         "capture_reviewed_at", "poc_name", "poc_email", "recommended_contacts",
+        "contract_vehicle", "source", "requirements_approved_at",
     )}
 
     # Exactly what call_plan() reads to build a card, and nothing else. Same reasoning as
@@ -1385,6 +1392,14 @@ class CRMStore:
         ]):
             out[d["_id"]] = d["n"]
         return out
+
+    def set_stage(self, opportunity_id: str, organization_id: str, stage: str) -> None:
+        """Move a pursuit to a pipeline stage by hand (e.g. Submitted once the response is in).
+        Org-scoped."""
+        self.opps.update_one(
+            {"_id": ObjectId(opportunity_id), "organization_id": organization_id},
+            {"$set": {"stage": stage, "stage_changed_at": _utc_now()}},
+        )
 
     def mark_capture_reviewed(self, opportunity_id: str) -> None:
         """A human has looked at the capture documents. Satisfies the `review_docs` step and

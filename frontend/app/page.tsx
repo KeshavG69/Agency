@@ -55,7 +55,9 @@ import {
   type DocItem,
 } from "@/lib/data";
 import ContactsGraph from "./ContactsGraph";
+import RequirementsTab from "./RequirementsTab";
 import SharePointGraph from "./SharePointGraph";
+import WorkflowSettings from "./WorkflowSettings";
 import FilePreview from "./FilePreview";
 import AddOpportunityModal from "./AddOpportunityModal";
 import AssignModal from "./AssignModal";
@@ -79,6 +81,7 @@ import {
   callPlanQuery,
   opportunityListQuery,
   opportunityQuery,
+  requirementsQuery,
   organizationQuery,
   queryKeys,
   type OrgBundle,
@@ -852,6 +855,11 @@ function Console({ user }: { user: User }) {
     setTab("documents");
     navigate("pipeline");
   };
+  const openOppRequirements = (id: string) => {
+    setSelectedId(id);
+    setTab("requirements");
+    navigate("pipeline");
+  };
   const prepCallFor = (id: string) => {
     setPrepCallFor(id);
     navigate("callplan");
@@ -1080,6 +1088,7 @@ function Console({ user }: { user: User }) {
           <TodayView
             onOpenOpportunity={openOpp}
             onOpenDocuments={openOppDocuments}
+            onOpenRequirements={openOppRequirements}
             onPrepCall={prepCallFor}
             onOpenMail={() => navigate("dashboard")}
           />
@@ -1143,7 +1152,7 @@ function Console({ user }: { user: User }) {
         </section>
       ) : view === "org" ? (
         <section className="graph-pane">
-          <OrgPanel meEmail={user.email} />
+          <OrgPanel meEmail={user.email} isAdmin={isAdmin} />
         </section>
       ) : (
         <div className="pipeline">
@@ -1822,8 +1831,18 @@ function Detail({
   const canCapture = opp.bid_decision === "Bid";
   const [assignOpen, setAssignOpen] = useState(false);
 
-  const tabs: { key: TabKey; label: string; count?: number }[] = [
+  // Read live, not from `opp`: this pane holds its own copy of the opportunity, which a tick in
+  // the checklist doesn't refresh.
+  const reqItems = useQuery(requirementsQuery(opp.id)).data?.items ?? [];
+
+  const tabs: { key: TabKey; label: string; count?: number | string }[] = [
     { key: "info", label: "Information" },
+    {
+      key: "requirements",
+      label: "Requirements",
+      // "7/11" rather than a bare count: how far along it is matters more than how many.
+      count: reqItems.length ? `${reqItems.filter((i) => i.done).length}/${reqItems.length}` : undefined,
+    },
     { key: "contacts", label: "Contacts", count: opp.recommended_contacts?.length ?? 0 },
     { key: "documents", label: "Documents", count: docs.length },
     { key: "activity", label: "Activity", count: tasks.length },
@@ -1932,6 +1951,7 @@ function Detail({
 
       <div className="tab-body" key={tab}>
         {tab === "info" && <InfoTab opp={opp} />}
+        {tab === "requirements" && <RequirementsTab opp={opp} />}
         {tab === "contacts" && (
           <ContactsTab
             opp={opp}
@@ -2008,6 +2028,9 @@ function InfoTab({ opp }: { opp: Opportunity }) {
   const rows: [string, string, boolean?][] = [
     ["Agency", opp.agency ?? "—"],
     ["Solicitation #", opp.solicitation_number ?? "—", true],
+    // Only shown when set — they come from a hand-entered GSA RFQ, never from SAM.gov.
+    ...(opp.contract_vehicle ? ([["Contract vehicle", opp.contract_vehicle]] as [string, string][]) : []),
+    ...(opp.sin ? ([["SIN", opp.sin, true]] as [string, string, boolean][]) : []),
     ["NAICS", opp.naics ?? "—", true],
     ["PSC", opp.psc_code ?? "—", true],
     ["Set-aside", opp.set_aside ?? "—"],
@@ -2667,7 +2690,7 @@ const orgLabel: React.CSSProperties = {
   color: "var(--faint)",
 };
 
-function OrgPanel({ meEmail }: { meEmail: string }) {
+function OrgPanel({ meEmail, isAdmin }: { meEmail: string; isAdmin: boolean }) {
   const qc = useQueryClient();
   const [orgName, setOrgName] = useState("");
   const [uei, setUei] = useState("");
@@ -2893,6 +2916,19 @@ function OrgPanel({ meEmail }: { meEmail: string }) {
                 {orgMsg && <span style={{ color: "var(--bid-ink)", fontSize: 13 }}>{orgMsg}</span>}
               </div>
             </div>
+
+            {org?.workflow && (
+              <WorkflowSettings
+                key={org.id ?? org._id}
+                workflow={org.workflow}
+                isAdmin={isAdmin}
+                onSaved={(updated) =>
+                  qc.setQueryData(queryKeys.organization, (prev: OrgBundle | undefined) =>
+                    prev ? { ...prev, org: { ...prev.org, ...updated } } : prev,
+                  )
+                }
+              />
+            )}
 
             {org?.company_details && (
               <>

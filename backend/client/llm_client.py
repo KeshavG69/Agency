@@ -77,13 +77,18 @@ class LLMClient:
         base_url: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = 0.1,
+        reasoning_effort: Optional[str] = None,
     ) -> OpenAIChat:
         model = settings.llm_model(model or _DEFAULT_MODEL)
         api_key = api_key or settings.llm_api_key
         base_url = base_url or settings.llm_base_url
         max_tokens = max_tokens or 10000
         temperature = 0.1 if temperature is None else temperature
-        extra_body = settings.llm_extra_body
+        extra_body = dict(settings.llm_extra_body)
+        # OpenRouter's cap on a reasoning model. Only for a hosted provider: a self-hosted server
+        # has its own thinking switch (see settings.llm_extra_body).
+        if reasoning_effort and not settings.llm_is_self_hosted:
+            extra_body["reasoning"] = {"effort": reasoning_effort}
         key = f"{model}:{base_url}:{max_tokens}:{temperature}:{extra_body}"
         with self._lock:
             if key not in self._agno_cache:
@@ -142,10 +147,11 @@ def get_chat_llm(
 def get_chat_llm_agno(
     model: Optional[str] = None, api_key: Optional[str] = None,
     base_url: Optional[str] = None, max_tokens: Optional[int] = None,
-    temperature: Optional[float] = 0.1,
+    temperature: Optional[float] = 0.1, reasoning_effort: Optional[str] = None,
 ) -> OpenAIChat:
     return get_llm_client().get_chat_llm_agno(
-        model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens, temperature=temperature
+        model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens,
+        temperature=temperature, reasoning_effort=reasoning_effort,
     )
 
 

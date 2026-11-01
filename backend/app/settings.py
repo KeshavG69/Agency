@@ -138,6 +138,14 @@ class Settings(BaseSettings):
     # Files bigger than this are skipped (video exports, scanned archives) — not worth a parse.
     LIBRARY_MAX_FILE_MB: int = 40
 
+    # Reading what a solicitation requires. Runs once per bid and misses are expensive (one
+    # missed form can disqualify an offer), so it reads the original files rather than a digest.
+    # Capped well under the model's context: at ~75k tokens of input GLM 5.3 Flash spent its whole
+    # output budget and returned nothing. Past the cap, utils/solicitation_files.py keeps the
+    # instruction passages rather than the first pages.
+    REQUIREMENTS_MODEL: str = DEFAULT_TEXT_MODEL
+    REQUIREMENTS_READ_CHARS: int = 160000
+
     # Capture agent — text-to-image generation via OpenRouter's Image API (POST /images).
     # NOTE: image generation always stays on OpenRouter — a self-hosted text model (Gemma)
     # cannot serve it — so this one deliberately does NOT follow LLM_BASE_URL below.

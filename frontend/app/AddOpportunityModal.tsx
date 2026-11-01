@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { createManualOpportunity, type ManualOpportunityResult } from "@/lib/data";
+import { organizationQuery } from "@/lib/queries";
 
 /**
  * Manually add an opportunity — title + solicitation number + description + files.
@@ -19,6 +21,12 @@ export default function AddOpportunityModal({
   const [title, setTitle] = useState("");
   const [number, setNumber] = useState("");
   const [description, setDescription] = useState("");
+  const [agency, setAgency] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [vehicle, setVehicle] = useState("");
+  const [sin, setSin] = useState("");
+  // The org's own contract vehicles (Organisation settings → How you bid).
+  const vehicles = useQuery(organizationQuery()).data?.org?.workflow?.contract_vehicles ?? [];
   const [files, setFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +49,15 @@ export default function AddOpportunityModal({
     setError(null);
     try {
       const res = await createManualOpportunity(
-        { title: title.trim(), number: number.trim() || undefined, description: description.trim() || undefined },
+        {
+          title: title.trim(),
+          number: number.trim() || undefined,
+          description: description.trim() || undefined,
+          agency: agency.trim() || undefined,
+          dueDate: dueDate || undefined,
+          contractVehicle: vehicle || undefined,
+          sin: sin.trim() || undefined,
+        },
         files,
       );
       onCreated(res);
@@ -58,8 +74,8 @@ export default function AddOpportunityModal({
           <div>
             <h2>Add opportunity</h2>
             <div className="crm-sub">
-              Add a solicitation manually. Attach its documents — they’re parsed and the
-              Analyst scores it automatically once processing finishes.
+              Add a solicitation or GSA RFQ by hand. Attach its documents — they’re parsed and
+              the Analyst scores it once processing finishes. The due date sets your task timeline.
             </div>
           </div>
           <button className="crm-x" onClick={onClose} aria-label="Close" disabled={saving}>
@@ -88,6 +104,45 @@ export default function AddOpportunityModal({
               placeholder="e.g. HT940726QE006"
             />
           </label>
+
+          <div className="aof-row">
+            <label className="aof-field">
+              <span className="aof-label">Agency</span>
+              <input
+                className="aof-input"
+                value={agency}
+                onChange={(e) => setAgency(e.target.value)}
+                placeholder="e.g. Department of Veterans Affairs"
+              />
+            </label>
+            <label className="aof-field">
+              <span className="aof-label">Due date</span>
+              <input className="aof-input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            </label>
+          </div>
+
+          <div className="aof-row">
+            <label className="aof-field">
+              <span className="aof-label">Contract vehicle</span>
+              <select className="aof-input" value={vehicle} onChange={(e) => setVehicle(e.target.value)}>
+                <option value="">{vehicles.length ? "— None / open market —" : "Add yours in Organisation settings"}</option>
+                {vehicles.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="aof-field">
+              <span className="aof-label">SIN</span>
+              <input
+                className="aof-input"
+                value={sin}
+                onChange={(e) => setSin(e.target.value)}
+                placeholder="e.g. 54151S"
+              />
+            </label>
+          </div>
 
           <label className="aof-field">
             <span className="aof-label">Description</span>

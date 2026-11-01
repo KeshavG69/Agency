@@ -1,0 +1,163 @@
+"""proposal_requirements — one reviewed checklist per opportunity.
+
+The agent's outline is a DRAFT. A person corrects it, ticks items off and attaches files, then
+approves it, so the row holds human work as well as machine output. That is why a re-read
+(an amendment arrived) MERGES instead of replacing: ticks, notes and files survive on any item
+that is still required, and items a person added by hand are never removed.
+
+Status: reading -> ready -> approved; or failed. A re-read of an approved list returns it to
+`ready`, because the requirements may have changed and need looking at again.
+
+A small summary (`requirements_status/done/total/approved_at`) is mirrored onto the opportunity
+so the pipeline and the task planner can read it without a second query.
+"""
+from __future__ import annotations
+
+import logging
+import re
+import threading
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+
+from bson import ObjectId
+from pymongo import MongoClient, ReturnDocument
+
+from app.settings import settings
+from models.requirements import ProposalOutline
+
+logger = logging.getLogger(__name__)
+
+READING, READY, APPROVED, FAILED = "reading", "ready", "approved", "failed"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _key(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
+
+
+def _new_item(**fields) -> dict:
+    return {"id": uuid.uuid4().hex[:12], "done": False, "note": "", "files": [],
+            "added_by_person": False, **fields}
+
+
+class RequirementsStore:
+    def __init__(self) -> None:
+        client = MongoClient(settings.MONGODB_URL, tz_aware=True)
+        self.db = client[settings.MONGODB_DATABASE]
+        self.rows = self.db["proposal_requirements"]
+        self.opps = self.db["opportunities"]
+
+    def _mirror(self, row: dict) -> None:
+        items = row.get("items") or []
+        self.opps.update_one(
+            {"_id": ObjectId(row["opportunity_id"]), "organization_id": row["organization_id"]},
+            {"$set": {
+                "requirements_status": row.get("status"),
+                "requirements_done": sum(1 for i in items if i.get("done")),
+                "requirements_total": len(items),
+                "requirements_approved_at": row.get("approved_at"),
+            }},
+        )
+
+    def get(self, organization_id: str, opportunity_id: str) -> Optional[dict]:
+        return self.rows.find_one(
+            {"organization_id": organization_id, "opportunity_id": opportunity_id}, {"_id": 0})
+
+    def _update(self, organization_id: str, opportunity_id: str, update: dict) -> Optional[dict]:
+        row = self.rows.find_one_and_update(
+            {"organization_id": organization_id, "opportunity_id": opportunity_id}, update,
+            projection={"_id": 0}, return_document=ReturnDocument.AFTER,
+        )
+        if row:
+            self._mirror(row)
+        return row
+
+    def mark_reading(self, organization_id: str, opportunity_id: str) -> None:
+        now = _utc_now()
+        row = self.rows.find_one_and_update(
+            {"organization_id": organization_id, "opportunity_id": opportunity_id},
+            {"$set": {"status": READING, "error": None, "updated_at": now},
+             "$setOnInsert": {"items": [], "created_at": now}},
+            upsert=True, projection={"_id": 0}, return_document=ReturnDocument.AFTER,
+        )
+        self._mirror(row)
+
+    def mark_failed(self, organization_id: str, opportunity_id: str, error: str) -> None:
+        self._update(organization_id, opportunity_id,
+                     {"$set": {"status": FAILED, "error": error[:300], "updated_at": _utc_now()}})
+
+    def save_outline(self, organization_id: str, opportunity_id: str, outline: ProposalOutline,
+                     files: dict) -> Optional[dict]:
+        """Store a fresh reading, carrying a person's work across to the items that remain."""
+        old = self.get(organization_id, opportunity_id) or {}
+        by_title = {_key(i.get("title")): i for i in old.get("items") or []}
+        items = []
+        for it in outline.items:
+            prev = by_title.pop(_key(it.title), None) or {}
+            item = _new_item(**it.model_dump())
+            for keep in ("id", "done", "note", "files"):
+                if keep in prev:
+                    item[keep] = prev[keep]
+            items.append(item)
+        # What a person added stays. What they ticked or attached but the new reading no longer
+        # lists stays too, flagged, so it can't vanish without anyone noticing.
+        for leftover in by_title.values():
+            if leftover.get("added_by_person"):
+                items.append(leftover)
+            elif leftover.get("done") or leftover.get("files"):
+                items.append({**leftover, "dropped_by_reread": True})
+        body = outline.model_dump(exclude={"items"})
+        return self._update(organization_id, opportunity_id, {"$set": {
+            **body, "items": items, "files": files, "status": READY, "error": None,
+            "read_at": _utc_now(), "approved_at": None, "approved_by": None, "updated_at": _utc_now(),
+        }})
+
+    def edit_item(self, organization_id: str, opportunity_id: str, item_id: str, fields: dict) -> Optional[dict]:
+        sets = {f"items.$.{k}": v for k, v in fields.items()}
+        sets["updated_at"] = _utc_now()
+        row = self.rows.find_one_and_update(
+            {"organization_id": organization_id, "opportunity_id": opportunity_id, "items.id": item_id},
+            {"$set": sets}, projection={"_id": 0}, return_document=ReturnDocument.AFTER,
+        )
+        if row:
+            self._mirror(row)
+        return row
+
+    def add_item(self, organization_id: str, opportunity_id: str, title: str, kind: str, detail: str) -> Optional[dict]:
+        item = _new_item(title=title, kind=kind, detail=detail, page_limit=None, format=None,
+                         source_ref=None, quote="", verified=True, added_by_person=True)
+        return self._update(organization_id, opportunity_id,
+                            {"$push": {"items": item}, "$set": {"updated_at": _utc_now()}})
+
+    def remove_item(self, organization_id: str, opportunity_id: str, item_id: str) -> Optional[dict]:
+        return self._update(organization_id, opportunity_id,
+                            {"$pull": {"items": {"id": item_id}}, "$set": {"updated_at": _utc_now()}})
+
+    def attach_file(self, organization_id: str, opportunity_id: str, item_id: str, file: dict) -> Optional[dict]:
+        row = self.rows.find_one_and_update(
+            {"organization_id": organization_id, "opportunity_id": opportunity_id, "items.id": item_id},
+            {"$push": {"items.$.files": file}, "$set": {"updated_at": _utc_now()}},
+            projection={"_id": 0}, return_document=ReturnDocument.AFTER,
+        )
+        return row
+
+    def approve(self, organization_id: str, opportunity_id: str, by_email: str) -> Optional[dict]:
+        return self._update(organization_id, opportunity_id, {"$set": {
+            "status": APPROVED, "approved_at": _utc_now(), "approved_by": by_email, "updated_at": _utc_now(),
+        }})
+
+
+_store: Optional[RequirementsStore] = None
+_lock = threading.RLock()
+
+
+def get_requirements_store() -> RequirementsStore:
+    global _store
+    with _lock:
+        if _store is None:
+            _store = RequirementsStore()
+        return _store
