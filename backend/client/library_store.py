@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
@@ -27,6 +28,13 @@ from pymongo import MongoClient, UpdateOne
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
+
+UPLOAD = "upload"  # `source` of a document uploaded straight into Collecct
+
+# `shelf` of a file inside a bid's SharePoint folder: the third library, what we're producing now.
+# It's listed for people but kept from the agents. Those are unreviewed drafts, and a writer that
+# could cite one could launder its own invented figure into a "fact" for the next bid.
+OUTPUT = "output"
 
 PENDING, ANALYSING, DONE, REVIEW, FAILED, SKIPPED = (
     "pending", "analysing", "done", "needs_review", "failed", "skipped",
@@ -40,7 +48,7 @@ READABLE_EXT = {
 }
 
 # Never returned to the frontend or the agents — large, and only the search needs it.
-_HIDDEN = {"_id": 0, "summary_embedding": 0, "item_embeddings": 0}
+_HIDDEN = {"_id": 0, "summary_embedding": 0, "item_embeddings": 0, "object_key": 0}
 
 
 def _utc_now() -> datetime:
@@ -72,24 +80,29 @@ class LibraryStore:
         self.docs = self.db["library_documents"]
 
     # ---- sync --------------------------------------------------------------------------
-    def sync_files(self, organization_id: str, file_nodes: list[dict]) -> dict:
+    def sync_files(self, organization_id: str, file_nodes: list[dict],
+                   bid_folders: Iterable[str] = ()) -> dict:
         """Reconcile the rows with a fresh crawl's file nodes.
 
         Refreshes every file's name/path/link/ACL; marks new or content-changed files pending;
         marks unreadable ones skipped; deletes rows for files no longer in SharePoint.
-        Returns {"to_analyse": [item_id...], "removed": [item_id...]}.
+        `bid_folders` are the names of the bids' folders: what's inside them is the output shelf.
+        Returns {"to_analyse": [item_id...], "removed": [item_id...], "output": [item_id...]}.
         """
         org = organization_id
+        bids = set(bid_folders)
         existing = {
             d["item_id"]: d
             for d in self.docs.find(
-                {"organization_id": org},
+                # Uploaded files aren't in SharePoint, so a crawl must never treat them as deleted.
+                {"organization_id": org, "source": {"$ne": UPLOAD}},
                 {"item_id": 1, "analysed_version": 1, "status": 1, "graph_pending": 1},
             )
         }
         now = _utc_now()
         ops: list[UpdateOne] = []
         to_analyse: list[str] = []
+        output: list[str] = []
         seen: set[str] = set()
         for n in file_nodes:
             iid = n.get("id")
@@ -103,8 +116,11 @@ class LibraryStore:
                 "version": n.get("version"), "modified": n.get("modified"),
                 "permitted_emails": [e.lower() for e in (n.get("permitted_emails") or [])],
                 "org_wide": bool(n.get("org_wide")),
+                "shelf": OUTPUT if bids & set((n.get("path") or "").split("/")) else None,
                 "updated_at": now,
             }
+            if meta["shelf"] == OUTPUT:
+                output.append(iid)
             row = existing.get(iid)
             reason = skip_reason(n)
             if reason:
@@ -127,7 +143,7 @@ class LibraryStore:
         removed = [iid for iid in existing if iid not in seen]
         if removed:
             self.docs.delete_many({"organization_id": org, "item_id": {"$in": removed}})
-        return {"to_analyse": to_analyse, "removed": removed}
+        return {"to_analyse": to_analyse, "removed": removed, "output": output}
 
     # ---- one document ------------------------------------------------------------------
     def get(self, organization_id: str, item_id: str, email: Optional[str] = None,
@@ -171,8 +187,10 @@ class LibraryStore:
 
     def analysed(self, organization_id: str, email: Optional[str] = None,
                  categories: Iterable[str] | None = None, with_embedding: bool = False) -> list[dict]:
-        """Rows with a usable analysis (done or needs_review), optionally by category."""
-        q: dict = {"organization_id": organization_id, "status": {"$in": [DONE, REVIEW]}, **_acl(email)}
+        """Rows the agents may use: a usable analysis (done or needs_review), off the output
+        shelf, optionally by category."""
+        q: dict = {"organization_id": organization_id, "status": {"$in": [DONE, REVIEW]},
+                   "shelf": {"$ne": OUTPUT}, **_acl(email)}
         if categories:
             q["category"] = {"$in": list(categories)}
         return list(self.docs.find(q, {"_id": 0} if with_embedding else _HIDDEN))
@@ -205,7 +223,32 @@ class LibraryStore:
         return r.modified_count
 
     def delete_org(self, organization_id: str) -> int:
-        return self.docs.delete_many({"organization_id": organization_id}).deleted_count
+        """Disconnecting SharePoint forgets what came from SharePoint. Uploads were never there."""
+        return self.docs.delete_many(
+            {"organization_id": organization_id, "source": {"$ne": UPLOAD}}).deleted_count
+
+    def add_upload(self, organization_id: str, name: str, size: int, object_key: str,
+                   by_email: str) -> dict:
+        """A company document uploaded straight into Collecct, for orgs without SharePoint.
+        Readable by the whole org (`org_wide`): there is no SharePoint roster to copy."""
+        now = _utc_now()
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else None
+        row = {
+            "organization_id": organization_id, "item_id": uuid.uuid4().hex, "source": UPLOAD,
+            "object_key": object_key, "name": name, "path": f"Uploaded/{name}", "ext": ext,
+            "size": size, "web_url": None, "drive_id": None, "site_id": None, "version": "upload",
+            "permitted_emails": [], "org_wide": True, "uploaded_by": by_email,
+            "created_at": now, "updated_at": now,
+        }
+        reason = skip_reason(row)
+        row.update(status=SKIPPED, skip_reason=reason) if reason else row.update(status=PENDING)
+        self.docs.insert_one(row)
+        row.pop("_id", None)
+        return row
+
+    def remove_upload(self, organization_id: str, item_id: str) -> Optional[dict]:
+        return self.docs.find_one_and_delete(
+            {"organization_id": organization_id, "item_id": item_id, "source": UPLOAD}, {"_id": 0})
 
 
 _store: Optional[LibraryStore] = None

@@ -182,6 +182,17 @@ def write_document(organization_id: str, row: dict, text: str | None) -> int:
     number of passages written."""
     g = _g(organization_id)
     item = row["item_id"]
+    if row.get("source") == "upload":
+        # No crawl creates a node for an uploaded file. `source` keeps it through rebuilds, and
+        # org_wide is what the access checks read (it has no SharePoint roster).
+        g.query(
+            """
+            MERGE (f:SPNode {id: $id})
+            SET f.type = 'file', f.name = $name, f.path = $path, f.ext = $ext,
+                f.source = 'upload', f.org_wide = true, f.permitted_emails = []
+            """,
+            params={"id": item, "name": row.get("name"), "path": row.get("path"), "ext": row.get("ext")},
+        )
     g.query(
         """
         MATCH (f:SPNode {id: $id})
@@ -257,8 +268,11 @@ def relink(organization_id: str, rows: list[dict]) -> None:
 
 def remove_items(organization_id: str, item_ids: list[str]) -> None:
     if item_ids:
-        _g(organization_id).query("MATCH (c:LibChunk) WHERE c.item_id IN $ids DELETE c",
-                                  params={"ids": item_ids})
+        g = _g(organization_id)
+        g.query("MATCH (c:LibChunk) WHERE c.item_id IN $ids DELETE c", params={"ids": item_ids})
+        # A deleted upload has no crawl to clear its node.
+        g.query("MATCH (n:SPNode) WHERE n.id IN $ids AND n.source = 'upload' DETACH DELETE n",
+                params={"ids": item_ids})
     prune(organization_id)
 
 

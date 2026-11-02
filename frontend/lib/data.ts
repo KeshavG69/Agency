@@ -492,9 +492,15 @@ export interface RequirementItem {
   source_ref?: string | null;
   quote?: string;
   verified: boolean; // false = the quote couldn't be confirmed in the files; a person should check
+  // Who produces it: Collecct drafts it / a person signs it / PriceIQ / the company supplies it.
+  production?: "write" | "sign" | "price" | "provide";
+  gen_status?: "queued" | "writing" | "written" | "failed" | null;
+  gen_error?: string | null;
+  gaps?: string[]; // what a person must fill in or check in the draft
+  pages?: number;
   done: boolean;
   note?: string;
-  files: { id: string; title: string }[];
+  files: { id: string; title: string; size?: number; generated?: boolean; edit_url?: string | null }[];
   added_by_person?: boolean;
   dropped_by_reread?: boolean; // a re-read no longer lists this, but someone had worked on it
 }
@@ -504,6 +510,7 @@ type Evidence = { evidence?: Record<string, string>; unverified?: string[] };
 export interface ProposalRequirements {
   status: "none" | "reading" | "ready" | "approved" | "failed";
   error?: string | null;
+  solicitation_type?: "rfp" | "rfq" | "rfi" | "other";
   found_instructions?: boolean;
   summary?: string;
   submission?: Evidence & { due?: string | null; method?: string | null; address?: string | null;
@@ -519,6 +526,13 @@ export interface ProposalRequirements {
   files?: { read: string[]; not_read: string[]; from_summary: boolean; truncated: boolean };
   approved_by?: string | null;
   approved_at?: string | null;
+  email?: SubmissionEmail | null;
+}
+
+export interface SubmissionEmail {
+  to: string[];
+  subject: string;
+  body: string;
 }
 
 const reqUrl = (id: string) => `/api/opportunities/${id}/requirements`;
@@ -526,6 +540,25 @@ const reqUrl = (id: string) => `/api/opportunities/${id}/requirements`;
 export async function fetchRequirements(id: string): Promise<ProposalRequirements> {
   const { data } = await apiClient.get(reqUrl(id));
   return data;
+}
+
+/** What this person can do with the bid's files, and where they live. */
+export interface BidAccess {
+  can_download: boolean;
+  sharepoint_connected: boolean;
+  folder_url?: string | null;
+}
+
+export async function fetchBidAccess(id: string): Promise<BidAccess> {
+  const { data } = await apiClient.get(`${reqUrl(id)}/access`);
+  return data;
+}
+
+/** Add amendment files: they join the solicitation and the requirements are read again. */
+export async function addAmendment(id: string, files: File[]): Promise<void> {
+  const form = new FormData();
+  files.forEach((f) => form.append("files", f));
+  await apiClient.post(`${reqUrl(id)}/amendment`, form);
 }
 
 export async function readRequirements(id: string): Promise<void> {
@@ -556,6 +589,45 @@ export async function attachRequirementFile(id: string, itemId: string, file: Fi
   return data;
 }
 
+export async function generatePackage(id: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/generate`);
+  return data;
+}
+
+export async function writeRequirementItem(id: string, itemId: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/items/${itemId}/write`);
+  return data;
+}
+
+/** All the bid's files as one zip, saved by the browser. */
+export async function downloadPackage(id: string, name: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${reqUrl(id)}/package.zip`, { headers: authHeader() });
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${name.replace(/[^\w.-]+/g, "_")}.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function writeSubmissionEmail(id: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/email`);
+  return data;
+}
+
+export async function fetchOutstanding(id: string): Promise<{ outstanding: string[] }> {
+  const { data } = await apiClient.get(`${reqUrl(id)}/email/check`);
+  return data;
+}
+
+export async function createPackageDraft(
+  id: string, email: SubmissionEmail,
+): Promise<{ created: boolean; web_link?: string | null; attachments: number; warning?: string | null }> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/email/outlook`, email);
+  return data;
+}
+
 export async function approveRequirements(id: string): Promise<ProposalRequirements> {
   const { data } = await apiClient.post(`${reqUrl(id)}/approve`);
   return data;
@@ -564,6 +636,7 @@ export async function approveRequirements(id: string): Promise<ProposalRequireme
 // ---- library analysis (what's IN each SharePoint file) -------------------------------
 
 export type LibraryCategory =
+  | "active_contract"
   | "past_performance"
   | "cpars"
   | "resume"
@@ -628,6 +701,8 @@ export type LibraryLegal = Grounded & {
 
 export interface LibraryDocument {
   item_id: string;
+  source?: "upload"; // uploaded straight into Collecct; absent = from SharePoint
+  shelf?: "output" | null; // inside a bid's folder: listed here, never used by the agents
   name: string;
   path?: string | null;
   web_url?: string | null;
@@ -661,6 +736,21 @@ export async function fetchLibraryDocuments(): Promise<{ documents: LibraryDocum
 
 export async function fixLibraryCategory(itemId: string, category: LibraryCategory): Promise<void> {
   await apiClient.post(`/api/library/documents/${encodeURIComponent(itemId)}/category`, { category });
+}
+
+export async function uploadLibraryDocuments(files: File[]): Promise<void> {
+  const form = new FormData();
+  for (const f of files) form.append("files", f);
+  await apiClient.post("/api/library/upload", form);
+}
+
+export async function deleteLibraryDocument(itemId: string): Promise<void> {
+  await apiClient.delete(`/api/library/documents/${encodeURIComponent(itemId)}`);
+}
+
+export async function libraryDocumentUrl(itemId: string): Promise<string> {
+  const { data } = await apiClient.get(`/api/library/documents/${encodeURIComponent(itemId)}/url`);
+  return data.url;
 }
 
 export async function rerunLibraryAnalysis(): Promise<{ retried_failed: number }> {

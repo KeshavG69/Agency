@@ -278,21 +278,22 @@ export default function SharePointGraph({
       </div>
     );
   if (!data) return <div className="graph-empty">Loading structure…</div>;
+  // No SharePoint needed: documents can be uploaded directly, so the library itself still shows.
   if (data.nodes.length === 0)
     return (
-      <div className="graph-empty">
-        <div className="ge-t">
-          {connected ? "Nothing crawled yet" : "Your library isn't connected"}
+      <div className="graph-wrap">
+        <div className="graph-head">
+          <div>
+            <h2>Documents</h2>
+            <div className="graph-sub">Upload your company documents, or connect SharePoint</div>
+          </div>
+          {!connected && onConnect && (
+            <button className="mini-btn" onClick={onConnect} disabled={connecting}>
+              {connecting ? "Opening Microsoft…" : "Connect SharePoint"}
+            </button>
+          )}
         </div>
-        {connected
-          ? "SharePoint is connected — run the structure sync to map your sites, folders and who can read them."
-          : "Connect SharePoint and Collecct will map your sites, folders and who can read them, so the agents can ground on your own documents."}
-        {!connected && onConnect && (
-          <button className="btn primary ge-action" onClick={onConnect} disabled={connecting}>
-            {connecting && <span className="spin" />}
-            {connecting ? "Opening Microsoft…" : "Connect SharePoint"}
-          </button>
-        )}
+        <LibraryCatalogue isAdmin={isAdmin} />
       </div>
     );
 

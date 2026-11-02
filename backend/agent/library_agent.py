@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 REVIEW_BELOW = 0.6
 
 _CATEGORY_GUIDE = """\
+- active_contract: a contract WE hold and are performing now: its PWS or SOW, award or task order,
+  and our write-ups of that work. A contract whose period has ended is past_performance.
 - past_performance: write-ups of contracts WE performed (project summaries, PP references, case studies)
 - cpars: a government performance evaluation of our work (CPARS, PPQ, customer rating form)
 - resume: one or more people's resumes / CVs / bios
@@ -40,9 +42,10 @@ _CATEGORY_GUIDE = """\
 - management_plan: QA/QC plans, transition plans, staffing plans, org charts, risk plans
 - pricing: rate sheets, price volumes, BOEs, labor-rate tables
 - certification: ISO / CMMI / SAM / insurance / facility clearance / small-business certificates
-- contract_legal: awarded contracts, task orders, teaming agreements, NDAs, subcontracts
+- contract_legal: teaming agreements, NDAs, subcontracts, and awarded contracts that aren't active
 - solicitation: an RFP / RFI / RFQ / sources-sought / PWS / SOW WRITTEN BY the government and
-  RECEIVED by us. A document of ours that merely discusses a solicitation is NOT one.
+  RECEIVED by us for a bid. The PWS of a contract we already hold is active_contract. A document
+  of ours that merely discusses a solicitation is NOT one.
 - other: anything that fits none of the above (templates, marketing, internal admin, images)"""
 
 
@@ -61,8 +64,9 @@ A solicitation we RECEIVED is "solicitation"; a proposal we WROTE is "past_propo
 strategy for winning one (win themes, bid/no-bid, competitors, teaming) is "capture_plan".
 
 FACTS — fill only the sheets that fit the document:
-- contracts: every contract we performed that the document describes (past_performance,
-  cpars, and the past-performance section of a past_proposal). One entry per contract.
+- contracts: every contract we performed that the document describes (active_contract,
+  past_performance, cpars, and the past-performance section of a past_proposal). One entry per
+  contract.
 - people: one entry per resume.
 - proposal: for a past_proposal.
 - certifications: one entry per certificate / registration.

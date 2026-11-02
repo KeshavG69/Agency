@@ -99,6 +99,8 @@ class OrgUpdateRequest(BaseModel):
     # "capture" = the full DoD-style pursuit (call the customer, capture docs); "gsa_quote" =
     # the short RFQ turnaround: review, decide, check requirements, price, write, submit.
     task_flow: str | None = None
+    # Emails that may download the final files, besides every admin.
+    download_allowed: str | list[str] | None = None
 
 
 def _with_workflow(org: dict) -> dict:
@@ -137,6 +139,8 @@ async def update_organization(body: OrgUpdateRequest, current_user: dict = Depen
         updates["keywords"] = _clean_list(body.keywords)
     if body.contract_vehicles is not None:
         updates["settings.contract_vehicles"] = _clean_list(body.contract_vehicles)
+    if body.download_allowed is not None:
+        updates["settings.download_allowed"] = _clean_list(body.download_allowed)
     if body.sam_feed is not None:
         if body.sam_feed.enabled is not None:
             updates["settings.sam_feed.enabled"] = body.sam_feed.enabled

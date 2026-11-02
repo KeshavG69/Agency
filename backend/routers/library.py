@@ -3,10 +3,14 @@
 Every read is filtered to the files the acting employee may open in SharePoint (admins see
 the whole library, as on /api/sharepoint/graph).
 """
+import asyncio
 import logging
+import os
+import tempfile
+import uuid
 from typing import get_args
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from auth.dependencies import get_current_user
@@ -24,6 +28,87 @@ def _scope(user: dict) -> tuple[str, str | None]:
     """(organization_id, email to ACL-filter by — None for an admin)."""
     org = str(user["organization_id"])
     return org, None if user.get("role") == "admin" else (user.get("email") or "").lower()
+
+
+@router.post("/upload")
+async def upload_documents(files: list[UploadFile] = File(...),
+                           current_user: dict = Depends(get_current_user)) -> dict:
+    """Add company documents by hand: contracts, past performance, resumes. With SharePoint
+    connected they go into its 'Company Library' folder and are read from there. Only a company
+    with no SharePoint yet has them held in Collecct."""
+    org = str(current_user["organization_id"])
+    email = (current_user.get("email") or "").lower()
+    store = get_library_store()
+    from client.idrive_storage import get_idrive_storage
+    from tasks.library_tasks import analyse_document_task
+    from tasks.sharepoint_tasks import sync_sharepoint_structure_task
+    from utils.sharepoint_writer import (
+        SharePointTransientError,
+        SharePointWriteError,
+        file_to_library,
+    )
+
+    added = []
+    in_sharepoint = False
+    for f in files:
+        data = await f.read()
+        if not data:
+            continue
+        name = os.path.basename(f.filename or "document")
+        try:
+            sp = await asyncio.to_thread(file_to_library, org, name, data)
+        except (SharePointWriteError, SharePointTransientError) as exc:
+            logger.warning("Library upload to SharePoint failed for %s: %s", name, exc)
+            raise HTTPException(status_code=502, detail="SharePoint wouldn't take that file. An "
+                                                        "admin may need to reconnect it with write access.")
+        if sp:
+            in_sharepoint = True
+            added.append({"item_id": sp.get("id"), "name": name, "status": PENDING, "skip_reason": None})
+            continue
+        with tempfile.NamedTemporaryFile(delete=True) as tmp:
+            tmp.write(data)
+            tmp.flush()
+            _, key = await asyncio.to_thread(
+                get_idrive_storage().upload_document, tmp.name, org, "library",
+                f"{uuid.uuid4().hex[:12]}_{name}",
+            )
+        row = store.add_upload(org, name, len(data), key, email)
+        if row["status"] == PENDING:
+            analyse_document_task.delay(org, row["item_id"])
+        added.append({"item_id": row["item_id"], "name": name, "status": row["status"],
+                      "skip_reason": row.get("skip_reason")})
+    if not added:
+        raise HTTPException(status_code=400, detail="No readable files were uploaded.")
+    if in_sharepoint:
+        sync_sharepoint_structure_task.delay(org)  # the crawl finds them and the reading follows
+    return {"added": added}
+
+
+@router.delete("/documents/{item_id}")
+def delete_upload(item_id: str, current_user: dict = Depends(get_current_user)) -> dict:
+    """Remove an uploaded document. SharePoint files are managed in SharePoint."""
+    org, _ = _scope(current_user)
+    row = get_library_store().remove_upload(org, item_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Uploaded document not found.")
+    from client.idrive_storage import get_idrive_storage
+    from client.library_graph import remove_items
+
+    get_idrive_storage().delete_document(row["object_key"])
+    remove_items(org, [item_id])
+    return {"ok": True}
+
+
+@router.get("/documents/{item_id}/url")
+def document_url(item_id: str, current_user: dict = Depends(get_current_user)) -> dict:
+    """A short-lived link to an uploaded document (SharePoint files carry their own link)."""
+    org, email = _scope(current_user)
+    row = get_library_store().get(org, item_id, email=email, with_embedding=True)
+    if not row or not row.get("object_key"):
+        raise HTTPException(status_code=404, detail="Document not found.")
+    from client.idrive_storage import get_idrive_storage
+
+    return {"url": get_idrive_storage().get_presigned_url(row["object_key"], expiration=3600)}
 
 
 @router.get("/documents")

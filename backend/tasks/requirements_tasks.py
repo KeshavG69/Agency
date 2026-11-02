@@ -34,8 +34,21 @@ def read_requirements_task(self, opportunity_id: str, organization_id: str) -> d
     store.save_outline(organization_id, opportunity_id, outline, {
         "read": files.read, "not_read": files.not_read,
         "from_summary": files.from_summary, "truncated": files.truncated,
-    })
+    }, source_text=files.text)
+    if outline.solicitation_type == "rfi":
+        _start_rfi(opportunity_id, organization_id)
     return {"opportunity_id": opportunity_id, "status": "ready", "items": len(outline.items)}
+
+
+def _start_rfi(opportunity_id: str, organization_id: str) -> None:
+    """An RFI is meant to take minutes and nothing goes out without a person sending it, so it
+    skips the list approval and goes straight to writing."""
+    from tasks.action_plan_tasks import plan_org_actions
+    from tasks.proposal_tasks import queue_package
+
+    get_requirements_store().approve(organization_id, opportunity_id, "Collecct (RFI)")
+    plan_org_actions.delay(organization_id)
+    queue_package(opportunity_id, organization_id)
 
 
 def queue_read(opportunity_id: str, organization_id: str, only_if_new: bool = True) -> bool:

@@ -41,6 +41,7 @@ export interface OrgWorkflow {
   contract_vehicles: string[];
   sam_feed: { enabled: boolean; agencies: string[] };
   task_flow: TaskFlow;
+  download_allowed: string[];
   suggested_vehicles: string[];
 }
 
@@ -66,6 +67,7 @@ export const organizationsApi = {
       contract_vehicles?: string[];
       sam_feed?: { enabled?: boolean; agencies?: string[] };
       task_flow?: TaskFlow;
+      download_allowed?: string[];
     }
   ): Promise<Organization> => {
     const response = await apiClient.patch<Organization>('/api/organizations/me', payload);

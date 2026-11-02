@@ -20,7 +20,7 @@ from typing import Callable
 from client.graph_store import _embed_query
 from client.library_store import get_library_store
 
-_PP_CATEGORIES = ("past_performance", "cpars", "past_proposal")
+_PP_CATEGORIES = ("active_contract", "past_performance", "cpars", "past_proposal")
 
 
 def _cos(a: list[float] | None, b: list[float] | None) -> float:
@@ -103,7 +103,7 @@ def library_tools(organization_id: str | None, employee_email: str | None) -> li
     def search_library_tool(query: str, category: str = "") -> str:
         """Search INSIDE the company's documents for passages about `query` — methodology,
         approach, tools, results. Optional `category` limits it to one kind of document:
-        past_performance, cpars, resume, past_proposal, capture_plan, capability_statement,
+        active_contract, past_performance, cpars, resume, past_proposal, capture_plan, capability_statement,
         technical_approach, management_plan, pricing, certification, contract_legal,
         solicitation, other.
         Returns passages with their source file. Returns [] if nothing relevant."""

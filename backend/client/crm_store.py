@@ -419,6 +419,14 @@ class CRMStore:
         )
         return res.matched_count > 0
 
+    def bid_folder_names(self, organization_id: str) -> list[str]:
+        """The name of every bid's SharePoint folder in this org."""
+        rows = self.opps.find(
+            {"organization_id": organization_id, "sharepoint_folder.name": {"$exists": True}},
+            {"sharepoint_folder.name": 1},
+        )
+        return [r["sharepoint_folder"]["name"] for r in rows]
+
     # WHY THESE ARE GET-OR-CREATE. Both used to be plain inserts, called by the Analyst on
     # every verdict. The Analyst does not run once per opportunity: Watch verdicts schedule an
     # automatic re-check, and every re-check re-ran the full task — adding ANOTHER identical

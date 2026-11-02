@@ -40,8 +40,8 @@ def _key(title: str) -> str:
 
 
 def _new_item(**fields) -> dict:
-    return {"id": uuid.uuid4().hex[:12], "done": False, "note": "", "files": [],
-            "added_by_person": False, **fields}
+    return {"id": uuid.uuid4().hex[:12], "done": False, "note": "", "files": [], "gaps": [],
+            "gen_status": None, "added_by_person": False, **fields}
 
 
 class RequirementsStore:
@@ -65,12 +65,19 @@ class RequirementsStore:
 
     def get(self, organization_id: str, opportunity_id: str) -> Optional[dict]:
         return self.rows.find_one(
-            {"organization_id": organization_id, "opportunity_id": opportunity_id}, {"_id": 0})
+            {"organization_id": organization_id, "opportunity_id": opportunity_id},
+            {"_id": 0, "source_text": 0})
+
+    def source_text(self, organization_id: str, opportunity_id: str) -> str:
+        """The package as it was read, so each writer doesn't re-download and re-parse it."""
+        row = self.rows.find_one({"organization_id": organization_id, "opportunity_id": opportunity_id},
+                                 {"source_text": 1})
+        return (row or {}).get("source_text") or ""
 
     def _update(self, organization_id: str, opportunity_id: str, update: dict) -> Optional[dict]:
         row = self.rows.find_one_and_update(
             {"organization_id": organization_id, "opportunity_id": opportunity_id}, update,
-            projection={"_id": 0}, return_document=ReturnDocument.AFTER,
+            projection={"_id": 0, "source_text": 0}, return_document=ReturnDocument.AFTER,
         )
         if row:
             self._mirror(row)
@@ -82,7 +89,7 @@ class RequirementsStore:
             {"organization_id": organization_id, "opportunity_id": opportunity_id},
             {"$set": {"status": READING, "error": None, "updated_at": now},
              "$setOnInsert": {"items": [], "created_at": now}},
-            upsert=True, projection={"_id": 0}, return_document=ReturnDocument.AFTER,
+            upsert=True, projection={"_id": 0, "source_text": 0}, return_document=ReturnDocument.AFTER,
         )
         self._mirror(row)
 
@@ -91,7 +98,7 @@ class RequirementsStore:
                      {"$set": {"status": FAILED, "error": error[:300], "updated_at": _utc_now()}})
 
     def save_outline(self, organization_id: str, opportunity_id: str, outline: ProposalOutline,
-                     files: dict) -> Optional[dict]:
+                     files: dict, source_text: str = "") -> Optional[dict]:
         """Store a fresh reading, carrying a person's work across to the items that remain."""
         old = self.get(organization_id, opportunity_id) or {}
         by_title = {_key(i.get("title")): i for i in old.get("items") or []}
@@ -99,7 +106,7 @@ class RequirementsStore:
         for it in outline.items:
             prev = by_title.pop(_key(it.title), None) or {}
             item = _new_item(**it.model_dump())
-            for keep in ("id", "done", "note", "files"):
+            for keep in ("id", "done", "note", "files", "gaps", "gen_status"):
                 if keep in prev:
                     item[keep] = prev[keep]
             items.append(item)
@@ -112,7 +119,8 @@ class RequirementsStore:
                 items.append({**leftover, "dropped_by_reread": True})
         body = outline.model_dump(exclude={"items"})
         return self._update(organization_id, opportunity_id, {"$set": {
-            **body, "items": items, "files": files, "status": READY, "error": None,
+            **body, "items": items, "files": files, "source_text": source_text,
+            "status": READY, "error": None,
             "read_at": _utc_now(), "approved_at": None, "approved_by": None, "updated_at": _utc_now(),
         }})
 
@@ -121,7 +129,7 @@ class RequirementsStore:
         sets["updated_at"] = _utc_now()
         row = self.rows.find_one_and_update(
             {"organization_id": organization_id, "opportunity_id": opportunity_id, "items.id": item_id},
-            {"$set": sets}, projection={"_id": 0}, return_document=ReturnDocument.AFTER,
+            {"$set": sets}, projection={"_id": 0, "source_text": 0}, return_document=ReturnDocument.AFTER,
         )
         if row:
             self._mirror(row)
@@ -137,13 +145,9 @@ class RequirementsStore:
         return self._update(organization_id, opportunity_id,
                             {"$pull": {"items": {"id": item_id}}, "$set": {"updated_at": _utc_now()}})
 
-    def attach_file(self, organization_id: str, opportunity_id: str, item_id: str, file: dict) -> Optional[dict]:
-        row = self.rows.find_one_and_update(
-            {"organization_id": organization_id, "opportunity_id": opportunity_id, "items.id": item_id},
-            {"$push": {"items.$.files": file}, "$set": {"updated_at": _utc_now()}},
-            projection={"_id": 0}, return_document=ReturnDocument.AFTER,
-        )
-        return row
+    def set_email(self, organization_id: str, opportunity_id: str, email: dict) -> Optional[dict]:
+        return self._update(organization_id, opportunity_id,
+                            {"$set": {"email": email, "updated_at": _utc_now()}})
 
     def approve(self, organization_id: str, opportunity_id: str, by_email: str) -> Optional[dict]:
         return self._update(organization_id, opportunity_id, {"$set": {

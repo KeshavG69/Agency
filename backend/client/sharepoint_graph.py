@@ -65,13 +65,17 @@ def clear_structure(organization_id: str, keep_library: bool = False) -> None:
     to the fresh SPNodes afterwards. The default is a DISCONNECT: the source is gone, so
     everything derived from it goes too, including the per-file analysis in Mongo.
     """
+    # Uploaded documents hang off SPNodes too (client/library_graph.py), but they never came from
+    # SharePoint, so neither a rebuild nor a disconnect touches them.
+    sharepoint_only = "MATCH (n:SPNode) WHERE coalesce(n.source, '') <> 'upload' DETACH DELETE n"
+    _graph(organization_id).query(sharepoint_only)
     if keep_library:
-        _graph(organization_id).query("MATCH (n:SPNode) DETACH DELETE n")
         return
-    _graph(organization_id).query("MATCH (n) DETACH DELETE n")
+    from client.library_graph import prune
     from client.library_store import get_library_store
 
     get_library_store().delete_org(organization_id)
+    prune(organization_id)
 
 
 def upsert_structure(nodes: list[dict], organization_id: str) -> int:

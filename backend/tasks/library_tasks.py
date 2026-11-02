@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from app.settings import settings
 from app.worker import celery_app
-from client.library_store import DONE, FAILED, PENDING, REVIEW, get_library_store
+from client.library_store import DONE, FAILED, OUTPUT, PENDING, REVIEW, get_library_store
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,20 @@ def _item_embeddings(result) -> dict:
     return {"contracts": vecs[:len(contracts)], "people": vecs[len(contracts):]}
 
 
+def _uploaded_bytes(row: dict) -> bytes:
+    """A company document uploaded straight into Collecct lives in iDrive, not SharePoint."""
+    from client.idrive_storage import get_idrive_storage
+
+    fd, path = tempfile.mkstemp()
+    os.close(fd)
+    try:
+        get_idrive_storage().download_document(row["object_key"], path)
+        with open(path, "rb") as fh:
+            return fh.read()
+    finally:
+        os.unlink(path)
+
+
 @celery_app.task(name="library.analyse_org")
 def analyse_library_task(organization_id: str) -> dict:
     """Queue one analysis per pending file in the org's library."""
@@ -91,7 +105,8 @@ def analyse_document_task(self, organization_id: str, item_id: str) -> dict:
         return {"item_id": item_id, "skipped": "not pending (already taken or removed)"}
     name = row.get("name") or item_id
     try:
-        content = download_drive_item(organization_id, row.get("drive_id"), item_id)
+        content = (_uploaded_bytes(row) if row.get("source") == "upload"
+                   else download_drive_item(organization_id, row.get("drive_id"), item_id))
         text = _parse_bytes(content, row.get("ext"), name)
         if not text or len(text.strip()) < 40:
             store.mark(organization_id, item_id, status=FAILED,
@@ -107,6 +122,9 @@ def analyse_document_task(self, organization_id: str, item_id: str) -> dict:
             "status": status, "error": None, "chars": len(text),
             "analysed_version": row.get("version"),
         }
+        if row.get("shelf") == OUTPUT:  # listed for people, never in the graph the agents search
+            store.mark(organization_id, item_id, analysed_at=datetime.now(timezone.utc), **fields)
+            return {"item_id": item_id, "status": status, "category": result.category}
         fields["summary_embedding"] = _embed_query(summary_text({**row, **fields}))
         fields["item_embeddings"] = _item_embeddings(result)
         fields["analysed_at"] = datetime.now(timezone.utc)
@@ -145,13 +163,16 @@ def sync_library(organization_id: str, nodes: list[dict]) -> dict:
     """Called by the structure sync right after the folder map is rebuilt: reconcile the
     library rows with the crawl, put the existing analysis back on the fresh graph, and queue
     whatever is new or changed. Never raises — the structure sync already succeeded."""
+    from client.crm_store import get_crm_store
     from client.library_graph import relink, remove_items
 
     store = get_library_store()
     try:
-        diff = store.sync_files(organization_id, [n for n in nodes if n.get("type") == "file"])
+        diff = store.sync_files(organization_id, [n for n in nodes if n.get("type") == "file"],
+                                get_crm_store().bid_folder_names(organization_id))
         relink(organization_id, store.analysed(organization_id, with_embedding=True))
-        remove_items(organization_id, diff["removed"])
+        # A file read before its folder became a bid's still has passages the agents could find.
+        remove_items(organization_id, diff["removed"] + diff["output"])
         analyse_library_task.delay(organization_id)
         return {"new_or_changed": len(diff["to_analyse"]), "removed": len(diff["removed"])}
     except Exception as exc:  # noqa: BLE001

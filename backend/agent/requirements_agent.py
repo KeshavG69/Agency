@@ -50,8 +50,21 @@ volumes: use what THIS solicitation asks for, with its own names. Include, as se
 For each: its title as the solicitation names it, what it must contain, page_limit exactly as
 stated including exclusions (with page_limit_quote, the exact words stating that limit), required
 format, and source_ref (e.g. "L.3"). "No page limit" is a valid page_limit if the files say so.
+Set production on every item:
+- "write": narrative or content we can draft (technical/management volumes, plans, past-performance
+  write-ups, resumes, matrices, cover letters).
+- "sign": anything that needs a signature or is a government form to complete (SF forms, signed
+  amendments, representations and certifications, letters of commitment, signed statements).
+- "price": prices, rate sheets, cost volumes and price templates.
+- "provide": an existing document only the company holds (certificates, licences, financial
+  statements, CPARS copies).
 Only list what is due WITH the offer. Deliverables due after award are NOT items, unless a draft
 is required in the proposal.
+
+solicitation_type — "rfi" for an RFI, sources sought or market research notice, where nothing is
+awarded from this response. For an rfi, unless it asks for separate attachments, list ONE "write"
+item for the whole response, and put every question the government asks into its detail, numbered,
+in its own words.
 
 pass_fail_rules — list every rule where missing it makes the offer ineligible, unawardable,
 rejected or a "Deficiency" (e.g. "Standard for Acceptability", "Marginal in any subfactor is
@@ -93,6 +106,9 @@ def read_requirements(title: str, files_text: str) -> ProposalOutline:
     outline = run_structured(build_requirements_agent, message, ProposalOutline,
                              label=f"Requirements {title[:50]}")
     report = prove(outline, files_text)
+    for item in outline.items:
+        if item.kind == "pricing":  # the model's label can't send a price to a writer
+            item.production = "price"
     logger.info("Requirements %s: %d item(s), %d pass/fail rule(s), %s", title[:50],
                 len(outline.items), len(outline.pass_fail_rules), report)
     return outline

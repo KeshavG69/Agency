@@ -33,7 +33,16 @@ def org_settings(organization_id: str) -> dict:
             "agencies": list(feed.get("agencies") or []),
         },
         "task_flow": flow if flow in TASK_FLOWS else "capture",
+        "download_allowed": list(s.get("download_allowed") or []),
     }
+
+
+def can_download(user: dict) -> bool:
+    """Who may take the final files out of Collecct: every admin, plus the emails an admin names."""
+    if user.get("role") == "admin":
+        return True
+    allowed = org_settings(str(user["organization_id"]))["download_allowed"]
+    return (user.get("email") or "").lower() in {e.lower() for e in allowed}
 
 
 def agency_allowed(agency: str | None, agencies: list[str]) -> bool:

@@ -101,6 +101,7 @@ export default function WorkflowSettings({
   const [feedOn, setFeedOn] = useState(workflow.sam_feed.enabled);
   const [agencies, setAgencies] = useState<string[]>(workflow.sam_feed.agencies);
   const [flow, setFlow] = useState<TaskFlow>(workflow.task_flow);
+  const [downloaders, setDownloaders] = useState<string[]>(workflow.download_allowed);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -112,6 +113,7 @@ export default function WorkflowSettings({
         contract_vehicles: vehicles,
         sam_feed: { enabled: feedOn, agencies },
         task_flow: flow,
+        download_allowed: downloaders,
       });
       onSaved(updated);
       setMsg({
@@ -188,6 +190,21 @@ export default function WorkflowSettings({
             ))}
           </div>
           <div className="wf-hint">The steps each opportunity puts on your Today list, timed back from its due date.</div>
+        </div>
+
+        <div className="wf-field">
+          <label className="wf-label">Who can download the final files</label>
+          <ChipList
+            values={downloaders}
+            onChange={setDownloaders}
+            suggestions={[]}
+            placeholder="name@company.com"
+            disabled={!isAdmin}
+          />
+          <div className="wf-hint">
+            Admins always can. Everyone else edits online in SharePoint and can&apos;t use Download
+            all or create the Outlook draft.
+          </div>
         </div>
 
         {isAdmin && (

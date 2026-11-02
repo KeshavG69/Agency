@@ -1,10 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  deleteLibraryDocument,
   fixLibraryCategory,
+  libraryDocumentUrl,
   rerunLibraryAnalysis,
+  uploadLibraryDocuments,
   type LibraryCategory,
   type LibraryCounts,
   type LibraryDocument,
@@ -13,6 +16,7 @@ import { libraryQuery, queryKeys } from "@/lib/queries";
 import { useToastStore } from "@/lib/stores/toastStore";
 
 export const CATEGORY_LABEL: Record<LibraryCategory, string> = {
+  active_contract: "Active contract",
   past_performance: "Past performance",
   cpars: "CPARS / rating",
   resume: "Resume",
@@ -32,6 +36,17 @@ const CATEGORIES = Object.keys(CATEGORY_LABEL) as LibraryCategory[];
 // "review" and "problems" are filters over status, not categories — they sit in the same row
 // because they answer the same question: which documents should I look at?
 type Filter = "all" | "review" | "problems" | LibraryCategory;
+
+// The three libraries: contracts we hold, what we've done before, and what we're producing now.
+const SHELVES = [
+  { key: "active", label: "Active contracts" },
+  { key: "past", label: "Past work" },
+  { key: "output", label: "Current bids" },
+] as const;
+type Shelf = "all" | (typeof SHELVES)[number]["key"];
+
+const shelfOf = (d: LibraryDocument): Shelf =>
+  d.shelf === "output" ? "output" : d.category === "active_contract" ? "active" : "past";
 
 const STATUS_LABEL: Record<LibraryDocument["status"], string> = {
   pending: "Waiting",
@@ -96,6 +111,14 @@ function Detail({ doc, onClose }: { doc: LibraryDocument; onClose: () => void })
     },
     onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.library }),
   });
+  const remove = useMutation({
+    mutationFn: () => deleteLibraryDocument(doc.item_id),
+    onSuccess: () => {
+      onClose();
+      qc.invalidateQueries({ queryKey: queryKeys.library });
+    },
+    onError: () => toast("Couldn't remove it — try again."),
+  });
   const readable = doc.status !== "skipped";
   const ev = (o: { evidence?: Record<string, string> }, k: string) => o.evidence?.[k];
 
@@ -115,6 +138,25 @@ function Detail({ doc, onClose }: { doc: LibraryDocument; onClose: () => void })
         <a className="lib-open" href={doc.web_url} target="_blank" rel="noreferrer">
           Open in SharePoint ↗
         </a>
+      )}
+      {doc.source === "upload" && (
+        <div className="lib-upload-actions">
+          <button
+            className="lib-open"
+            onClick={async () => {
+              try {
+                window.open(await libraryDocumentUrl(doc.item_id), "_blank", "noopener");
+              } catch {
+                toast("Couldn't open that file.");
+              }
+            }}
+          >
+            Open file ↗
+          </button>
+          <button className="sel-link" disabled={remove.isPending} onClick={() => remove.mutate()}>
+            Remove
+          </button>
+        </div>
       )}
 
       {readable && (
@@ -210,7 +252,35 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
   const qc = useQueryClient();
   const toast = useToastStore((s) => s.push);
   const q = useQuery(libraryQuery());
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const upload = useMutation({
+    mutationFn: uploadLibraryDocuments,
+    onSuccess: () => {
+      toast("Uploaded — reading your documents now.", "success");
+      qc.invalidateQueries({ queryKey: queryKeys.library });
+    },
+    onError: () => toast("Couldn't upload those files — try again."),
+  });
+  const uploadControl = (
+    <>
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          const picked = Array.from(e.target.files ?? []);
+          if (picked.length) upload.mutate(picked);
+          e.target.value = "";
+        }}
+      />
+      <button className="mini-btn" disabled={upload.isPending} onClick={() => fileRef.current?.click()}>
+        {upload.isPending ? "Uploading…" : "Upload documents"}
+      </button>
+    </>
+  );
   const [filter, setFilter] = useState<Filter>("all");
+  const [shelf, setShelf] = useState<Shelf>("all");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -227,6 +297,7 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
   const rows = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return docs.filter((d) => {
+      if (shelf !== "all" && shelfOf(d) !== shelf) return false;
       if (filter === "review" && d.status !== "needs_review") return false;
       if (filter === "problems" && d.status !== "failed") return false;
       if (filter !== "all" && filter !== "review" && filter !== "problems") {
@@ -235,7 +306,7 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
       if (!needle) return true;
       return [d.name, d.path, d.summary].some((f) => (f || "").toLowerCase().includes(needle));
     });
-  }, [docs, filter, search]);
+  }, [docs, shelf, filter, search]);
   const selected = selectedId ? docs.find((d) => d.item_id === selectedId) ?? null : null;
 
   if (q.isError && !q.data) return <div className="graph-empty">Couldn&apos;t load the library analysis.</div>;
@@ -249,8 +320,10 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
   if (docs.length === 0)
     return (
       <div className="graph-empty">
-        <div className="ge-t">Nothing analysed yet</div>
-        Once SharePoint is synced, every document is read and sorted here automatically.
+        <div className="ge-t">Add your company documents</div>
+        Upload active contracts, past proposals, past performance and resumes. They&apos;re read and sorted
+        automatically, and the writers use them to draft your proposals.
+        {uploadControl}
       </div>
     );
 
@@ -276,11 +349,26 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
           {inFlight > 0 && <> · reading {inFlight} now</>}
           {(st.failed ?? 0) > 0 && <> · {st.failed} couldn&apos;t be read</>}
         </div>
+        {uploadControl}
         {isAdmin && (st.failed ?? 0) + (st.pending ?? 0) > 0 && (
           <button className="mini-btn" disabled={rerun.isPending} onClick={() => rerun.mutate()}>
             Retry
           </button>
         )}
+      </div>
+      <div className="lib-shelves" role="tablist" aria-label="Library">
+        {[{ key: "all", label: "Everything" } as const, ...SHELVES].map((s) => (
+          <button
+            key={s.key}
+            role="tab"
+            aria-selected={shelf === s.key}
+            className={`lib-shelf ${shelf === s.key ? "on" : ""}`}
+            onClick={() => setShelf(s.key)}
+          >
+            {s.label}
+            <span className="c">{s.key === "all" ? docs.length : docs.filter((d) => shelfOf(d) === s.key).length}</span>
+          </button>
+        ))}
       </div>
       <div className="lib-chips">
         {chip("all", "All", docs.length)}

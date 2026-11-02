@@ -22,6 +22,7 @@ import {
   fetchOpportunityPage,
   fetchOpportunitySharePointFiles,
   fetchPostedDates,
+  fetchBidAccess,
   fetchRequirements,
   fetchSharePointGraph,
   fetchTodayPlan,
@@ -259,13 +260,26 @@ export function contactGraphQuery() {
 }
 
 /** The org's SharePoint structure graph. Same shape and reasoning as the contact graph. */
-/** The required-documents checklist. Polls only while the files are being read. */
+/** The required-documents checklist. Polls only while files are being read or written. */
+export function bidAccessQuery(id: string) {
+  return queryOptions({
+    queryKey: [...queryKeys.requirements(id), "access"],
+    queryFn: () => fetchBidAccess(id),
+    staleTime: 60_000,
+  });
+}
+
 export function requirementsQuery(id: string) {
   return queryOptions({
     queryKey: queryKeys.requirements(id),
     queryFn: () => fetchRequirements(id),
     staleTime: 15_000,
-    refetchInterval: (q) => (q.state.data?.status === "reading" ? 4000 : false),
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      const busy = d?.status === "reading" ||
+        d?.items?.some((i) => i.gen_status === "queued" || i.gen_status === "writing");
+      return busy ? 4000 : false;
+    },
   });
 }
 

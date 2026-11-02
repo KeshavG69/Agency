@@ -19,12 +19,18 @@ ItemKind = Literal[
     "past_performance", "letter", "attachment", "other",
 ]
 
+# Who produces each item. "write" = Collecct drafts it; "sign" = a person must sign it or complete
+# a government form; "price" = comes from PriceIQ; "provide" = an existing document only the
+# company has, such as a certificate.
+Production = Literal["write", "sign", "price", "provide"]
+
 
 class RequirementItem(BaseModel):
     """One thing that must be submitted."""
 
     title: str = Field(description="Short name, as the solicitation names it")
     kind: ItemKind
+    production: Production = Field("write", description="Who produces it — see the instructions")
     detail: str = Field("", description="What it must contain, in one or two plain sentences")
     page_limit: Optional[str] = Field(None, description="As stated, incl. exclusions: '30 pages max, excluding Draft CDRLs'")
     # Its own quote: the limit is often stated in a different paragraph from the item itself.
@@ -89,6 +95,9 @@ class PastPerformanceRules(Grounded):
 class ProposalOutline(BaseModel):
     """What the Requirements agent returns for one solicitation package."""
 
+    solicitation_type: Literal["rfp", "rfq", "rfi", "other"] = Field(
+        "other", description="rfi = the government is gathering information, with no award from this "
+                             "response (RFI, sources sought, market research)")
     found_instructions: bool = Field(description="False if the files contain no submission instructions")
     summary: str = Field(description="1-2 plain sentences: what must be submitted, and how")
     submission: Submission = Field(default_factory=Submission)

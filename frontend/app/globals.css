@@ -395,6 +395,10 @@
   min-height: 0;
   background: var(--surface);
 }
+.lib-shelves { display: flex; flex-wrap: wrap; gap: 4px; padding: 10px 24px 0; }
+.lib-shelf { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--bid-ink-3, inherit); padding: 6px 12px; border-radius: 8px; }
+.lib-shelf.on { color: var(--bid-ink); background: var(--line); }
+.lib-shelf .c { font-size: 11px; opacity: 0.7; }
 .lib-chips {
   display: flex;
   flex-wrap: wrap;
@@ -599,9 +603,24 @@
 .req-edit { display: flex; flex-direction: column; gap: 6px; }
 .req-row-actions { display: flex; align-items: center; gap: 12px; }
 .req-files { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.req-file-edit { margin-left: 6px; opacity: 0.65; }
 .req-file { font-size: 12px; color: var(--bid-ink); padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; }
 .req-add { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
 .req-add .search { flex: 1; }
 .req-facts { display: flex; flex-direction: column; gap: 8px; }
 .req-factors { margin: 0; padding-left: 20px; font-size: 13px; color: var(--ink); line-height: 1.6; }
 .req-flag-inline { margin-left: 8px; }
+
+/* Bid package: who produces each line, what's left to fix, and the email. */
+.req-owner { font-size: 11px; font-weight: 600; color: var(--watch); padding: 1px 7px; border-radius: 999px; background: var(--watch-soft); }
+.req-owner.ok { color: var(--bid-ink); background: var(--accent-soft); }
+.req-gaps { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.45; color: var(--ink); }
+.req-gaps li::marker { color: var(--watch); }
+.req-package {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 0 0 12px; padding: 10px 12px; font-size: 13px; color: var(--ink);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px;
+}
+.req-email { display: flex; flex-direction: column; gap: 10px; }
+.req-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--faint); }
+.lib-upload-actions { display: flex; align-items: center; gap: 12px; }

@@ -10,6 +10,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 Category = Literal[
+    "active_contract",
     "past_performance",
     "cpars",
     "resume",
@@ -27,6 +28,7 @@ Category = Literal[
 
 # Display labels — the frontend carries its own copy; this one feeds prompts and logs.
 CATEGORY_LABELS: dict[str, str] = {
+    "active_contract": "Active contract",
     "past_performance": "Past performance",
     "cpars": "CPARS / performance rating",
     "resume": "Resume",
