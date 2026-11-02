@@ -63,7 +63,9 @@ async def upload_documents(files: list[UploadFile] = File(...),
                                                         "admin may need to reconnect it with write access.")
         if sp:
             in_sharepoint = True
-            added.append({"item_id": sp.get("id"), "name": name, "status": PENDING, "skip_reason": None})
+            row = store.add_sharepoint_file(org, sp, email)
+            added.append({"item_id": row["item_id"], "name": name, "status": row["status"],
+                          "skip_reason": row.get("skip_reason")})
             continue
         with tempfile.NamedTemporaryFile(delete=True) as tmp:
             tmp.write(data)

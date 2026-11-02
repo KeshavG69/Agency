@@ -246,6 +246,26 @@ class LibraryStore:
         row.pop("_id", None)
         return row
 
+    def add_sharepoint_file(self, organization_id: str, item: dict, by_email: str) -> dict:
+        """A file just put in SharePoint from Collecct. It's listed now so the person can follow
+        it; the crawl that follows fills in its roster and queues the reading."""
+        now = _utc_now()
+        name = item.get("name") or "document"
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else None
+        meta = {
+            "drive_id": (item.get("parentReference") or {}).get("driveId"), "name": name,
+            "path": f"Company Library/{name}", "web_url": item.get("webUrl"), "ext": ext,
+            "size": item.get("size"), "uploaded_by": by_email, "updated_at": now,
+        }
+        reason = skip_reason(meta)
+        meta.update(status=SKIPPED, skip_reason=reason) if reason else meta.update(status=PENDING, skip_reason=None, error=None)
+        self.docs.update_one(
+            {"organization_id": organization_id, "item_id": item["id"]},
+            {"$set": meta, "$setOnInsert": {"permitted_emails": [], "org_wide": True, "created_at": now}},
+            upsert=True,
+        )
+        return {**meta, "item_id": item["id"]}
+
     def remove_upload(self, organization_id: str, item_id: str) -> Optional[dict]:
         return self.docs.find_one_and_delete(
             {"organization_id": organization_id, "item_id": item_id, "source": UPLOAD}, {"_id": 0})

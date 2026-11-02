@@ -48,6 +48,32 @@ type Shelf = "all" | (typeof SHELVES)[number]["key"];
 const shelfOf = (d: LibraryDocument): Shelf =>
   d.shelf === "output" ? "output" : d.category === "active_contract" ? "active" : "past";
 
+/** A status with a bar under it: filled to `pct`, or sweeping when there's no number to show. */
+function Progress({ label, pct }: { label: string; pct?: number }) {
+  return (
+    <span className="lib-prog" role="status">
+      {label}
+      <i className="lib-bar">
+        <b className={pct == null ? "run" : ""} style={pct == null ? undefined : { width: `${pct}%` }} />
+      </i>
+    </span>
+  );
+}
+
+/** How much of one file has gone, given the share of the whole multi-file upload that has. */
+function filePercent(files: File[], index: number, share: number) {
+  const total = files.reduce((n, f) => n + f.size, 0);
+  const before = files.slice(0, index).reduce((n, f) => n + f.size, 0);
+  const sent = share * total - before;
+  return Math.round(Math.min(1, Math.max(0, sent / (files[index].size || 1))) * 100);
+}
+
+// Shown until a file has a summary of its own, so a waiting row explains itself.
+const STAGE_NOTE: Partial<Record<LibraryDocument["status"], string>> = {
+  pending: "Saved in SharePoint. Syncing it into the library, about 2 minutes",
+  analysing: "Reading it and sorting it into a category",
+};
+
 const STATUS_LABEL: Record<LibraryDocument["status"], string> = {
   pending: "Waiting",
   analysing: "Reading…",
@@ -253,13 +279,27 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
   const toast = useToastStore((s) => s.push);
   const q = useQuery(libraryQuery());
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [shelf, setShelf] = useState<Shelf>("all");
+  const [sending, setSending] = useState<File[]>([]);
+  const [sent, setSent] = useState(0);
   const upload = useMutation({
-    mutationFn: uploadLibraryDocuments,
-    onSuccess: () => {
-      toast("Uploaded — reading your documents now.", "success");
-      qc.invalidateQueries({ queryKey: queryKeys.library });
+    mutationFn: (files: File[]) => uploadLibraryDocuments(files, setSent),
+    onMutate: (files) => {
+      setSent(0);
+      setSending(files);
+      setShelf("all");
+      setFilter("all");
     },
-    onError: () => toast("Couldn't upload those files — try again."),
+    onError: (e: unknown) => {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast(typeof detail === "string" ? detail : "Couldn't upload those files — try again.");
+    },
+    // The server's rows arrive before these go, so a file never blinks out of the table.
+    onSettled: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.library });
+      setSending([]);
+    },
   });
   const uploadControl = (
     <>
@@ -279,8 +319,6 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
       </button>
     </>
   );
-  const [filter, setFilter] = useState<Filter>("all");
-  const [shelf, setShelf] = useState<Shelf>("all");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -317,7 +355,7 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
   const read = (st.done ?? 0) + (st.needs_review ?? 0);
   const inFlight = (st.pending ?? 0) + (st.analysing ?? 0);
 
-  if (docs.length === 0)
+  if (docs.length === 0 && sending.length === 0)
     return (
       <div className="graph-empty">
         <div className="ge-t">Add your company documents</div>
@@ -395,6 +433,21 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
               </tr>
             </thead>
             <tbody>
+              {sending.map((f, i) => {
+                const pct = filePercent(sending, i, sent);
+                return (
+                  <tr key={`sending-${i}`}>
+                    <td className="vt-name" title={f.name}>
+                      {f.name}
+                    </td>
+                    <td>—</td>
+                    <td className="lib-muted">{pct < 100 ? "Uploading your file" : "Saving it to SharePoint"}</td>
+                    <td className="lib-st">
+                      {pct < 100 ? <Progress label={`Uploading ${pct}%`} pct={pct} /> : <Progress label="Saving…" />}
+                    </td>
+                  </tr>
+                );
+              })}
               {rows.map((d) => (
                 <tr
                   key={d.item_id}
@@ -414,12 +467,18 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
                     )}
                   </td>
                   <td className="lib-muted" title={d.summary || d.skip_reason || d.error || ""}>
-                    {d.summary || d.skip_reason || d.error || ""}
+                    {d.summary || d.skip_reason || d.error || STAGE_NOTE[d.status] || ""}
                   </td>
-                  <td className={`lib-st s-${d.status}`}>{STATUS_LABEL[d.status]}</td>
+                  <td className={`lib-st s-${d.status}`}>
+                    {d.status === "pending" || d.status === "analysing" ? (
+                      <Progress label={STATUS_LABEL[d.status]} />
+                    ) : (
+                      STATUS_LABEL[d.status]
+                    )}
+                  </td>
                 </tr>
               ))}
-              {rows.length === 0 && (
+              {rows.length === 0 && sending.length === 0 && (
                 <tr>
                   <td colSpan={4} className="view-empty-row">
                     No documents match.

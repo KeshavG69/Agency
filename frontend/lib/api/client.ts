@@ -35,6 +35,12 @@ apiClient.interceptors.request.use(
       config.headers.Authorization = `Bearer ${accessToken}`;
     }
 
+    // The JSON default above would make axios turn a file upload into JSON. Left unset, the
+    // browser writes the multipart header with its boundary.
+    if (config.data instanceof FormData) {
+      config.headers.delete('Content-Type');
+    }
+
     return config;
   },
   (error) => Promise.reject(error)

@@ -738,10 +738,13 @@ export async function fixLibraryCategory(itemId: string, category: LibraryCatego
   await apiClient.post(`/api/library/documents/${encodeURIComponent(itemId)}/category`, { category });
 }
 
-export async function uploadLibraryDocuments(files: File[]): Promise<void> {
+/** `onProgress` gets the share of the whole upload sent so far, from 0 to 1. */
+export async function uploadLibraryDocuments(files: File[], onProgress?: (share: number) => void): Promise<void> {
   const form = new FormData();
   for (const f of files) form.append("files", f);
-  await apiClient.post("/api/library/upload", form);
+  await apiClient.post("/api/library/upload", form, {
+    onUploadProgress: (e) => e.total && onProgress?.(e.loaded / e.total),
+  });
 }
 
 export async function deleteLibraryDocument(itemId: string): Promise<void> {
