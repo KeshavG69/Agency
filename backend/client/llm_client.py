@@ -78,6 +78,7 @@ class LLMClient:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = 0.1,
         reasoning_effort: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> OpenAIChat:
         model = settings.llm_model(model or _DEFAULT_MODEL)
         api_key = api_key or settings.llm_api_key
@@ -89,12 +90,12 @@ class LLMClient:
         # has its own thinking switch (see settings.llm_extra_body).
         if reasoning_effort and not settings.llm_is_self_hosted:
             extra_body["reasoning"] = {"effort": reasoning_effort}
-        key = f"{model}:{base_url}:{max_tokens}:{temperature}:{extra_body}"
+        key = f"{model}:{base_url}:{max_tokens}:{temperature}:{extra_body}:{timeout}"
         with self._lock:
             if key not in self._agno_cache:
                 self._agno_cache[key] = OpenAIChat(
                     id=model, api_key=api_key, base_url=base_url,
-                    max_tokens=max_tokens, temperature=temperature,
+                    max_tokens=max_tokens, temperature=temperature, timeout=timeout,
                     # Carries chat_template_kwargs.enable_thinking to a self-hosted server;
                     # empty (and therefore absent) for a hosted provider.
                     extra_body=extra_body or None,
@@ -148,10 +149,11 @@ def get_chat_llm_agno(
     model: Optional[str] = None, api_key: Optional[str] = None,
     base_url: Optional[str] = None, max_tokens: Optional[int] = None,
     temperature: Optional[float] = 0.1, reasoning_effort: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> OpenAIChat:
     return get_llm_client().get_chat_llm_agno(
         model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens,
-        temperature=temperature, reasoning_effort=reasoning_effort,
+        temperature=temperature, reasoning_effort=reasoning_effort, timeout=timeout,
     )
 
 

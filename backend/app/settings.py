@@ -145,6 +145,9 @@ class Settings(BaseSettings):
     # instruction passages rather than the first pages.
     REQUIREMENTS_MODEL: str = DEFAULT_TEXT_MODEL
     REQUIREMENTS_READ_CHARS: int = 160000
+    # Writing the bid's documents. Set apart from DEFAULT_TEXT_MODEL because this text goes to
+    # the government under the company's name.
+    WRITER_MODEL: str = "anthropic/claude-haiku-5.5"
 
     # Capture agent — text-to-image generation via OpenRouter's Image API (POST /images).
     # NOTE: image generation always stays on OpenRouter — a self-hosted text model (Gemma)

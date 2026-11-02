@@ -119,8 +119,10 @@ def write_document(organization_id: str, opp: dict, outline: dict, item: dict, s
     def build() -> Agent:
         return Agent(
             name="ProposalWriter",
-            model=get_chat_llm_agno(model=settings.REQUIREMENTS_MODEL, max_tokens=24000,
-                                    reasoning_effort="low"),
+            # The limit turns a hung call into a retry: left waiting, the line would sit on
+            # "Writing…" with its Rewrite button disabled.
+            model=get_chat_llm_agno(model=settings.WRITER_MODEL, max_tokens=24000,
+                                    reasoning_effort="low", timeout=300),
             tools=library_tools(organization_id, employee_email),
             instructions=_instructions(company, profile),
         )
