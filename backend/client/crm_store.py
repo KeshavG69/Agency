@@ -419,6 +419,17 @@ class CRMStore:
         )
         return res.matched_count > 0
 
+    def set_read_deadline(self, opportunity_id: str, organization_id: str, day: str) -> bool:
+        """Fill the deadline from the solicitation. A date a person typed is never replaced; one
+        filled this way follows a later amendment. True if the deadline changed."""
+        res = self.opps.update_one(
+            {"_id": ObjectId(opportunity_id), "organization_id": organization_id,
+             "response_deadline": {"$ne": day},
+             "$or": [{"response_deadline": {"$in": [None, ""]}}, {"deadline_from_reading": True}]},
+            {"$set": {"response_deadline": day, "deadline_from_reading": True}},
+        )
+        return res.modified_count > 0
+
     def bid_folder_names(self, organization_id: str) -> list[str]:
         """The name of every bid's SharePoint folder in this org."""
         rows = self.opps.find(
