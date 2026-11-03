@@ -11,6 +11,7 @@ import logging
 from celery import group
 
 from agent.analyst_agent import analyze_opportunity
+from app.settings import settings
 from app.worker import celery_app
 from client.crm_store import get_crm_store
 from client.events_store import record_event
@@ -18,13 +19,26 @@ from client.events_store import record_event
 logger = logging.getLogger(__name__)
 
 
+SAM_GOV = "sam.gov"
+
+
+def sam_paused(opp: dict, requested: bool) -> bool:
+    """A SAM.gov notice nobody asked about, while the daily scan is switched off. Its Analyst
+    run waits until a person asks for it or the switch is turned back on."""
+    return (not requested and opp.get("source") == SAM_GOV
+            and not settings.SAM_DAILY_SCAN_ENABLED)
+
+
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=15)
-def analyze_opportunity_task(self, opp: dict) -> dict:
+def analyze_opportunity_task(self, opp: dict, requested: bool = False) -> dict:
     """Analyze one opportunity and write the verdict back to the CRM.
 
     `opp` is a canonical opportunity document (snake_case) straight from Mongo —
-    the agent reads it directly, no mapping needed.
+    the agent reads it directly, no mapping needed. `requested` = a person asked for this
+    run; it then goes ahead even while the SAM.gov switch is off.
     """
+    if sam_paused(opp, requested):  # includes runs queued before the switch went off
+        return {"id": opp.get("id"), "skipped": "SAM_DAILY_SCAN_ENABLED is off"}
     crm = get_crm_store()
     try:
         verdict = analyze_opportunity(opp)
@@ -106,12 +120,14 @@ def _schedule_recheck(opp: dict, verdict) -> None:  # noqa: ANN001
 
 
 @celery_app.task
-def run_analyst_batch(organization_id: str) -> dict:
-    """Fan out one analyze task per unanalyzed opportunity IN ONE ORG."""
+def run_analyst_batch(organization_id: str, requested: bool = False) -> dict:
+    """Fan out one analyze task per unanalyzed opportunity IN ONE ORG. `requested` = a person
+    pressed "Run analyst"; otherwise SAM.gov notices wait while the daily scan is off."""
     crm = get_crm_store()
-    opps = crm.list_unanalyzed_opportunities(organization_id)
+    opps = [o for o in crm.list_unanalyzed_opportunities(organization_id)
+            if not sam_paused(o, requested)]
     if not opps:
         return {"dispatched": 0}
-    group(analyze_opportunity_task.s(o) for o in opps).apply_async()
+    group(analyze_opportunity_task.s(o, requested) for o in opps).apply_async()
     logger.info("Dispatched %d analyst tasks for org %s", len(opps), organization_id)
     return {"dispatched": len(opps)}
