@@ -81,11 +81,11 @@ celery_app.conf.beat_schedule = {
     # The agent to-do list: lease whatever is DUE and run it. This is the third way work
     # starts (besides the daily clock and a human clicking) — it is what lets the system
     # finish things it noticed earlier: research a company the free dataset didn't know,
-    # re-judge a "Watch" opportunity when its recheck date arrives. Usually a no-op; the
-    # cost of a tick with an empty queue is one indexed Mongo query.
+    # re-judge a "Watch" opportunity when its recheck date arrives. Usually a no-op. Hourly:
+    # nothing on the list is urgent ("Prep this call" runs straight away, not through here).
     "agent-task-tick": {
         "task": "agent_tasks.tick",
-        "schedule": crontab(minute="*"),
+        "schedule": crontab(minute=0),
     },
     # One pass over each mailbox's recent tail. Yields signature blocks (job titles and
     # phone numbers, free) AND the corr_count / last_contact signal the Relation agent is
@@ -113,5 +113,10 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=12, minute=0),
     },
 }
+# A run the worker hasn't started within the hour is dropped. Without this, beat keeps
+# queueing while the worker is down, and on restart the worker runs the whole backlog, a
+# day's daily jobs included, at once and ahead of anything a person just asked for.
+for _job in celery_app.conf.beat_schedule.values():
+    _job.setdefault("options", {})["expires"] = 60 * 60
 if not settings.SAM_DAILY_SCAN_ENABLED:
     del celery_app.conf.beat_schedule["sam-radar-daily-scan"]
