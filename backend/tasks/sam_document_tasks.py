@@ -138,6 +138,11 @@ def ingest_then_analyze(organization_id: str, opportunity_ids: list[str],
     service. The Analyst batch runs in `finally`: a document failure must never cost a notice
     its verdict.
     """
+    from app.settings import settings
+
+    # Documents are still fetched (no model, and a rep may pick the notice later); only the
+    # automatic Analyst runs wait for the switch.
+    analyze = analyze and settings.SAM_DAILY_SCAN_ENABLED
     tally = {"attached": 0, "unchanged": 0, "no_documents": 0, "failed": 0, "reanalyzed": 0}
     try:
         for oid in opportunity_ids or []:

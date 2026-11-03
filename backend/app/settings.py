@@ -99,8 +99,10 @@ class Settings(BaseSettings):
     COMPOSIO_WEBHOOK_SECRET: str = ""
 
     # The daily SAM.gov scan (11:00 UTC): pulls new notices and runs the Analyst on them.
-    # Off unless SAM_DAILY_SCAN_ENABLED=true. Off, the scheduler drops the job and "Pull from
-    # SAM.gov" still works on demand. Beat reads this at start, so restart it after a change.
+    # Off unless SAM_DAILY_SCAN_ENABLED=true. Off, the scheduler drops the job AND nothing runs
+    # the Analyst on SAM.gov notices by itself (a queued scan, its document-then-analyse step,
+    # amendments, Watch rechecks). What a person starts still runs: "Run analyst", hand-picked
+    # notices from "Pull from SAM.gov", uploads. Beat reads this at start, so restart it.
     SAM_DAILY_SCAN_ENABLED: bool = False
 
     # SharePoint structure graph (separate FalkorDB graph from the contact network)

@@ -125,6 +125,11 @@ def scan_org_sam(self, organization_id: str, lookback_days: int = 1, analyze: bo
 @celery_app.task(name="sam_radar.daily_scan")
 def daily_scan(lookback_days: int = 1) -> dict:
     """Beat entrypoint — download + parse the bulk CSV ONCE, ingest for every org with NAICS."""
+    from app.settings import settings
+
+    if not settings.SAM_DAILY_SCAN_ENABLED:  # a scan queued before the switch went off
+        logger.info("SAM Radar daily_scan skipped: SAM_DAILY_SCAN_ENABLED is off")
+        return {"skipped": "SAM_DAILY_SCAN_ENABLED is off"}
     db = get_mongodb_client().get_database()
     orgs = []
     union: set[str] = set()

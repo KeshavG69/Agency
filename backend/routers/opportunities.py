@@ -315,7 +315,7 @@ def update_contacts(
 @router.post("/analyze/run")
 def run_analyst(current_user: dict = Depends(get_current_user)) -> dict:
     """Phase 1 — kick off the Analyst on this org's unanalyzed opportunities (Celery)."""
-    task = run_analyst_batch.delay(str(current_user["organization_id"]))
+    task = run_analyst_batch.delay(str(current_user["organization_id"]), requested=True)
     return {"task_id": task.id}
 
 
@@ -338,7 +338,7 @@ def run_analyst_selected(
     for oid in req.ids:
         opp = crm.get_opportunity(oid, organization_id)
         if opp is not None:
-            analyze_opportunity_task.delay(opp)
+            analyze_opportunity_task.delay(opp, requested=True)
             started += 1
     return {"started": started, "requested": len(req.ids)}
 
