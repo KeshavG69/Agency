@@ -113,3 +113,5 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=12, minute=0),
     },
 }
+if not settings.SAM_DAILY_SCAN_ENABLED:
+    del celery_app.conf.beat_schedule["sam-radar-daily-scan"]

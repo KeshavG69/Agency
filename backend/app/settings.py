@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     # accept anything — an empty secret fails every signature check by design.
     COMPOSIO_WEBHOOK_SECRET: str = ""
 
+    # The daily SAM.gov scan (11:00 UTC): pulls new notices and runs the Analyst on them.
+    # Off unless SAM_DAILY_SCAN_ENABLED=true. Off, the scheduler drops the job and "Pull from
+    # SAM.gov" still works on demand. Beat reads this at start, so restart it after a change.
+    SAM_DAILY_SCAN_ENABLED: bool = False
+
     # SharePoint structure graph (separate FalkorDB graph from the contact network)
     SHAREPOINT_GRAPH_NAME: str = "sharepoint_structure"
     
