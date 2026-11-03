@@ -19,7 +19,7 @@ export type ViewKey =
   | "contacts"
   | "documents"
   | "org";
-export type TabKey = "info" | "contacts" | "documents" | "activity" | "agent";
+export type TabKey = "info" | "requirements" | "contacts" | "documents" | "activity" | "agent";
 
 interface UiStore {
   // Which top-bar section is showing. The animated swap (switchView) is still the caller's

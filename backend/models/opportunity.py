@@ -32,4 +32,8 @@ class Opportunity(BaseModel):
     document_url: str | None = Field(None, description="URL or path to the solicitation PDF/document")
     document_text: str | None = Field(None, description="Parsed text of the solicitation document (LiteParse)")
     source: str = Field("excel", description="Where the record came from")
+    # Entered by hand on a manual upload (GSA eBuy RFQs are not on SAM.gov): which of the org's
+    # contract vehicles this is issued under, and the Special Item Number(s) it falls under.
+    contract_vehicle: str | None = Field(None, description="e.g. GSA MAS, OASIS+ — from the org's own list")
+    sin: str | None = Field(None, description="GSA Special Item Number(s), e.g. 54151S")
     extra: dict = Field(default_factory=dict, description="Unmapped source columns")

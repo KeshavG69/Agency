@@ -16,11 +16,13 @@ from routers import (
     ingestion,
     intelligence,
     invitations,
+    library,
     mail,
     mail_triage,
     opportunities,
     organizations,
     relationships,
+    requirements,
     sharepoint,
     users,
     webhooks,
@@ -115,6 +117,8 @@ app.include_router(composio.router)
 app.include_router(contacts.router)
 app.include_router(intelligence.router)
 app.include_router(sharepoint.router)
+app.include_router(library.router)
+app.include_router(requirements.router)
 app.include_router(mail.router)
 app.include_router(mail_triage.router)
 app.include_router(relationships.router)

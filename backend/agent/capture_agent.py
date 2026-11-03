@@ -25,6 +25,7 @@ from client.llm_client import get_chat_llm_agno
 from client.sharepoint_graph import search_sharepoint
 from models.capture import CaptureOutput
 from utils.agno_tools import create_exa_web_search_tool, create_reasoning_tool
+from utils.library_tools import LIBRARY_TOOLS_GUIDE, library_tools
 from utils.composio_utils import sharepoint_entity
 from utils.doc_parse import document_context
 from utils.python_repl_tool import python_repl_tool, set_session_id
@@ -67,6 +68,8 @@ GROUND IN OUR PAST CAPABILITY — use the `search_sharepoint` tool to pull the c
 past-performance / capability material (capability statements, prior proposals, project
 summaries), and the SharePoint read tools to open a specific document. Back every capability
 claim with real past performance you find — never invent it.
+
+{LIBRARY_TOOLS_GUIDE}
 
 Steps:
 1. Research the customer/agency, likely incumbent, and competitors with the web search tool,
@@ -294,6 +297,7 @@ def build_capture_agent(
             create_exa_web_search_tool(),
             # create_reasoning_tool(),
             search_sharepoint_tool,
+            *library_tools(organization_id, employee_email),
             fetch_sharepoint_image,
             generate_image,
             *load_sharepoint_tools(sharepoint_entity(organization_id or "")),

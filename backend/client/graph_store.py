@@ -60,7 +60,7 @@ def _contact_text(c: dict) -> str:
 
 
 def _embed_query(text: str) -> Optional[list[float]]:
-    if not settings.OPENAI_API_KEY:
+    if not settings.embeddings_enabled:
         return None
     try:
         return _embedder().embed_query(text)
@@ -205,9 +205,9 @@ def upsert_contacts(
             if inferred:
                 r["company"] = inferred
 
-    # Embeddings for semantic search (best-effort; skipped if no OpenAI key).
+    # Embeddings for semantic search (best-effort; skipped when embeddings are off).
     # Computed AFTER the domain backfill so the company is part of the embedded text.
-    if settings.OPENAI_API_KEY:
+    if settings.embeddings_enabled:
         try:
             embs = _embedder().embed_documents([_contact_text(r) for r in rows])
             for r, e in zip(rows, embs):
@@ -508,7 +508,7 @@ def update_company_for_domain(
     if not rows:
         return 0
 
-    if settings.OPENAI_API_KEY:
+    if settings.embeddings_enabled:
         try:
             embs = _embedder().embed_documents([_contact_text(r) for r in rows])
             for row, emb in zip(rows, embs):
@@ -598,7 +598,7 @@ def apply_facts_to_contacts(organization_id: str, facts_by_email: dict[str, dict
         r["email"] for r in rows
         if any(r.get(_FACT_TO_NODE_PROP[f]) for f in _EMBEDDED_FACT_FIELDS)
     ]
-    if touched and settings.OPENAI_API_KEY:
+    if touched and settings.embeddings_enabled:
         try:
             found = g.ro_query(
                 """

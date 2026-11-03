@@ -28,8 +28,21 @@ export interface Organization {
   // enters them comma-separated. Given to the agents as a RANKING signal, never a filter.
   keywords?: string[] | null;
   company_details?: CompanyDetails | null;
+  // Resolved workflow settings (defaults filled in by the server).
+  workflow?: OrgWorkflow;
   created_at?: string;
   updated_at?: string;
+}
+
+export type TaskFlow = "capture" | "gsa_quote";
+
+/** How this org bids: the vehicles it holds, which SAM.gov notices it wants, its task flow. */
+export interface OrgWorkflow {
+  contract_vehicles: string[];
+  sam_feed: { enabled: boolean; agencies: string[] };
+  task_flow: TaskFlow;
+  download_allowed: string[];
+  suggested_vehicles: string[];
 }
 
 export interface OrganizationStats {
@@ -47,7 +60,15 @@ export const organizationsApi = {
 
   // Update the organization's name and/or UEI (admin only).
   updateOrganization: async (
-    payload: { name?: string; uei?: string; keywords?: string }
+    payload: {
+      name?: string;
+      uei?: string;
+      keywords?: string;
+      contract_vehicles?: string[];
+      sam_feed?: { enabled?: boolean; agencies?: string[] };
+      task_flow?: TaskFlow;
+      download_allowed?: string[];
+    }
   ): Promise<Organization> => {
     const response = await apiClient.patch<Organization>('/api/organizations/me', payload);
     return response.data;

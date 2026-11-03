@@ -29,6 +29,7 @@ from app.settings import settings
 from client.llm_client import get_chat_llm_agno
 from utils.doc_parse import document_context
 from client.sharepoint_graph import search_sharepoint
+from utils.library_tools import LIBRARY_TOOLS_GUIDE, library_tools
 from models.mail import MailDraft, ReplyDraft
 from utils.agno_tools import create_reasoning_tool
 from utils.composio_utils import sharepoint_entity
@@ -110,6 +111,8 @@ Also available: `search_sharepoint(query)` — searches the company's SharePoint
 Prefer it FIRST to locate relevant material, then use the Composio read tools only to read a
 specific file/list you decided you need.
 
+{LIBRARY_TOOLS_GUIDE}
+
 Your FINAL message must be ONLY this JSON object — no prose, no markdown fences, no <reasoning> tags:
 {{"to": "<recipient email or null>", "to_name": "<recipient display name or null>", "cc": [], "subject": "<subject line>", "body": "<the email body>", "is_html": false, "grounded_on": ["<each real experience/doc the email draws on>"]}}
 
@@ -147,6 +150,7 @@ def build_mail_agent(
         model=get_chat_llm_agno(model=settings.MAIL_MODEL, max_tokens=12000),
         tools=[
             search_sharepoint_tool,
+            *library_tools(organization_id, employee_email),
             # create_reasoning_tool(),
             # SharePoint READ tools run under THIS ORG's SharePoint connection.
             *load_sharepoint_tools(sharepoint_entity(organization_id or "")),
@@ -321,6 +325,8 @@ HOW TO WRITE IT (the house style):
 Also available: `search_sharepoint(query)` — searches the company's SharePoint structure
 graph (keyword + semantic) and follows the graph to relevant docs/folders/lists.
 
+{LIBRARY_TOOLS_GUIDE}
+
 Your FINAL message must be ONLY this JSON object — no prose, no markdown fences, no
 <reasoning> tags:
 {{"comment": "<the reply body>", "grounded_on": ["<each real experience/doc the reply draws on>"]}}
@@ -348,6 +354,7 @@ def build_reply_agent(
         model=get_chat_llm_agno(model=settings.MAIL_MODEL, max_tokens=8000),
         tools=[
             search_sharepoint_tool,
+            *library_tools(organization_id, employee_email),
             create_reasoning_tool(),
             *load_sharepoint_tools(sharepoint_entity(organization_id or "")),
         ],

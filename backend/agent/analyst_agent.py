@@ -134,6 +134,7 @@ _OPP_FIELDS = [
     "title", "solicitation_number", "notice_id", "agency", "naics", "psc_code",
     "set_aside", "opp_type", "posted_date", "response_deadline", "estimated_value",
     "place_of_performance", "poc_name", "poc_email", "description", "link",
+    "contract_vehicle", "sin", "source",
 ]
 
 
@@ -163,7 +164,30 @@ def _format_opportunity(opp: dict, today: str) -> str:
     extra = opp.get("extra") or {}
     if extra:
         lines.append(f"- additional notes: {extra}")
+    lines += _vehicle_notes(opp)
     return "\n".join(lines) + document_context(opp)
+
+
+def _vehicle_notes(opp: dict) -> list[str]:
+    """What the company holds, and why a hand-uploaded RFQ is missing from SAM.gov.
+
+    Without this the Analyst searched SAM.gov for a GSA eBuy RFQ, found nothing, and doubted the
+    opportunity was real — but eBuy RFQs (and most task orders under a held vehicle) are never
+    posted publicly, so that absence is expected for EVERY one of them.
+    """
+    from utils.org_settings import org_settings
+
+    out: list[str] = []
+    held = org_settings(str(opp.get("organization_id") or ""))["contract_vehicles"]
+    if held:
+        out.append(f"- contract vehicles the company HOLDS: {', '.join(held)} "
+                   "(holding one of these is a fact, not a gate to confirm)")
+    if opp.get("source") == "manual":
+        out.append("- NOTE: the company uploaded this opportunity by hand. GSA eBuy RFQs and task "
+                   "orders under a vehicle the company holds are NOT published on SAM.gov or the "
+                   "aggregators, so failing to find it there is expected — never treat that as a "
+                   "reason to doubt the opportunity or lower its score.")
+    return out
 
 
 def analyze_opportunity(

@@ -9,7 +9,7 @@ LLM_MODEL points the entire agent fleet at a self-hosted OpenAI-compatible serve
 
 - get_chat_llm      -> LangChain ChatOpenAI  (used by tools, e.g. the python REPL)
 - get_chat_llm_agno -> Agno OpenAIChat        (used by the agents)
-- get_embeddings    -> OpenAI embeddings      (optional, for later RAG)
+- get_embeddings    -> embeddings via OpenRouter (semantic search everywhere)
 """
 import threading
 from typing import Dict, Optional
@@ -27,7 +27,7 @@ from client.langfuse_client import init_langfuse  # noqa: E402
 
 init_langfuse()
 
-_DEFAULT_MODEL = "openai/gpt-5.4-mini"
+from app.settings import DEFAULT_TEXT_MODEL as _DEFAULT_MODEL  # noqa: E402
 
 
 class LLMClient:
@@ -77,19 +77,25 @@ class LLMClient:
         base_url: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = 0.1,
+        reasoning_effort: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> OpenAIChat:
         model = settings.llm_model(model or _DEFAULT_MODEL)
         api_key = api_key or settings.llm_api_key
         base_url = base_url or settings.llm_base_url
         max_tokens = max_tokens or 10000
         temperature = 0.1 if temperature is None else temperature
-        extra_body = settings.llm_extra_body
-        key = f"{model}:{base_url}:{max_tokens}:{temperature}:{extra_body}"
+        extra_body = dict(settings.llm_extra_body)
+        # OpenRouter's cap on a reasoning model. Only for a hosted provider: a self-hosted server
+        # has its own thinking switch (see settings.llm_extra_body).
+        if reasoning_effort and not settings.llm_is_self_hosted:
+            extra_body["reasoning"] = {"effort": reasoning_effort}
+        key = f"{model}:{base_url}:{max_tokens}:{temperature}:{extra_body}:{timeout}"
         with self._lock:
             if key not in self._agno_cache:
                 self._agno_cache[key] = OpenAIChat(
                     id=model, api_key=api_key, base_url=base_url,
-                    max_tokens=max_tokens, temperature=temperature,
+                    max_tokens=max_tokens, temperature=temperature, timeout=timeout,
                     # Carries chat_template_kwargs.enable_thinking to a self-hosted server;
                     # empty (and therefore absent) for a hosted provider.
                     extra_body=extra_body or None,
@@ -97,13 +103,17 @@ class LLMClient:
             return self._agno_cache[key]
 
     def get_embeddings(self) -> OpenAIEmbeddings:
-        key = "text-embedding-3-small"
+        key = settings.EMBEDDING_MODEL
         with self._lock:
             if key not in self._emb_cache:
                 self._emb_cache[key] = OpenAIEmbeddings(
-                    openai_api_key=settings.OPENAI_API_KEY,
+                    openai_api_key=settings.OPENROUTER_API_KEY,
+                    openai_api_base=settings.OPENROUTER_BASE_URL,
                     model=key,
                     dimensions=1536,
+                    # Send plain strings: by default LangChain pre-tokenizes with tiktoken and
+                    # posts token-id arrays, which only OpenAI's own endpoint accepts.
+                    check_embedding_ctx_length=False,
                     request_timeout=60,
                     max_retries=3,
                 )
@@ -138,10 +148,12 @@ def get_chat_llm(
 def get_chat_llm_agno(
     model: Optional[str] = None, api_key: Optional[str] = None,
     base_url: Optional[str] = None, max_tokens: Optional[int] = None,
-    temperature: Optional[float] = 0.1,
+    temperature: Optional[float] = 0.1, reasoning_effort: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> OpenAIChat:
     return get_llm_client().get_chat_llm_agno(
-        model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens, temperature=temperature
+        model=model, api_key=api_key, base_url=base_url, max_tokens=max_tokens,
+        temperature=temperature, reasoning_effort=reasoning_effort, timeout=timeout,
     )
 
 

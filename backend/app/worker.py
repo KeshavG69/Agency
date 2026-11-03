@@ -18,12 +18,15 @@ import tasks.analyst_tasks  # noqa: E402,F401
 import tasks.backfill_tasks  # noqa: E402,F401
 import tasks.capture_tasks  # noqa: E402,F401
 import tasks.contacts_tasks  # noqa: E402,F401
+import tasks.library_tasks  # noqa: E402,F401
 import tasks.crm_tasks  # noqa: E402,F401
 import tasks.mail_sweep_tasks  # noqa: E402,F401
 import tasks.mail_tasks  # noqa: E402,F401
 import tasks.manual_upload_tasks  # noqa: E402,F401
 import tasks.notify_tasks  # noqa: E402,F401
+import tasks.proposal_tasks  # noqa: E402,F401
 import tasks.relationship_tasks  # noqa: E402,F401
+import tasks.requirements_tasks  # noqa: E402,F401
 import tasks.resync_tasks  # noqa: E402,F401
 import tasks.sam_radar_tasks  # noqa: E402,F401
 import tasks.sam_document_tasks  # noqa: E402,F401
@@ -110,3 +113,5 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=12, minute=0),
     },
 }
+if not settings.SAM_DAILY_SCAN_ENABLED:
+    del celery_app.conf.beat_schedule["sam-radar-daily-scan"]

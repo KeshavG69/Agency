@@ -110,9 +110,9 @@ def cleanup_session(session_id: str):
 async def _correct_python_with_llm(code: str, error: str) -> str:
     """Ask the LLM to fix broken Python once, given the error output."""
     llm = get_chat_llm(
-        model="anthropic/claude-sonnet-4.6",
+        model=settings.llm_model(settings.CAPTURE_MODEL),
         api_key=settings.llm_api_key,
-        base_url="https://openrouter.ai/api/v1",
+        base_url=settings.llm_base_url,
     )
 
     messages = [

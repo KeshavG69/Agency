@@ -38,6 +38,11 @@ ActionKind = Literal[
     "call",             # talk to the customer
     "review_docs",      # capture produced documents nobody has looked at
     "submit",           # get the response in
+    # GSA quote flow (Organisation settings → Task flow): human steps ticked off in order.
+    "check_requirements",  # list what the RFQ requires
+    "get_pricing",         # build the price against the vehicle's rates
+    "write_quote",         # draft the technical response + price sheet
+    "final_check",         # page limits, forms, submission method
     "reply_mail",       # off-chain: a customer wrote and is waiting
     # Relationship engine — NOT tied to a pursuit. A drafted outreach the rep approves with
     # one tap; ref_id points at the RelationshipNudge that carries the draft + its evidence.

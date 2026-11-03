@@ -229,18 +229,93 @@ STEPS: tuple[Step, ...] = (
     ),
 )
 
+def _bid(o: dict) -> bool:
+    return o.get("bid_decision") == "Bid"
+
+
+def _vehicle(o: dict) -> str:
+    return f" under {o['contract_vehicle']}" if o.get("contract_vehicle") else ""
+
+
+# The GSA quote flow (Organisation settings → Task flow → "Quick quote"). A schedule holder's
+# eBuy RFQ is open for a week or two, is answered against rates already on contract, and has
+# no customer call or capture pack — so the DoD ladder above is the wrong shape twice over:
+# wrong steps, and lead times (21 days to analyse) longer than the whole RFQ is open.
+#
+# After the decision, every step is a piece of human work that only the person doing it can
+# say is finished, so each stays pending until it is ticked off ("Done" blocks it, exactly like
+# a dismissed call above) and ticking it raises the next one straight away (routers/actions.py).
+GSA_STEPS: tuple[Step, ...] = (
+    Step(
+        kind="analyze", lead_days=10, min_runway=3,
+        pending=lambda o, c: not o.get("bid_decision") and not o.get("ingesting"),
+        title=lambda o, c: f"Review the RFQ — “{_short(o)}”",
+        reason=lambda o, c: "New RFQ — get the bid/no-bid read before anything else.",
+    ),
+    Step(
+        # An RFQ someone uploaded by hand was uploaded on purpose, so its Watch is always a
+        # decision owed. Feed notices (SAM.gov) keep the DoD ladder's priority floor — without
+        # it, switching an org with a SAM.gov backlog to this flow put 100+ cards on one day.
+        kind="decide", lead_days=8, min_runway=2,
+        pending=lambda o, c: o.get("bid_decision") == "Watch" and (
+            o.get("source") == "manual"
+            or (o.get("priority_score") or 0) >= DECIDE_PRIORITY_FLOOR),
+        title=lambda o, c: f"Decide bid / no-bid — “{_short(o)}”",
+        reason=lambda o, c: f"{_verdict_line(o)} — the read stopped short of a call.",
+    ),
+    Step(
+        kind="check_requirements", lead_days=7, min_runway=2,
+        pending=lambda o, c: _bid(o) and not o.get("requirements_approved_at"),
+        title=lambda o, c: f"Check what “{_short(o)}” requires",
+        reason=lambda o, c: "Review the list of required documents and approve it before writing "
+                            "anything — one missed form can disqualify the quote.",
+    ),
+    Step(
+        kind="get_pricing", lead_days=5, min_runway=1,
+        pending=lambda o, c: _bid(o),
+        title=lambda o, c: f"Price “{_short(o)}”",
+        reason=lambda o, c: f"Build the price{_vehicle(o)} — labor categories, hours and rates.",
+    ),
+    Step(
+        kind="write_quote", lead_days=4, min_runway=1,
+        pending=lambda o, c: _bid(o),
+        title=lambda o, c: f"Write the quote for “{_short(o)}”",
+        reason=lambda o, c: "Draft the technical response and assemble the price sheet.",
+    ),
+    Step(
+        kind="final_check", lead_days=2, min_runway=0,
+        pending=lambda o, c: _bid(o),
+        title=lambda o, c: f"Final check — “{_short(o)}”",
+        reason=lambda o, c: "Check page limits, required forms, file names and the submission "
+                            "method against the RFQ.",
+    ),
+    Step(
+        kind="submit", lead_days=1, min_runway=0,
+        pending=lambda o, c: _bid(o) and o.get("stage") != "Submitted",
+        title=lambda o, c: f"Submit the quote — “{_short(o)}”",
+        reason=lambda o, c: "Everything is ready. Get it in.",
+    ),
+)
+
+FLOWS: dict[str, tuple[Step, ...]] = {"capture": STEPS, "gsa_quote": GSA_STEPS}
+
 STEPS_BY_KIND = {s.kind: s for s in STEPS}
-# The chain, as a set. `reply_mail` is deliberately not in it: it hangs off an opportunity but
-# is not a stage of one, so the planner's "the chain moved on, close the rest" sweep must not
-# reach it. A customer's question does not become answered because capture got approved.
-CHAIN_KINDS: tuple[str, ...] = tuple(s.kind for s in STEPS)
+# Every chain step of EVERY flow. `reply_mail` is deliberately not in it: it hangs off an
+# opportunity but is not a stage of one, so the planner's "the chain moved on, close the rest"
+# sweep must not reach it. A customer's question does not become answered because capture got
+# approved. All flows' kinds are included so switching an org's flow closes the old flow's cards.
+CHAIN_KINDS: tuple[str, ...] = tuple(dict.fromkeys(s.kind for flow in FLOWS.values() for s in flow))
+# The GSA steps that only a human can finish — ticking one off replans at once.
+GSA_MANUAL_KINDS: frozenset[str] = frozenset(
+    {"check_requirements", "get_pricing", "write_quote", "final_check"})
 
 
-def next_step(opp: dict, ctx: dict, blocked: set[str]) -> Optional[Step]:
+def next_step(opp: dict, ctx: dict, blocked: set[str],
+              steps: tuple[Step, ...] = STEPS) -> Optional[Step]:
     """The one thing this pursuit owes right now. `blocked` are steps a human already closed
     by hand — skipped, so dismissing a call moves the pursuit on instead of bringing the same
     card back tomorrow."""
-    for step in STEPS:
+    for step in steps:
         if step.kind in blocked:
             continue
         if step.pending(opp, ctx):
@@ -357,9 +432,12 @@ def plan_for_org(organization_id: str) -> dict:
     logic was three reads and a write each, which on a few thousand pursuits is ten thousand
     round trips for a job that should be a few dozen.
     """
+    from utils.org_settings import org_settings
+
     crm = get_crm_store()
     today = _utc_today()
     horizon = today + timedelta(days=HORIZON_DAYS)
+    steps = FLOWS[org_settings(organization_id)["task_flow"]]
 
     crm.unsnooze_due_actions(organization_id)
 
@@ -386,7 +464,7 @@ def plan_for_org(organization_id: str) -> dict:
             "documents": doc_counts.get(opp_id, 0),
             "contacts": crm.call_contacts(opp),
         }
-        step = next_step(opp, ctx, closed_by_opp.get(opp_id, set()))
+        step = next_step(opp, ctx, closed_by_opp.get(opp_id, set()), steps)
         if step is None:
             no_step.append(opp_id)
             continue

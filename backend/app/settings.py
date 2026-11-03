@@ -1,6 +1,13 @@
 """Application configuration from environment variables."""
 from pydantic_settings import BaseSettings
 
+# Every text/chat agent runs on one cheap model unless its own *_MODEL env var says otherwise.
+# GLM 5.3 Flash (Z.ai, via OpenRouter): $0.15/M in, $0.50/M out (Oct 2026), tool calling,
+# JSON mode, 1M context, text+image input. Its thinking is always on but short.
+# Note: it is missing from OpenRouter's public /models list yet callable — check
+# /api/v1/models/z-ai/glm-5.3-flash/endpoints.
+DEFAULT_TEXT_MODEL = "z-ai/glm-5.3-flash"
+
 
 class Settings(BaseSettings):
     # MongoDB — the CRM / pipeline source of truth
@@ -12,14 +19,19 @@ class Settings(BaseSettings):
     # OpenRouter — used for Excel extraction
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-    EXTRACTION_MODEL: str = "google/gemini-3.1-flash-lite"
-     # The mail sweep reads signatures with this model (one call per sender per sweep). Gemma 4
-    # 26B MoE (~4B active) is the pick: A/B'd against gemma-4-31b and nemotron-3-super-120b on
-    # real signatures, all three gave identical titles/phones — so the small, cheap, highly
-    # parallel MoE wins. Reading a 5-line signature needs no bigger or reasoning model.
-    SIGNATURE_MODEL: str = "google/gemma-4-26b-a4b-it"
+    EXTRACTION_MODEL: str = DEFAULT_TEXT_MODEL
+    # The mail sweep reads signatures with this model (one call per sender per sweep). It was
+    # gemma-4-26b-a4b-it (A/B'd equal to gemma-4-31b and nemotron-3-super-120b on real
+    # signatures); now the shared cheap default with every other agent. A 5-line signature
+    # needs no big model — if titles/phones come back wrong, set SIGNATURE_MODEL back.
+    SIGNATURE_MODEL: str = DEFAULT_TEXT_MODEL
 
-    # OpenAI — embeddings (optional, used by the cached LLM client)
+    # Embeddings (semantic search over the contact graph, SharePoint structure and library
+    # passages) go through OpenRouter, ALWAYS — even when chat is pointed at a self-hosted
+    # server, which serves no embeddings. Same model and 1536 dims as the direct OpenAI key
+    # used before, so vectors already stored stay comparable. ~$0.02/M tokens.
+    EMBEDDING_MODEL: str = "openai/text-embedding-3-small"
+    # No longer used (the direct OpenAI key went dead 2026-10); kept so an old .env still loads.
     OPENAI_API_KEY: str = ""
 
     # Langfuse — LLM observability. When both keys are set, client/langfuse_client.py
@@ -86,33 +98,61 @@ class Settings(BaseSettings):
     # accept anything — an empty secret fails every signature check by design.
     COMPOSIO_WEBHOOK_SECRET: str = ""
 
+    # The daily SAM.gov scan (11:00 UTC): pulls new notices and runs the Analyst on them.
+    # Off unless SAM_DAILY_SCAN_ENABLED=true. Off, the scheduler drops the job and "Pull from
+    # SAM.gov" still works on demand. Beat reads this at start, so restart it after a change.
+    SAM_DAILY_SCAN_ENABLED: bool = False
+
     # SharePoint structure graph (separate FalkorDB graph from the contact network)
     SHAREPOINT_GRAPH_NAME: str = "sharepoint_structure"
     
     
     # ---- Agent models — one per agent, so each can be tuned independently ----
-    ANALYST_MODEL: str = "openai/gpt-5.4-mini"   # bid / no-bid analyst
-    CRM_MODEL: str = "openai/gpt-5.6-terra"      # relation / contact-finding agent
-    RESEARCH_MODEL: str = "openai/gpt-5.4-mini"  # company research (contact companies)
+    ANALYST_MODEL: str = DEFAULT_TEXT_MODEL   # bid / no-bid analyst
+    CRM_MODEL: str = DEFAULT_TEXT_MODEL      # relation / contact-finding agent
+    RESEARCH_MODEL: str = DEFAULT_TEXT_MODEL  # company research (contact companies)
     # The org's OWN company profile, researched once when an admin saves their UEI. Small
     # model on purpose: it runs a handful of times per org, not per contact. Swap via env
     # if the output quality is not good enough — the result is admin-editable either way.
-    ORG_PROFILE_MODEL: str = "openai/gpt-5.6-luna"
-    CAPTURE_MODEL: str = "openai/gpt-5.6-terra"  # capture strategy + deliverables
-    MAIL_MODEL: str = "openai/gpt-5.6-terra"     # outreach drafting
-    BRIEF_MODEL: str = "openai/gpt-5.6-terra"    # call brief (org-level meeting prep)
+    ORG_PROFILE_MODEL: str = DEFAULT_TEXT_MODEL
+    CAPTURE_MODEL: str = DEFAULT_TEXT_MODEL  # capture strategy + deliverables
+    MAIL_MODEL: str = DEFAULT_TEXT_MODEL     # outreach drafting
+    BRIEF_MODEL: str = DEFAULT_TEXT_MODEL    # call brief (org-level meeting prep)
 
     # Manual opportunity upload — the small/fast model that digests big solicitation
     # packages. If the whole package fits (<= STUFF_MAX) it's kept verbatim with no
     # model call; otherwise each document is summarized in ONE call (natural boundaries),
     # then the per-document digests are merged.
-    DOC_DIGEST_MODEL: str = "openai/gpt-5.6-luna"
+    DOC_DIGEST_MODEL: str = DEFAULT_TEXT_MODEL
     # ~50k tokens @ ~4 chars/token. <= this total => keep verbatim, no LLM call.
     # Sized to FIT A CONTEXT WINDOW, not to the model's advertised maximum: the self-hosted
     # Gemma runs with n_ctx=65536 (even though the weights train to 262k), so the old 2,000,000
     # chars (~500k tokens) would have been stuffed verbatim into a prompt eight times too big
     # for the server — which fails at request time, after the whole document was assembled.
     DOC_DIGEST_STUFF_MAX_CHARS: int = 200000
+
+    # Library analysis — every SharePoint file is read once (and again only when it changes),
+    # sorted into a category and its key facts pulled out. Hundreds of files per org, so a
+    # small model. GLM 5.3 Flash: $0.15/M in, $0.50/M out (Oct 2026). Its thinking can't be
+    # turned off, but it spent only ~30-100 thinking tokens per file in testing: ~5s and
+    # ~$0.0002 for a 3k-token capture plan, categorised correctly with nothing invented.
+    LIBRARY_MODEL: str = DEFAULT_TEXT_MODEL
+    # How much of each document the model reads. The category and the facts live in the
+    # opening pages; ~15k tokens keeps a 100-page past proposal cheap and fits Gemma's 64k.
+    LIBRARY_READ_CHARS: int = 60000
+    # Files bigger than this are skipped (video exports, scanned archives) — not worth a parse.
+    LIBRARY_MAX_FILE_MB: int = 40
+
+    # Reading what a solicitation requires. Runs once per bid and misses are expensive (one
+    # missed form can disqualify an offer), so it reads the original files rather than a digest.
+    # Capped well under the model's context: at ~75k tokens of input GLM 5.3 Flash spent its whole
+    # output budget and returned nothing. Past the cap, utils/solicitation_files.py keeps the
+    # instruction passages rather than the first pages.
+    REQUIREMENTS_MODEL: str = DEFAULT_TEXT_MODEL
+    REQUIREMENTS_READ_CHARS: int = 160000
+    # Writing the bid's documents. Set apart from DEFAULT_TEXT_MODEL because this text goes to
+    # the government under the company's name.
+    WRITER_MODEL: str = "anthropic/claude-haiku-5.5"
 
     # Capture agent — text-to-image generation via OpenRouter's Image API (POST /images).
     # NOTE: image generation always stays on OpenRouter — a self-hosted text model (Gemma)
@@ -200,6 +240,11 @@ class Settings(BaseSettings):
     @property
     def llm_is_self_hosted(self) -> bool:
         return bool(self.LLM_BASE_URL)
+
+    @property
+    def embeddings_enabled(self) -> bool:
+        """Semantic search is on whenever we can reach OpenRouter."""
+        return bool(self.OPENROUTER_API_KEY)
 
 
     class Config:

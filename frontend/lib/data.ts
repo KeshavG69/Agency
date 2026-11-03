@@ -83,6 +83,11 @@ export interface Opportunity {
   id: string;
   title: string;
   agency?: string;
+  contract_vehicle?: string | null; // GSA MAS, OASIS+ … (manual uploads)
+  sin?: string | null;
+  requirements_status?: ProposalRequirements["status"];
+  requirements_done?: number;
+  requirements_total?: number;
   naics?: string;
   set_aside?: string;
   estimated_value?: number | null;
@@ -369,13 +374,25 @@ export interface ManualOpportunityResult {
 // Multipart (files) → raw fetch + auth header, like uploadExcel. The backend uploads
 // the files, parses + digests them (small model), and runs the Analyst in the background.
 export async function createManualOpportunity(
-  fields: { title: string; number?: string; description?: string },
+  fields: {
+    title: string;
+    number?: string;
+    description?: string;
+    agency?: string;
+    dueDate?: string; // YYYY-MM-DD
+    contractVehicle?: string;
+    sin?: string;
+  },
   files: File[],
 ): Promise<ManualOpportunityResult> {
   const form = new FormData();
   form.append("title", fields.title);
   if (fields.number) form.append("number", fields.number);
   if (fields.description) form.append("description", fields.description);
+  if (fields.agency) form.append("agency", fields.agency);
+  if (fields.dueDate) form.append("due_date", fields.dueDate);
+  if (fields.contractVehicle) form.append("contract_vehicle", fields.contractVehicle);
+  if (fields.sin) form.append("sin", fields.sin);
   for (const f of files) form.append("files", f); // repeated key → FastAPI list[UploadFile]
   const res = await fetch(`${API_BASE}/api/opportunities/manual`, {
     method: "POST",
@@ -455,6 +472,292 @@ export interface SPGraph {
 
 export async function fetchSharePointGraph(): Promise<SPGraph> {
   const { data } = await apiClient.get("/api/sharepoint/graph");
+  return data;
+}
+
+// ---- required documents (what one solicitation says must be submitted) ----------------
+
+export type RequirementKind =
+  | "volume" | "plan" | "resume" | "form" | "certification" | "pricing"
+  | "past_performance" | "letter" | "attachment" | "other";
+
+export interface RequirementItem {
+  id: string;
+  title: string;
+  kind: RequirementKind;
+  detail?: string;
+  page_limit?: string | null;
+  page_limit_quote?: string;
+  format?: string | null;
+  source_ref?: string | null;
+  quote?: string;
+  verified: boolean; // false = the quote couldn't be confirmed in the files; a person should check
+  // Who produces it: Collecct drafts it / a person signs it / PriceIQ / the company supplies it.
+  production?: "write" | "sign" | "price" | "provide";
+  gen_status?: "queued" | "writing" | "written" | "failed" | null;
+  gen_error?: string | null;
+  gaps?: string[]; // what a person must fill in or check in the draft
+  pages?: number;
+  done: boolean;
+  note?: string;
+  files: { id: string; title: string; size?: number; generated?: boolean; edit_url?: string | null }[];
+  added_by_person?: boolean;
+  dropped_by_reread?: boolean; // a re-read no longer lists this, but someone had worked on it
+}
+
+type Evidence = { evidence?: Record<string, string>; unverified?: string[] };
+
+export interface ProposalRequirements {
+  status: "none" | "reading" | "ready" | "approved" | "failed";
+  error?: string | null;
+  solicitation_type?: "rfp" | "rfq" | "rfi" | "other";
+  found_instructions?: boolean;
+  summary?: string;
+  submission?: Evidence & { due?: string | null; method?: string | null; address?: string | null;
+    file_rules?: string | null; questions_due?: string | null };
+  format_rules?: Evidence & { font?: string | null; margins?: string | null; page_size?: string | null;
+    page_counting?: string | null };
+  evaluation?: Evidence & { basis?: string | null; factors?: { name: string; importance?: string | null }[] };
+  past_performance?: Evidence & { references?: string | null; recency?: string | null;
+    relevancy?: string | null; prime_rule?: string | null; form?: string | null };
+  pass_fail_rules?: { rule: string; source_ref?: string | null; quote?: string; verified: boolean }[];
+  prohibited?: string[];
+  items: RequirementItem[];
+  files?: { read: string[]; not_read: string[]; from_summary: boolean; truncated: boolean };
+  approved_by?: string | null;
+  approved_at?: string | null;
+  email?: SubmissionEmail | null;
+}
+
+export interface SubmissionEmail {
+  to: string[];
+  subject: string;
+  body: string;
+}
+
+const reqUrl = (id: string) => `/api/opportunities/${id}/requirements`;
+
+export async function fetchRequirements(id: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.get(reqUrl(id));
+  return data;
+}
+
+/** What this person can do with the bid's files, and where they live. */
+export interface BidAccess {
+  can_download: boolean;
+  sharepoint_connected: boolean;
+  folder_url?: string | null;
+}
+
+export async function fetchBidAccess(id: string): Promise<BidAccess> {
+  const { data } = await apiClient.get(`${reqUrl(id)}/access`);
+  return data;
+}
+
+/** Add amendment files: they join the solicitation and the requirements are read again. */
+export async function addAmendment(id: string, files: File[]): Promise<void> {
+  const form = new FormData();
+  files.forEach((f) => form.append("files", f));
+  await apiClient.post(`${reqUrl(id)}/amendment`, form);
+}
+
+export async function readRequirements(id: string): Promise<void> {
+  await apiClient.post(`${reqUrl(id)}/read`);
+}
+
+export async function editRequirementItem(
+  id: string, itemId: string, fields: Partial<Pick<RequirementItem, "title" | "detail" | "page_limit" | "done" | "note">>,
+): Promise<ProposalRequirements> {
+  const { data } = await apiClient.patch(`${reqUrl(id)}/items/${itemId}`, fields);
+  return data;
+}
+
+export async function addRequirementItem(id: string, title: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/items`, { title });
+  return data;
+}
+
+export async function removeRequirementItem(id: string, itemId: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.delete(`${reqUrl(id)}/items/${itemId}`);
+  return data;
+}
+
+export async function attachRequirementFile(id: string, itemId: string, file: File): Promise<ProposalRequirements> {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await apiClient.post(`${reqUrl(id)}/items/${itemId}/file`, form);
+  return data;
+}
+
+export async function generatePackage(id: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/generate`);
+  return data;
+}
+
+export async function writeRequirementItem(id: string, itemId: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/items/${itemId}/write`);
+  return data;
+}
+
+/** All the bid's files as one zip, saved by the browser. */
+export async function downloadPackage(id: string, name: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${reqUrl(id)}/package.zip`, { headers: authHeader() });
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${name.replace(/[^\w.-]+/g, "_")}.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function writeSubmissionEmail(id: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/email`);
+  return data;
+}
+
+export async function fetchOutstanding(id: string): Promise<{ outstanding: string[] }> {
+  const { data } = await apiClient.get(`${reqUrl(id)}/email/check`);
+  return data;
+}
+
+export async function createPackageDraft(
+  id: string, email: SubmissionEmail,
+): Promise<{ created: boolean; web_link?: string | null; attachments: number; warning?: string | null }> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/email/outlook`, email);
+  return data;
+}
+
+export async function approveRequirements(id: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/approve`);
+  return data;
+}
+
+// ---- library analysis (what's IN each SharePoint file) -------------------------------
+
+export type LibraryCategory =
+  | "active_contract"
+  | "past_performance"
+  | "cpars"
+  | "resume"
+  | "past_proposal"
+  | "capture_plan"
+  | "capability_statement"
+  | "technical_approach"
+  | "management_plan"
+  | "pricing"
+  | "certification"
+  | "contract_legal"
+  | "solicitation"
+  | "other";
+
+export type LibraryStatus = "pending" | "analysing" | "done" | "needs_review" | "failed" | "skipped";
+
+/** Every fact sheet carries `evidence`: field -> the exact words it was read from. */
+type Grounded = { evidence?: Record<string, string> };
+export type LibraryContract = Grounded & {
+  title?: string | null;
+  customer?: string | null;
+  agency?: string | null;
+  contract_number?: string | null;
+  role?: string | null;
+  value_usd?: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  naics?: string | null;
+  scope?: string | null;
+  customer_poc?: string | null;
+  rating?: string | null;
+};
+export type LibraryPerson = Grounded & {
+  name?: string | null;
+  current_role?: string | null;
+  years_experience?: number | null;
+  clearance?: string | null;
+  certifications?: string[];
+  education?: string | null;
+  skills?: string[];
+};
+export type LibraryProposal = Grounded & {
+  agency?: string | null;
+  solicitation_number?: string | null;
+  title?: string | null;
+  volume?: string | null;
+  submitted_date?: string | null;
+  outcome?: string | null;
+};
+export type LibraryCertification = Grounded & {
+  name?: string | null;
+  issuer?: string | null;
+  number?: string | null;
+  expires?: string | null;
+};
+export type LibraryLegal = Grounded & {
+  kind?: string | null;
+  parties?: string[];
+  effective_date?: string | null;
+  expires?: string | null;
+};
+
+export interface LibraryDocument {
+  item_id: string;
+  source?: "upload"; // uploaded straight into Collecct; absent = from SharePoint
+  shelf?: "output" | null; // inside a bid's folder: listed here, never used by the agents
+  name: string;
+  path?: string | null;
+  web_url?: string | null;
+  ext?: string | null;
+  size?: number | null;
+  status: LibraryStatus;
+  skip_reason?: string | null;
+  error?: string | null;
+  category?: LibraryCategory | null;
+  confidence?: number | null;
+  summary?: string | null;
+  contracts?: LibraryContract[];
+  people?: LibraryPerson[];
+  proposal?: LibraryProposal | null;
+  certifications?: LibraryCertification[];
+  legal?: LibraryLegal | null;
+  category_override?: LibraryCategory | null;
+  corrected_by?: string | null;
+  analysed_at?: string | null;
+}
+
+export interface LibraryCounts {
+  status: Partial<Record<LibraryStatus, number>>;
+  category: Partial<Record<LibraryCategory, number>>;
+}
+
+export async function fetchLibraryDocuments(): Promise<{ documents: LibraryDocument[]; counts: LibraryCounts }> {
+  const { data } = await apiClient.get("/api/library/documents");
+  return data;
+}
+
+export async function fixLibraryCategory(itemId: string, category: LibraryCategory): Promise<void> {
+  await apiClient.post(`/api/library/documents/${encodeURIComponent(itemId)}/category`, { category });
+}
+
+/** `onProgress` gets the share of the whole upload sent so far, from 0 to 1. */
+export async function uploadLibraryDocuments(files: File[], onProgress?: (share: number) => void): Promise<void> {
+  const form = new FormData();
+  for (const f of files) form.append("files", f);
+  await apiClient.post("/api/library/upload", form, {
+    onUploadProgress: (e) => e.total && onProgress?.(e.loaded / e.total),
+  });
+}
+
+export async function deleteLibraryDocument(itemId: string): Promise<void> {
+  await apiClient.delete(`/api/library/documents/${encodeURIComponent(itemId)}`);
+}
+
+export async function libraryDocumentUrl(itemId: string): Promise<string> {
+  const { data } = await apiClient.get(`/api/library/documents/${encodeURIComponent(itemId)}/url`);
+  return data.url;
+}
+
+export async function rerunLibraryAnalysis(): Promise<{ retried_failed: number }> {
+  const { data } = await apiClient.post("/api/library/analyse");
   return data;
 }
 
@@ -645,6 +948,11 @@ export type ActionKind =
   | "call"
   | "review_docs"
   | "submit"
+  // GSA quote flow (Organisation settings → Task flow): ticked off in order.
+  | "check_requirements"
+  | "get_pricing"
+  | "write_quote"
+  | "final_check"
   | "reply_mail"
   // Relationship engine — not tied to a pursuit. `ref_id` is the RelationshipNudge id.
   | "relationship_touch"

@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # The subfolders created inside each Bid folder (order preserved). "Shared Documents" is
 # the CONTAINER library, not a subfolder — see the sharepoint-bid-folder-taxonomy memory.
 BID_SUBFOLDERS = ["Solicitation", "Capture Docs", "Resources", "Response"]
+LIBRARY_FOLDER = "Company Library"
 
 _JSON_HEADER = [{"name": "Content-Type", "value": "application/json", "type": "header"}]
 _ILLEGAL = re.compile(r'[\\/:*?"<>|#%]')
@@ -342,6 +343,17 @@ def file_to_capture_docs(organization_id: str, opp: dict, filename: str, content
     )
 
 
+def file_to_library(organization_id: str, filename: str, content: bytes) -> dict | None:
+    """Put a company document in the org's library, in a 'Company Library' folder. The next crawl
+    picks it up like any other file. None when SharePoint isn't connected or crawled yet."""
+    account_id = graph_account(sharepoint_entity(organization_id))
+    lib = find_document_library(organization_id) if account_id else None
+    if not lib or not lib.get("drive_id"):
+        return None
+    folder = ensure_folder(lib["drive_id"], "root", "", LIBRARY_FOLDER, account_id)
+    return upload_file_to_folder(lib["drive_id"], folder["id"], filename, content, account_id)
+
+
 def provision_bid_folders(organization_id: str, opp: dict) -> dict:
     """Create the Bid folder tree in the org's document library; return a pointer to it.
 
@@ -365,6 +377,9 @@ def provision_bid_folders(organization_id: str, opp: dict) -> dict:
     for sf in BID_SUBFOLDERS:
         child = ensure_folder(drive_id, top_id, name, sf, account_id)
         subfolders[sf] = {"id": child.get("id"), "web_url": child.get("webUrl")}
+
+    ppqs = ensure_folder(drive_id, subfolders["Response"]["id"], f"{name}/Response", "PPQs", account_id)
+    subfolders["PPQs"] = {"id": ppqs.get("id"), "web_url": ppqs.get("webUrl")}
 
     pointer = {
         "drive_id": drive_id,

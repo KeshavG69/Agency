@@ -58,6 +58,14 @@ def process_manual_upload_task(self, opportunity_id: str, organization_id: str) 
         from tasks.analyst_tasks import run_analyst_batch
 
         run_analyst_batch.delay(organization_id)
+        # Someone uploaded this on purpose, so have the required-documents list ready for them.
+        from tasks.requirements_tasks import queue_read
+
+        queue_read(opportunity_id, organization_id)
+        # Give the bid its SharePoint folder now and file the solicitation in it.
+        from tasks.sharepoint_tasks import provision_bid_folders_task
+
+        provision_bid_folders_task.delay(organization_id, opportunity_id)
         return {
             "opportunity_id": opportunity_id,
             "documents": len(docs),

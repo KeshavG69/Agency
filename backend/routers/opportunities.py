@@ -4,6 +4,7 @@ import logging
 import os
 import tempfile
 import uuid
+from datetime import date
 
 from celery import group
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -41,6 +42,10 @@ async def create_manual_opportunity(
     title: str = Form(...),
     number: str | None = Form(None),
     description: str | None = Form(None),
+    agency: str | None = Form(None),
+    due_date: str | None = Form(None),          # YYYY-MM-DD — drives the task schedule
+    contract_vehicle: str | None = Form(None),  # one of the org's own vehicles (GSA MAS …)
+    sin: str | None = Form(None),
     files: list[UploadFile] = File(default=[]),
     current_user: dict = Depends(get_current_user),
 ) -> dict:
@@ -57,6 +62,13 @@ async def create_manual_opportunity(
     if files and len(files) > _MAX_MANUAL_FILES:
         raise HTTPException(status_code=400, detail=f"Too many files (max {_MAX_MANUAL_FILES})")
 
+    due = (due_date or "").strip() or None
+    if due:
+        try:
+            due = date.fromisoformat(due).isoformat()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="due_date must be YYYY-MM-DD")
+
     organization_id = str(current_user["organization_id"])
     crm = get_crm_store()
 
@@ -64,6 +76,10 @@ async def create_manual_opportunity(
         title=title,
         solicitation_number=(number or "").strip() or None,
         description=(description or "").strip() or None,
+        agency=(agency or "").strip() or None,
+        response_deadline=due,
+        contract_vehicle=(contract_vehicle or "").strip() or None,
+        sin=(sin or "").strip() or None,
         source="manual",
     )
     opportunity_id = crm.insert_opportunity(opp, organization_id)
@@ -384,6 +400,11 @@ def set_decision(
     # The moment an opportunity becomes a Bid, provision its SharePoint folder tree
     # (idempotent + a graceful no-op if SharePoint isn't connected). Non-blocking.
     if decision == "Bid":
+        # Work out what this bid must submit while the rep gets on with it.
+        from tasks.requirements_tasks import queue_read
+
+        queue_read(opportunity_id, organization_id)
+
         try:
             from tasks.sharepoint_tasks import provision_bid_folders_task
 

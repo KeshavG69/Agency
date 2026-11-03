@@ -77,14 +77,18 @@ def sync_sharepoint_structure_task(self, organization_id: str, with_acl: bool = 
     # task, not silently report "succeeded" with graphed=0 — that would look identical to a
     # healthy sync to anything watching the task result, while the graph stays empty.
     try:
-        clear_structure(org)
+        clear_structure(org, keep_library=True)
         written = upsert_structure(nodes, org)
         logger.info("Rebuilt org %s SharePoint structure graph with %d nodes", org, written)
     except Exception as exc:  # noqa: BLE001 — transient graph connection issue -> retry
         logger.warning("SharePoint structure rebuild failed (will retry): %s", exc)
         raise self.retry(exc=exc)
 
-    return {"crawled": len(nodes), "graphed": written, "organization_id": org}
+    # Read what's IN the files: re-link the analysis we already have, queue new/changed files.
+    from tasks.library_tasks import sync_library
+
+    library = sync_library(org, nodes)
+    return {"crawled": len(nodes), "graphed": written, "organization_id": org, "library": library}
 
 
 def _file_solicitation_docs(org: str, opportunity_id: str, pointer: dict, crm) -> int:
