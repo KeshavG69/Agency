@@ -1829,6 +1829,10 @@ function Detail({
   const calls = opp.calls ?? [];
   const tasks = opp.tasks ?? [];
   const canCapture = opp.bid_decision === "Bid";
+  // A Quick quote (GSA RFQ) company answers an RFQ that is already out, so it has no capture
+  // stage. One captured before the company switched flows keeps its footer (its mail button).
+  const quickQuote = useQuery(organizationQuery()).data?.org?.workflow?.task_flow === "gsa_quote";
+  const showCaptureFoot = captured || !quickQuote;
   const [assignOpen, setAssignOpen] = useState(false);
 
   // Read live, not from `opp`: this pane holds its own copy of the opportunity, which a tick in
@@ -1970,56 +1974,58 @@ function Detail({
         {tab === "agent" && <AgentTrail subjectId={opp.id} />}
       </div>
 
-      <div className="detail-foot">
-        {captured ? (
-          // After capture completes, the same button becomes the mail action.
-          <button
-            className="btn primary"
-            onClick={() => {
-              setTab("contacts");
-              onRunOutreach();
-            }}
-            disabled={outreachBusy || (opp.recommended_contacts ?? []).every((c) => !c.email)}
-            title="Draft an outreach email for each relevant contact"
-          >
-            {outreachBusy ? (
-              <>
-                <span className="spin" />
-                Drafting mail…
-              </>
-            ) : opp.outreach_drafted_at ? (
-              "Re-run mail"
-            ) : (
-              "Run mail"
-            )}
-          </button>
-        ) : (
-          <button
-            className="btn primary"
-            onClick={onApproveCapture}
-            disabled={capturing || !canCapture}
-          >
-            {capturing ? (
-              <>
-                <span className="spin" />
-                Running capture…
-              </>
-            ) : (
-              "Approve for capture"
-            )}
-          </button>
-        )}
-        {captured ? (
-          <span className="foot-note">
-            <b>{(opp.documents ?? []).filter((d) => d.agent_id !== "manual_upload").length} documents</b>{" "}
-            generated · {fmtDate(opp.captured_at)}
-          </span>
-        ) : !canCapture ? (
-          <span className="foot-note">Only “Bid” opportunities advance to capture.</span>
-        ) : (
-          <span className="foot-note">Generates the capture plan + customer deliverables.</span>
-        )}
-      </div>
+      {showCaptureFoot && (
+        <div className="detail-foot">
+          {captured ? (
+            // After capture completes, the same button becomes the mail action.
+            <button
+              className="btn primary"
+              onClick={() => {
+                setTab("contacts");
+                onRunOutreach();
+              }}
+              disabled={outreachBusy || (opp.recommended_contacts ?? []).every((c) => !c.email)}
+              title="Draft an outreach email for each relevant contact"
+            >
+              {outreachBusy ? (
+                <>
+                  <span className="spin" />
+                  Drafting mail…
+                </>
+              ) : opp.outreach_drafted_at ? (
+                "Re-run mail"
+              ) : (
+                "Run mail"
+              )}
+            </button>
+          ) : (
+            <button
+              className="btn primary"
+              onClick={onApproveCapture}
+              disabled={capturing || !canCapture}
+            >
+              {capturing ? (
+                <>
+                  <span className="spin" />
+                  Running capture…
+                </>
+              ) : (
+                "Approve for capture"
+              )}
+            </button>
+          )}
+          {captured ? (
+            <span className="foot-note">
+              <b>{(opp.documents ?? []).filter((d) => d.agent_id !== "manual_upload").length} documents</b>{" "}
+              generated · {fmtDate(opp.captured_at)}
+            </span>
+          ) : !canCapture ? (
+            <span className="foot-note">Only “Bid” opportunities advance to capture.</span>
+          ) : (
+            <span className="foot-note">Generates the capture plan + customer deliverables.</span>
+          )}
+        </div>
+      )}
     </>
   );
 }
