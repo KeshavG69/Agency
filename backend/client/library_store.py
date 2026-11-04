@@ -48,7 +48,13 @@ READABLE_EXT = {
 }
 
 # Never returned to the frontend or the agents — large, and only the search needs it.
-_HIDDEN = {"_id": 0, "summary_embedding": 0, "item_embeddings": 0, "object_key": 0}
+_HIDDEN = {"_id": 0, "summary_embedding": 0, "item_embeddings": 0, "object_key": 0, "source_text": 0}
+
+_WITH_VECTORS = {"_id": 0, "source_text": 0}  # for the search: vectors yes, whole files no
+
+# The parsed text kept with each row, so a proposal writer's claim can be checked against the
+# WHOLE file it cites (the passages in the graph stop at LIBRARY_READ_CHARS).
+SOURCE_TEXT_CHARS = 1_500_000
 
 
 def _utc_now() -> datetime:
@@ -149,7 +155,7 @@ class LibraryStore:
     def get(self, organization_id: str, item_id: str, email: Optional[str] = None,
             with_embedding: bool = False) -> Optional[dict]:
         q = {"organization_id": organization_id, "item_id": item_id, **_acl(email)}
-        return self.docs.find_one(q, {"_id": 0} if with_embedding else _HIDDEN)
+        return self.docs.find_one(q, _WITH_VECTORS if with_embedding else _HIDDEN)
 
     def claim(self, organization_id: str, item_id: str) -> Optional[dict]:
         """Atomically move a pending row to analysing; None if another worker already has it."""
@@ -193,7 +199,7 @@ class LibraryStore:
                    "shelf": {"$ne": OUTPUT}, **_acl(email)}
         if categories:
             q["category"] = {"$in": list(categories)}
-        return list(self.docs.find(q, {"_id": 0} if with_embedding else _HIDDEN))
+        return list(self.docs.find(q, _WITH_VECTORS if with_embedding else _HIDDEN))
 
     def counts(self, organization_id: str, email: Optional[str] = None) -> dict:
         """{"status": {status: n}, "category": {category: n}} for the progress line + filters."""
@@ -206,6 +212,17 @@ class LibraryStore:
             {"$group": {"_id": "$category", "n": {"$sum": 1}}},
         ])}
         return {"status": by_status, "category": by_category}
+
+    def source_text(self, organization_id: str, item_id: str) -> str:
+        """The file's parsed text, for proving a claim against it. Files read before the text
+        was kept fall back to their passages in the graph."""
+        row = self.docs.find_one({"organization_id": organization_id, "item_id": item_id},
+                                 {"source_text": 1})
+        if row and row.get("source_text"):
+            return row["source_text"]
+        from client.library_graph import passages_text
+
+        return passages_text(organization_id, item_id)
 
     def pending_ids(self, organization_id: str) -> list[str]:
         return [d["item_id"] for d in self.docs.find(

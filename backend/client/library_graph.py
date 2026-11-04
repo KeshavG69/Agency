@@ -289,6 +289,18 @@ def prune(organization_id: str) -> None:
 # ---------------------------------------------------------------------------------------
 # Reads
 # ---------------------------------------------------------------------------------------
+def passages_text(organization_id: str, item_id: str) -> str:
+    """One file's stored passages, in order. The overlap between neighbours repeats a little
+    text, which a quote check doesn't mind."""
+    try:
+        res = _g(organization_id).ro_query(
+            "MATCH (c:LibChunk {item_id: $id}) RETURN c.text ORDER BY c.idx", params={"id": item_id})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Couldn't read passages for %s: %s", item_id, exc)
+        return ""
+    return "\n".join(r[0] for r in res.result_set if r[0])
+
+
 def search_passages(query: str, organization_id: str, employee_email: str | None = None,
                     categories: list[str] | None = None, k: int = 8) -> list[dict]:
     """Passages from the library closest in MEANING to `query`, ACL-filtered through each

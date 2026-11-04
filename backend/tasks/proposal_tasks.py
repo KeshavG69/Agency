@@ -32,6 +32,29 @@ def free_name(row: dict, item_id: str, name: str) -> str:
     return candidate
 
 
+_VALIDITY = re.compile(r"(?:valid|acceptance period)[^.]{0,60}?\b(\d{2,3})\s*(?:calendar\s*)?days", re.I)
+
+
+def _cover_meta(opp: dict, row: dict, card: dict, employee_email: str | None, source: str,
+                item: dict) -> dict:
+    """What the cover, header and footer say. The contact is whoever writes or approved the bid;
+    the validity period only when the solicitation sets one."""
+    from utils.organizations import user_display_name
+
+    email = employee_email or next((e for e in [row.get("approved_by")] if e and "@" in e), None)
+    poc = None
+    if email:
+        name = user_display_name(email)
+        poc = " | ".join(x for x in (name, "[NEEDS: phone]", email) if x)
+    m = _VALIDITY.search(source or "")
+    return {
+        "company": card, "bid_title": opp.get("title"), "agency": opp.get("agency"),
+        "volume": item.get("title"), "kind": item.get("kind"),
+        "vehicle": opp.get("contract_vehicle"), "poc": poc,
+        "validity": f"This proposal is valid for {m.group(1)} calendar days from submission." if m else None,
+    }
+
+
 def queue_package(opportunity_id: str, organization_id: str, employee_email: str | None = None,
                   only_unwritten: bool = True) -> int:
     """Queue every document Collecct can write. Returns how many."""
@@ -56,9 +79,11 @@ def queue_item(opportunity_id: str, organization_id: str, item_id: str,
 @celery_app.task(bind=True, name="proposal.write_item", max_retries=1, default_retry_delay=20)
 def write_item_task(self, opportunity_id: str, organization_id: str, item_id: str,
                     employee_email: str | None = None) -> dict:
+    from agent.company_profile import company_card
+    from agent.proposal_grounding import ground
     from agent.proposal_writer import _page_budget, document_text, unverified_numbers, write_document
     from utils import bid_files
-    from utils.docx_writer import render
+    from utils.docx_writer import estimate_pages, front_matter, render
 
     store, crm = get_requirements_store(), get_crm_store()
     row = store.get(organization_id, opportunity_id)
@@ -72,11 +97,14 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
         bid_files.bid_folder(organization_id, opportunity_id)  # before spending a model call
         source = store.source_text(organization_id, opportunity_id)
         doc = write_document(organization_id, opp, row, item, source, employee_email)
+        card = company_card(organization_id)
+        # Facts from the library, claims checked against their own files, notes flagged.
+        gaps = list(doc.gaps) + ground(doc, organization_id, employee_email, source, card["name"] or "")
         unverified = unverified_numbers(doc, organization_id, source)
-        gaps = list(doc.gaps)
         if unverified:
-            gaps.append("Check these figures, which aren't in your documents: " + ", ".join(unverified))
-        content = render(doc, opp.get("solicitation_number"), row.get("format_rules"))
+            gaps.append("Check these figures and numbers, which aren't in your documents: " + ", ".join(unverified))
+        content = render(doc, opp.get("solicitation_number"), row.get("format_rules"),
+                         _cover_meta(opp, row, card, employee_email, source, item), item.get("page_limit"))
 
         name = free_name(row, item_id, _filename(item.get("title") or doc.title))
         saved = bid_files.save(organization_id, opportunity_id, name, content,
@@ -88,7 +116,10 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
         doc_id = bid_files.record(opportunity_id, "proposal_writer", "proposal", name, saved, previous)
         words = len(document_text(doc).split())
         limit, _ = _page_budget(item.get("page_limit"))
-        pages = max(1, round(words / 500))
+        # Measured on the file itself (tables and headings take room words don't show); the cover
+        # is left out only where the solicitation says it doesn't count.
+        cover, _ = front_matter(item.get("page_limit"), (row.get("format_rules") or {}).get("page_counting"))
+        pages = estimate_pages(content, skip_cover=cover)
         if limit and pages > limit:
             gaps.append(f"About {pages} pages against a {limit}-page limit — needs trimming.")
         store.edit_item(organization_id, opportunity_id, item_id, {

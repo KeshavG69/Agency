@@ -18,7 +18,15 @@ from datetime import datetime, timezone
 
 from app.settings import settings
 from app.worker import celery_app
-from client.library_store import DONE, FAILED, OUTPUT, PENDING, REVIEW, get_library_store
+from client.library_store import (
+    DONE,
+    FAILED,
+    OUTPUT,
+    PENDING,
+    REVIEW,
+    SOURCE_TEXT_CHARS,
+    get_library_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +129,7 @@ def analyse_document_task(self, organization_id: str, item_id: str) -> dict:
             **result.model_dump(),
             "status": status, "error": None, "chars": len(text),
             "analysed_version": row.get("version"),
+            "source_text": text[:SOURCE_TEXT_CHARS],
         }
         if row.get("shelf") == OUTPUT:  # listed for people, never in the graph the agents search
             store.mark(organization_id, item_id, analysed_at=datetime.now(timezone.utc), **fields)
