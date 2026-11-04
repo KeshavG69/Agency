@@ -399,7 +399,11 @@ export async function createManualOpportunity(
     headers: authHeader(),
     body: form,
   });
-  if (!res.ok) throw new Error(`Add opportunity failed: ${res.status}`);
+  if (!res.ok) {
+    // The server's own words when it gives them (e.g. a solicitation number already in use).
+    const detail = await res.json().then((b) => b?.detail, () => null);
+    throw new Error(typeof detail === "string" ? detail : "Couldn't add the opportunity. Please try again.");
+  }
   return res.json();
 }
 
@@ -523,7 +527,8 @@ export interface ProposalRequirements {
   pass_fail_rules?: { rule: string; source_ref?: string | null; quote?: string; verified: boolean }[];
   prohibited?: string[];
   items: RequirementItem[];
-  files?: { read: string[]; not_read: string[]; from_summary: boolean; truncated: boolean };
+  files?: { read: string[]; not_read: string[]; from_summary: boolean; truncated: boolean;
+    number_missing?: string; numbers_found?: string[] }; // typed number not in the attached files
   approved_by?: string | null;
   approved_at?: string | null;
   email?: SubmissionEmail | null;

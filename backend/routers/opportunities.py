@@ -9,6 +9,7 @@ from datetime import date
 from celery import group
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
+from pymongo.errors import DuplicateKeyError
 
 from auth.dependencies import get_current_user
 from utils.cache import cached
@@ -82,7 +83,16 @@ async def create_manual_opportunity(
         sin=(sin or "").strip() or None,
         source="manual",
     )
-    opportunity_id = crm.insert_opportunity(opp, organization_id)
+    try:
+        opportunity_id = crm.insert_opportunity(opp, organization_id)
+    except DuplicateKeyError:
+        # One opportunity per solicitation number in an org. A new file for it is an amendment.
+        existing = crm.opps.find_one({"organization_id": organization_id,
+                                      "solicitation_number": opp.solicitation_number}, {"title": 1})
+        name = f'"{existing["title"]}"' if existing and existing.get("title") else "an opportunity"
+        raise HTTPException(status_code=409, detail=(
+            f"You already have {name} with solicitation number {opp.solicitation_number}. Open it "
+            "and use Add amendment for new files, or enter a different number."))
     # Mark it "ingesting" so the UI shows it in the Ingesting section until the
     # background pipeline (parse -> digest -> Analyst verdict) completes. Cleared by
     # apply_verdict on success, or by the tasks below on terminal failure.

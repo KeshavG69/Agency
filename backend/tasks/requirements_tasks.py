@@ -18,6 +18,25 @@ _DAY_FORMS = (
 )
 
 
+# A solicitation number as the files introduce it: "RFQ 47QTCA27Q0002", "Solicitation No. W912…".
+_SOL_NO = re.compile(r"\b(?:RFQ|RFP|RFI|Solicitation(?:\s+(?:Number|No\.?|#))?|Request for (?:Quotation|Proposal|"
+                     r"Information))[\s:#.]*([A-Z0-9][A-Z0-9-]{6,})\b")
+
+
+def _alnum(s: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
+
+
+def number_check(typed: str | None, text: str) -> dict:
+    """Does the number a person typed appear in the files they attached? A different RFQ's file is
+    an easy slip (the names look alike), and every document would then quote the wrong one. Returns
+    {} when it matches or nothing was typed, else the typed number and the numbers the files give."""
+    if not typed or not text or _alnum(typed) in _alnum(text):
+        return {}
+    found = list(dict.fromkeys(m for m in _SOL_NO.findall(text) if any(c.isdigit() for c in m)))
+    return {"number_missing": typed, "numbers_found": found[:3]}
+
+
 def due_day(text: str | None) -> str | None:
     """The one date in a due-date line, as YYYY-MM-DD. None when there's no clear date, or more
     than one ("extended from Nov 20 to Nov 24"): an empty deadline is safer than a wrong one."""
@@ -61,6 +80,7 @@ def read_requirements_task(self, opportunity_id: str, organization_id: str) -> d
     store.save_outline(organization_id, opportunity_id, outline, {
         "read": files.read, "not_read": files.not_read,
         "from_summary": files.from_summary, "truncated": files.truncated,
+        **number_check(opp.get("solicitation_number"), files.text),
     }, source_text=files.text)
     _fill_deadline(opportunity_id, organization_id, outline)
     if outline.solicitation_type == "rfi":

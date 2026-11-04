@@ -8,6 +8,7 @@ back to the org name (and the last-saved snapshot) when SAM.gov data isn't avail
 from __future__ import annotations
 
 import logging
+import re
 
 from bson import ObjectId
 
@@ -133,3 +134,27 @@ def company_context(organization_id: str) -> tuple[str, str]:
     # when the entity lookup fails, and every agent reading this lens gets them.
     keywords = [str(k).strip() for k in (org.get("keywords") or []) if str(k).strip()]
     return display_name, _format(name, uei, details, keywords, org.get("company_profile"))
+
+
+def company_card(organization_id: str) -> dict:
+    """The company's own details for a proposal cover: name, address, website, CAGE, UEI and
+    small-business designations, all from its SAM.gov registration (or the org name)."""
+    org = _org(organization_id) or {}
+    d = None
+    if org.get("uei"):
+        try:
+            d = entity_cached(org["uei"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("company_card: SAM.gov fetch failed for %s: %s", org.get("uei"), exc)
+    d = d or org.get("company_details") or {}
+    a = d.get("physical_address") or {}
+    town = " ".join(x for x in (f"{a['city'].title()}," if a.get("city") else None, a.get("state"), a.get("zip")) if x)
+    small = [t for t in d.get("business_types") or [] if re.search(r"small business|owned", t, re.I)]
+    return {
+        "name": d.get("legal_business_name") or org.get("name"),
+        "address_lines": [x for x in ((a.get("line1") or "").title(), town) if x],
+        "website": d.get("entity_url"),
+        "cage": d.get("cage_code"),
+        "uei": d.get("uei") or org.get("uei"),
+        "designation": "; ".join(small[:2]) or None,
+    }

@@ -19,7 +19,7 @@ import logging
 import re
 
 from agno.agent import Agent
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from agent.company_profile import company_context
 from app.settings import settings
@@ -36,8 +36,51 @@ _DEFAULT_WORDS = 1200
 
 
 class Table(BaseModel):
+    caption: str = Field("", description="What the table shows, in a few words")
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
+
+
+class Cited(BaseModel):
+    """One claim about the company's own work, with the words in a library file that prove it.
+    Code checks the quote against that one file; a claim it can't find is flagged, not kept."""
+
+    text: str = Field(description="The claim, as it should read in the proposal")
+    source_id: str = Field("", description="`id` of the library file the quote comes from")
+    quote: str = Field("", description="5-30 words copied EXACTLY from that file")
+
+
+class WorkRow(BaseModel):
+    work: Cited = Field(description="Something we did on THIS contract, proven from its own file")
+    relevance: str = Field(description="Why that matters for this bid, in the solicitation's terms")
+
+
+class Reference(BaseModel):
+    """A past contract. Its number, customer, value, dates, role and contact are filled in by
+    code from the library record, so only the narrative is written here."""
+
+    contract_number: str = Field(description="Exactly as find_past_performance_tool returned it")
+    scope: Cited = Field(description="1-2 sentences: what we delivered on this contract")
+    work: list[WorkRow] = Field(default_factory=list)
+    results: list[Cited] = Field(default_factory=list, description="Outcomes and metrics, if the file states any")
+    _facts: list = PrivateAttr(default_factory=list)
+
+
+class Requirement(BaseModel):
+    requirement: str = Field(description="A requirement for this position, from the solicitation")
+    experience: Cited = Field(description="This person's experience that meets it, from their resume")
+
+
+class PersonBio(BaseModel):
+    """A proposed person. Clearance, certifications, education, years and current role are
+    filled in by code from their resume record, so only what they'd do and have done is here."""
+
+    name: str = Field(description="Exactly as find_resumes_tool returned it")
+    proposed_position: str = Field(description="The position in this bid, as the solicitation names it")
+    summary: list[Cited] = Field(default_factory=list)
+    employment: list[Cited] = Field(default_factory=list, description="Each job as 'Employer, title, dates'")
+    requirements: list[Requirement] = Field(default_factory=list)
+    _facts: list = PrivateAttr(default_factory=list)
 
 
 class Section(BaseModel):
@@ -45,19 +88,25 @@ class Section(BaseModel):
     paragraphs: list[str] = Field(default_factory=list)
     bullets: list[str] = Field(default_factory=list)
     table: Table | None = None
+    references: list[Reference] = Field(default_factory=list)
+    people: list[PersonBio] = Field(default_factory=list)
 
 
 class WrittenDocument(BaseModel):
     title: str
     sections: list[Section]
-    gaps: list[str] = Field(default_factory=list, description="Each thing missing, in plain words")
+    assumptions: list[str] = Field(default_factory=list, description="What you assumed where the "
+                                   "solicitation is silent, one per line")
+    questions: list[str] = Field(default_factory=list, description="What to ask the contracting officer")
+    commitments: list[str] = Field(default_factory=list, description="Every specific promise you made "
+                                   "that no source states: schedules, reviews, staffing, targets")
+    gaps: list[str] = Field(default_factory=list, description="Each company fact missing, in plain words")
 
 
 _GUIDE = {
-    "past_performance": "Write each reference in the format the solicitation asks for. Use "
-                        "find_past_performance_tool; use only contracts it returns.",
-    "resume": "Use find_resumes_tool. One section per person. Never invent a person, a clearance "
-              "or a certification.",
+    "past_performance": "Put each contract in `references` (in a section), in the order the "
+                        "solicitation asks. Use only contracts find_past_performance_tool returns.",
+    "resume": "Put each person in `people` (in a section). Use only people find_resumes_tool returns.",
     "plan": "Write a real plan for THIS requirement: steps, roles, schedule and how it meets the "
             "PWS, not generic process text. Use search_library_tool for reusable material.",
     "letter": "Keep it short and formal. Leave the signature block for a person.",
@@ -66,8 +115,8 @@ _GUIDE = {
 
 _RFI_GUIDE = ("This is an RFI: the government wants information, not a proposal. Answer each of its "
               "questions in order, under its own number. Spend the effort on past performance: use "
-              "find_past_performance_tool and lead with the contracts closest to this work. Be "
-              "brief. Give no prices unless a question asks for them.")
+              "find_past_performance_tool, lead with the contracts closest to this work, and put "
+              "them in `references`. Be brief. Give no prices unless a question asks for them.")
 
 
 def _page_budget(page_limit: str | None) -> tuple[int | None, int]:
@@ -83,28 +132,49 @@ def _instructions(company: str, profile: str) -> str:
     schema = json.dumps(WrittenDocument.model_json_schema(), separators=(",", ":"))
     return f"""\
 You are a senior proposal writer for {company}, a government contractor. Draft ONE document for a
-live bid. A human reviews it before it goes anywhere, but write it as if it were final.
+live bid. A person reviews it before it goes anywhere, but write it as if it were final.
 
 COMPANY PROFILE:
 {profile}
 
-ABSOLUTE RULE: state only what is in the solicitation, the company profile, or the results of your
-library tools. Never invent a contract, customer, person, clearance, certification, dollar figure,
-percentage, metric or date. If you need something you don't have, write [NEEDS: what is missing]
-in the text and add a plain line to `gaps`. A visible gap is a good outcome; a plausible invention
-is a serious failure.
+EVERY FACT ABOUT THE COMPANY MUST COME FROM ITS LIBRARY, AND CODE CHECKS IT:
+- Search first: find_past_performance_tool for contracts, find_resumes_tool for people,
+  search_library_tool for approach text. Each result carries the `id` of its file.
+- Past contracts go in `references` and people in `people`. Give only the contract number or the
+  person's name exactly as the tool returned it: their numbers, customers, values, dates, contacts,
+  clearances, certifications and education are filled in from the library by code. Never type them.
+- Each claim about work the company or a person did is a `Cited`: the claim, the `id` of the file
+  it comes from, and 5-30 words copied exactly from THAT file. A claim about one contract must be
+  proven from that contract's own file, not another one.
+- In ordinary paragraphs, put [[file id|exact words from it]] right after any sentence that states
+  a company fact (a past result, a customer, a number, a tool used before). Code deletes the marker
+  before anyone reads the document, so the sentence must say everything without it: the marker is
+  proof, never part of the wording. Sentences stating a company fact without one are flagged.
+- Never type a contract number, phone number, email or dollar figure into a paragraph or table of
+  your own: those belong in `references` and `people`, where code fills them in.
+- Never invent a contract, customer, person, clearance, certification, figure or date. A company
+  fact you don't have is [NEEDS: what is missing] in the text plus a line in `gaps`.
 
-TOOLS: search the company library before writing. find_past_performance_tool for contracts,
-find_resumes_tool for people, search_library_tool for reusable approach text.
+WHAT THE GOVERNMENT DIDN'T SAY (hours, volumes, systems, service levels): don't write a gap or say
+it is "not stated". Write the approach under a stated assumption and add that assumption to
+`assumptions`; add anything worth asking to `questions`. Never promise to meet service levels or
+targets the solicitation doesn't define.
 
-HOW TO WRITE:
-- Answer this document's requirements directly, in the order the solicitation gives them, using its
-  headings and terms. Say how the company meets each one, not that it will.
-- Be specific to this requirement. Reference PWS paragraphs where it helps the evaluator.
-- Keep within the word budget: it is sized to the page limit, and pages over a limit are not read.
-- No cover page or table of contents unless this document's requirements ask for one.
-- Write only the proposal itself. Never mention formatting, fonts, page limits or word counts, and
-  never describe the document ("this volume addresses…").
+PROMISES: approach text may say what the company will do. List every specific promise no source
+states (a schedule, a review cadence, a staffing level, a target) in `commitments`, so a person
+approves it.
+
+HOW IT SHOULD READ — like a seasoned proposal manager wrote it, not a chatbot:
+- Answer the requirements in the solicitation's order, with its headings, numbering and terms.
+- Short, specific, factual sentences. Name the PWS task, the system, the deliverable.
+- Use tables where an evaluator compares things (tasks, roles, schedule, staffing).
+- Never use: robust, seamless, leverage, cutting-edge, state-of-the-art, best-in-class,
+  world-class, holistic, synergy, unparalleled, "comprehensive solution", "we are excited".
+- Write only the proposal. Never describe the document ("this volume describes…"), never mention
+  the library, a resume or a source ("per the resume"), formatting or word counts, and never offer
+  contacts or details "on request": give them, or mark them [NEEDS: …].
+- No cover page, contents page or legal notice: code adds those.
+- Stay within the word budget: it is sized to the page limit.
 
 Reply with ONLY a JSON object matching this schema (no prose, no code fences):
 {schema}"""
@@ -145,15 +215,27 @@ def write_document(organization_id: str, opp: dict, outline: dict, item: dict, s
 
 
 def document_text(doc: WrittenDocument) -> str:
-    parts = [doc.title]
+    """Every word the model wrote, for the checks and the page estimate."""
+    parts = [doc.title, *doc.assumptions]
     for s in doc.sections:
         parts += [s.heading, *s.paragraphs, *s.bullets]
         if s.table:
-            parts += s.table.headers + [c for r in s.table.rows for c in r]
-    return "\n".join(p for p in parts if p)
+            parts += [s.table.caption, *s.table.headers] + [c for r in s.table.rows for c in r]
+        for r in s.references:
+            parts += [r.scope.text] + [x for w in r.work for x in (w.work.text, w.relevance)]
+            parts += [c.text for c in r.results]
+        for p in s.people:
+            parts += [p.proposed_position, *(c.text for c in p.summary + p.employment)]
+            parts += [x for q in p.requirements for x in (q.requirement, q.experience.text)]
+    return "\n".join(x for x in parts if x)
 
 
 _NUMBER = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?\s?(?:million|billion|[MBK]\b)?|\b\d+(?:\.\d+)?\s?%", re.I)
+# Identifiers a reviewer can't eyeball: phone numbers, emails, contract and order numbers.
+_IDENT = re.compile(r"\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b"
+                    r"|[\w.+-]+@[\w-]+\.[\w.]+"
+                    r"|\b(?=[A-Z0-9-]*\d)(?=[A-Z0-9-]*[A-Z])[A-Z0-9]{2,}(?:-[A-Z0-9]{1,}){1,4}\b"
+                    r"|\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10,}\b")
 
 
 def _digits(s: str) -> str:
@@ -161,14 +243,21 @@ def _digits(s: str) -> str:
 
 
 def unverified_numbers(doc: WrittenDocument, organization_id: str, source_text: str) -> list[str]:
-    """Dollar figures and percentages in the draft that appear nowhere in the source material."""
+    """Dollar figures, percentages, phone numbers, emails and contract numbers in the model's own
+    words that appear nowhere in the source material (code-filled table facts aren't checked
+    here: they are copied from the library)."""
     company, profile = company_context(organization_id)
     library = get_library_store().analysed(organization_id)
     known = " ".join([source_text, profile, json.dumps(library, default=str)])
     known_digits = {_digits(m) for m in _NUMBER.findall(known)}
     seen: dict[str, None] = {}
-    for found in _NUMBER.findall(document_text(doc)):
+    text = document_text(doc)
+    for found in _NUMBER.findall(text):
         if _digits(found) not in known_digits:
+            seen.setdefault(found.strip())
+    plain = re.sub(r"[^a-z0-9@.]", "", known.lower())
+    for found in _IDENT.findall(text):
+        if re.sub(r"[^a-z0-9@.]", "", found.lower()) not in plain:
             seen.setdefault(found.strip())
     return list(seen)
 

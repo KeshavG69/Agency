@@ -61,8 +61,8 @@ export default function AddOpportunityModal({
         files,
       );
       onCreated(res);
-    } catch {
-      setError("Couldn't add the opportunity. Please try again.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't add the opportunity. Please try again.");
       setSaving(false);
     }
   };
