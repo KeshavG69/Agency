@@ -399,7 +399,11 @@ export async function createManualOpportunity(
     headers: authHeader(),
     body: form,
   });
-  if (!res.ok) throw new Error(`Add opportunity failed: ${res.status}`);
+  if (!res.ok) {
+    // The server's own words when it gives them (e.g. a solicitation number already in use).
+    const detail = await res.json().then((b) => b?.detail, () => null);
+    throw new Error(typeof detail === "string" ? detail : "Couldn't add the opportunity. Please try again.");
+  }
   return res.json();
 }
 
