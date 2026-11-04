@@ -542,6 +542,13 @@ export default function RequirementsTab({ opp }: { opp: Opportunity }) {
         </div>
       )}
 
+      {r.files?.number_missing && (
+        <p className="req-warn">
+          The solicitation number on this opportunity, {r.files.number_missing}, isn&apos;t in its files
+          {r.files.numbers_found?.length ? <>, which name {r.files.numbers_found.join(", ")}</> : null}. Check that the
+          right RFQ is attached, or correct the number.
+        </p>
+      )}
       {r.files?.from_summary && (
         <p className="req-warn">Only a summary of this solicitation was available, not its files. Page limits and forms may be missing.</p>
       )}
