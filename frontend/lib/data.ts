@@ -504,6 +504,7 @@ export interface RequirementItem {
   pages?: number;
   done: boolean;
   note?: string;
+  writer_notes?: { text: string; by?: string; at?: string }[]; // what people told the writer
   files: { id: string; title: string; size?: number; generated?: boolean; edit_url?: string | null }[];
   added_by_person?: boolean;
   dropped_by_reread?: boolean; // a re-read no longer lists this, but someone had worked on it
@@ -599,8 +600,10 @@ export async function generatePackage(id: string): Promise<ProposalRequirements>
   return data;
 }
 
-export async function writeRequirementItem(id: string, itemId: string): Promise<ProposalRequirements> {
-  const { data } = await apiClient.post(`${reqUrl(id)}/items/${itemId}/write`);
+/** Write or rewrite one document. `note` is what the person wants the writer to know (an answer
+ *  from the contracting officer, a correction); it stays on the line for every later rewrite. */
+export async function writeRequirementItem(id: string, itemId: string, note?: string): Promise<ProposalRequirements> {
+  const { data } = await apiClient.post(`${reqUrl(id)}/items/${itemId}/write`, note ? { note } : {});
   return data;
 }
 
