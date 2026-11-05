@@ -28,6 +28,31 @@ logger = logging.getLogger(__name__)
 _redis: redis.Redis | None = None
 _CACHE_KEY = "samgov:entity:{uei}"
 
+_KEY_IN_TEXT = re.compile(r"(api_key=)[^&\s'\"]+", re.I)
+
+
+def _key_header() -> dict:
+    """The key goes in a header, never the query string: a URL ends up in error messages and
+    request logs, a header doesn't."""
+    return {"X-Api-Key": settings.SAM_GOV_API_KEY}
+
+
+def _safe_error(exc: Exception) -> str:
+    """An error worth showing a person. httpx puts the full request URL in its messages, and the
+    URL carries our API key — so a status error becomes a plain sentence, and any other text has
+    the key cut out before it is logged or shown."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code in (401, 403):
+            return f"SAM.gov rejected the API key ({code}). Check SAM_GOV_API_KEY — SAM.gov keys expire."
+        if code == 429:
+            return "SAM.gov's rate limit was hit (429). Try again later."
+        return f"SAM.gov answered with an error ({code})."
+    text = _KEY_IN_TEXT.sub(r"\1[hidden]", str(exc))
+    if settings.SAM_GOV_API_KEY:
+        text = text.replace(settings.SAM_GOV_API_KEY, "[hidden]")
+    return text
+
 
 def _redis_client() -> redis.Redis:
     global _redis
@@ -87,16 +112,16 @@ def fetch_entity(uei: str) -> dict | None:
     url = f"{settings.SAM_GOV_BASE_URL}/entity-information/v3/entities"
     params = {
         "ueiSAM": uei,
-        "api_key": settings.SAM_GOV_API_KEY,
         "includeSections": "entityRegistration,coreData,assertions",
     }
     try:
-        resp = httpx.get(url, params=params, timeout=20.0)
+        resp = httpx.get(url, params=params, headers=_key_header(), timeout=20.0)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("SAM.gov lookup failed for %s: %s", uei, exc)
-        raise RuntimeError(f"SAM.gov lookup failed: {exc}")
+        reason = _safe_error(exc)
+        logger.warning("SAM.gov lookup failed for %s: %s", uei, reason)
+        raise RuntimeError(reason) from None  # the Organisation page adds "SAM.gov lookup failed:"
 
     records = data.get("entityData") or []
     if not records:
@@ -228,7 +253,6 @@ def search_opportunities(
     seen: dict[str, Opportunity] = {}
     for code in dict.fromkeys(c for c in naics_codes if c):  # de-dupe, keep order
         params = {
-            "api_key": settings.SAM_GOV_API_KEY,
             "postedFrom": pf,
             "postedTo": pt,
             "ncode": code,
@@ -236,14 +260,14 @@ def search_opportunities(
             "offset": 0,
         }
         try:
-            resp = httpx.get(url, params=params, timeout=30.0)
+            resp = httpx.get(url, params=params, headers=_key_header(), timeout=30.0)
             if resp.status_code == 429:
                 logger.warning("SAM.gov rate limit hit (429) at NAICS %s — stopping scan", code)
                 break
             resp.raise_for_status()
             records = resp.json().get("opportunitiesData") or []
         except Exception as exc:  # noqa: BLE001 — one NAICS failing must not sink the scan
-            logger.warning("SAM.gov opportunity search failed for NAICS %s: %s", code, exc)
+            logger.warning("SAM.gov opportunity search failed for NAICS %s: %s", code, _safe_error(exc))
             continue
         for raw in records:
             nid = raw.get("noticeId")
