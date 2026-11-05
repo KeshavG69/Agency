@@ -81,7 +81,8 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
                     employee_email: str | None = None) -> dict:
     from agent.company_profile import company_card
     from agent.proposal_grounding import ground
-    from agent.proposal_writer import _page_budget, document_text, unverified_numbers, write_document
+    from agent.proposal_writer import (_page_budget, document_text, notes_text, unverified_numbers,
+                                       write_document, writer_session_id)
     from utils import bid_files
     from utils.docx_writer import estimate_pages, front_matter, render
 
@@ -96,11 +97,17 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
     try:
         bid_files.bid_folder(organization_id, opportunity_id)  # before spending a model call
         source = store.source_text(organization_id, opportunity_id)
-        doc = write_document(organization_id, opp, row, item, source, employee_email)
+        # A rewrite picks up from this document's last draft (the writer's own session) and the
+        # problems found in it; what the person told the writer counts as a source.
+        rewrite = any(f.get("generated") for f in item.get("files") or [])
+        doc = write_document(organization_id, opp, row, item, source, employee_email,
+                             session_id=writer_session_id(opportunity_id, item_id), rewrite=rewrite)
         card = company_card(organization_id)
+        notes = notes_text(item.get("writer_notes"))
         # Facts from the library, claims checked against their own files, notes flagged.
-        gaps = list(doc.gaps) + ground(doc, organization_id, employee_email, source, card["name"] or "")
-        unverified = unverified_numbers(doc, organization_id, source)
+        gaps = list(doc.gaps) + ground(doc, organization_id, employee_email, source,
+                                       card["name"] or "", notes)
+        unverified = unverified_numbers(doc, organization_id, f"{source}\n{notes}")
         if unverified:
             gaps.append("Check these figures and numbers, which aren't in your documents: " + ", ".join(unverified))
         content = render(doc, opp.get("solicitation_number"), row.get("format_rules"),

@@ -221,12 +221,24 @@ def generate(opportunity_id: str, current_user: dict = Depends(get_current_user)
     return get_requirements_store().get(org, opportunity_id)
 
 
+class WriteRequest(BaseModel):
+    note: str | None = None  # what the person wants the writer to know: an answer from the CO, a fix
+
+
 @router.post("/items/{item_id}/write")
-def write_item(opportunity_id: str, item_id: str, current_user: dict = Depends(get_current_user)) -> dict:
-    """Write, or rewrite, one document."""
+def write_item(opportunity_id: str, item_id: str, body: WriteRequest | None = None,
+               current_user: dict = Depends(get_current_user)) -> dict:
+    """Write, or rewrite, one document. A note is kept on the line, so every later rewrite of
+    this document still knows it."""
     org = _scope(opportunity_id, current_user)
     from tasks.proposal_tasks import queue_item
 
+    note = ((body.note if body else None) or "").strip()
+    if note:
+        if len(note) > 4000:
+            raise HTTPException(status_code=400, detail="Keep the note under 4,000 characters.")
+        get_requirements_store().add_writer_note(org, opportunity_id, item_id, note,
+                                                 current_user.get("email") or "")
     queue_item(opportunity_id, org, item_id, _reader(current_user))
     return get_requirements_store().get(org, opportunity_id)
 

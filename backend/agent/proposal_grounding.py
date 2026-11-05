@@ -102,7 +102,7 @@ def _flag(text: str) -> str:
 
 class _Grounder:
     def __init__(self, organization_id: str, employee_email: str | None, solicitation: str,
-                 company: str):
+                 company: str, notes: str = ""):
         self.org = organization_id
         self.store = get_library_store()
         self.rows = {r["item_id"]: r for r in self.store.analysed(organization_id, email=employee_email)}
@@ -115,12 +115,18 @@ class _Grounder:
             for p in r.get("people") or []:
                 if p.get("name"):
                     self.people.setdefault(_norm(p["name"]), (p, r))
-        self.solicitation = _tokens(solicitation)
+        # What the person told the writer counts like the solicitation: restating it isn't an
+        # unsourced claim, and a paragraph may cite it as the file `notes`.
+        self.solicitation = _tokens(f"{solicitation} {notes}")
         self.company = company
         self._texts: dict[str, tuple[str, set[str]]] = {}
         self._parts: dict[tuple[str, str], tuple[str, set[str]]] = {}
         self._everything: str | None = None
         self.gaps: list[str] = []
+        self.prose_sources = set(self.rows)
+        if notes.strip():
+            self._texts["notes"] = (_tokens(notes), _numbers(notes))
+            self.prose_sources.add("notes")
 
     def _load(self, item_id: str) -> tuple[str, set[str]]:
         """A file's words, and the numbers in it ("24x7" holds 24 and 7; "6,500" is 6500)."""
@@ -219,7 +225,7 @@ class _Grounder:
                     out[-1] = out[-1].rstrip(".") + plain
                 continue
             if refs:
-                if not any(self.proven(plain, sid, q, set(self.rows)) for sid, q in refs):
+                if not any(self.proven(plain, sid, q, self.prose_sources) for sid, q in refs):
                     self.gaps.append(f'Not backed by the cited file: "{plain[:160]}"')
                     plain = _flag(plain)
             elif self._uncited_fact(plain):
@@ -332,11 +338,11 @@ class _Grounder:
 
 
 def ground(doc, organization_id: str, employee_email: str | None, solicitation_text: str,
-           company: str) -> list[str]:
+           company: str, notes: str = "") -> list[str]:
     """Apply all of the above to `doc` in place. Returns what a reviewer must look at."""
     from agent.proposal_writer import document_text
 
-    g = _Grounder(organization_id, employee_email, solicitation_text, company)
+    g = _Grounder(organization_id, employee_email, solicitation_text, company, notes)
     for s in doc.sections:
         s.heading = g.style(s.heading)
         s.paragraphs = [g.prose(t) for t in s.paragraphs]

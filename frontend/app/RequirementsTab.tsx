@@ -119,15 +119,21 @@ function Item({
     },
   });
 
+  const [rewriting, setRewriting] = useState(false);
   const write = useMutation({
-    mutationFn: () => writeRequirementItem(oppId, item.id),
-    onSuccess: onRow,
+    mutationFn: (note?: string) => writeRequirementItem(oppId, item.id, note),
+    onSuccess: (r) => {
+      onRow(r);
+      setRewriting(false);
+    },
     onError: fail,
   });
   const production = item.production ?? "write";
   const owner = OWNER[production];
   const gaps = item.gaps ?? [];
   const busy = item.gen_status === "queued" || item.gen_status === "writing";
+  // Once Collecct has drafted it, writing again is a rewrite — even after a failed attempt.
+  const drafted = item.files.some((f) => f.generated);
 
   const saveEdit = () => {
     edit.mutate({ title: title.trim() || item.title, detail, page_limit: limit.trim() || null });
@@ -227,16 +233,20 @@ function Item({
               <button
                 className="mini-btn"
                 disabled={busy || write.isPending}
-                onClick={() => {
-                  // The file is the online master by now, so rewriting replaces people's edits.
-                  if (item.gen_status === "written" && !window.confirm("Rewrite this file? It replaces the SharePoint copy, including any edits. The old version stays in SharePoint's version history.")) return;
-                  write.mutate();
-                }}
+                onClick={() => (drafted ? setRewriting(true) : write.mutate(undefined))}
               >
-                {item.gen_status === "written" ? "Rewrite" : "Write this"}
+                {drafted ? "Rewrite" : "Write this"}
               </button>
             )}
           </div>
+        )}
+        {rewriting && (
+          <RewriteDialog
+            item={item}
+            pending={write.isPending}
+            onCancel={() => setRewriting(false)}
+            onRewrite={(note) => write.mutate(note)}
+          />
         )}
         <input
           ref={fileRef}
@@ -280,6 +290,79 @@ function Item({
         )}
       </div>
     </li>
+  );
+}
+
+/** Rewrite one document, telling the writer anything new first: an answer from the contracting
+ *  officer, a correction, a fact about the company. The note is optional and kept for later rewrites. */
+function RewriteDialog({ item, pending, onCancel, onRewrite }: {
+  item: RequirementItem;
+  pending: boolean;
+  onCancel: () => void;
+  onRewrite: (note?: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  const told = item.writer_notes ?? [];
+  const asks = (item.gaps ?? []).filter((g) => g.startsWith("Ask the contracting officer:"));
+  return (
+    <div className="rev-scrim" onClick={onCancel}>
+      <div
+        className="nudge-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Rewrite ${item.title}`}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.key === "Escape" && onCancel()}
+      >
+        <div className="rev-head">
+          <div className="min-w-0">
+            <div className="rev-email">Rewrite “{item.title}”</div>
+            <div className="rev-sub">The writer starts from its last draft and the problems found in it.</div>
+          </div>
+          <button className="sheet-btn" onClick={onCancel} aria-label="Close" title="Close">✕</button>
+        </div>
+        <div className="nudge-body">
+          {asks.length > 0 && (
+            <div className="nudge-why">
+              <span className="nudge-why-label">Questions it had for the contracting officer</span>
+              <ul className="req-gaps">
+                {asks.map((g, i) => <li key={i}>{g.replace("Ask the contracting officer: ", "")}</li>)}
+              </ul>
+            </div>
+          )}
+          {told.length > 0 && (
+            <div className="nudge-why">
+              <span className="nudge-why-label">Already told the writer</span>
+              <ul className="req-gaps">
+                {told.map((n, i) => <li key={i}>{n.text}</li>)}
+              </ul>
+            </div>
+          )}
+          <label className="nudge-field">
+            <span className="nudge-field-label">Anything the writer should know? (optional)</span>
+            <textarea
+              autoFocus
+              rows={6}
+              maxLength={4000}
+              className="nudge-textarea"
+              placeholder="e.g. The contracting officer confirmed coverage is 7 a.m. to 7 p.m. Eastern, Monday to Friday."
+              value={note}
+              disabled={pending}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </label>
+          <p className="nudge-note">
+            This replaces the SharePoint copy, including any edits made there. The old version stays in SharePoint&apos;s version history.
+          </p>
+          <div className="nudge-actions">
+            <button className="act-btn" disabled={pending} onClick={() => onRewrite(note.trim() || undefined)}>
+              {pending ? "Starting…" : "Rewrite"}
+            </button>
+            <button className="act-link" disabled={pending} onClick={onCancel}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

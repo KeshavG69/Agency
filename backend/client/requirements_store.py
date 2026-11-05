@@ -135,6 +135,17 @@ class RequirementsStore:
             self._mirror(row)
         return row
 
+    def add_writer_note(self, organization_id: str, opportunity_id: str, item_id: str, text: str,
+                        by: str) -> Optional[dict]:
+        """What a person told the writer for this document. Notes add up: an answer given for one
+        rewrite still holds for the next."""
+        return self.rows.find_one_and_update(
+            {"organization_id": organization_id, "opportunity_id": opportunity_id, "items.id": item_id},
+            {"$push": {"items.$.writer_notes": {"text": text, "by": by, "at": _utc_now()}},
+             "$set": {"updated_at": _utc_now()}},
+            projection={"_id": 0, "source_text": 0}, return_document=ReturnDocument.AFTER,
+        )
+
     def add_item(self, organization_id: str, opportunity_id: str, title: str, kind: str, detail: str) -> Optional[dict]:
         item = _new_item(title=title, kind=kind, detail=detail, page_limit=None, format=None,
                          source_ref=None, quote="", verified=True, added_by_person=True)

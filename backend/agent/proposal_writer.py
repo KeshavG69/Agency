@@ -180,13 +180,70 @@ Reply with ONLY a JSON object matching this schema (no prose, no code fences):
 {schema}"""
 
 
+# ---- the writer's memory of each document --------------------------------------------------
+# Every document has its own Agno session, so a rewrite starts from what this writer did last
+# time: its brief and the draft it returned. Only that is remembered. The solicitation rides in
+# the system message, which history leaves out (it is resent fresh each run, never twice), and
+# tool calls aren't stored, so the memory is the conversation, not pages of library results.
+_SESSION_DB = None
+_KEEP_RUNS = 2
+
+
+def _session_db():
+    global _SESSION_DB
+    if _SESSION_DB is None:
+        from agno.db.mongo import MongoDb
+
+        _SESSION_DB = MongoDb(db_url=settings.MONGODB_URL, db_name=settings.MONGODB_DATABASE,
+                              session_collection="writer_sessions")
+    return _SESSION_DB
+
+
+def writer_session_id(opportunity_id: str, item_id: str) -> str:
+    return f"writer-{opportunity_id}-{item_id}"
+
+
+def _trim_session(session_id: str) -> None:
+    """Keep the stored session small: the last runs only, without their system message (the
+    solicitation, up to 160k characters, which history never reads back)."""
+    from agno.db.base import SessionType
+
+    try:
+        db = _session_db()
+        session = db.get_session(session_id=session_id, session_type=SessionType.AGENT)
+        if not session or not session.runs:
+            return
+        session.runs = session.runs[-_KEEP_RUNS:]
+        for run in session.runs:
+            run.messages = [m for m in run.messages or [] if m.role != "system"]
+        db.upsert_session(session)
+    except Exception as exc:  # noqa: BLE001 — a fat session is a cost, not a failure
+        logger.warning("Writer session %s: couldn't trim (%s)", session_id, exc)
+
+
+def notes_text(notes: list[dict] | None) -> str:
+    return "\n".join(f"- {n.get('text', '').strip()}" for n in notes or [] if n.get("text"))
+
+
 def write_document(organization_id: str, opp: dict, outline: dict, item: dict, source_text: str,
-                   employee_email: str | None = None) -> WrittenDocument:
-    """Draft one checklist item."""
+                   employee_email: str | None = None, *, session_id: str | None = None,
+                   rewrite: bool = False) -> WrittenDocument:
+    """Draft one checklist item, or rewrite it from the last draft, the problems the checks found
+    in it and what the person has told the writer since."""
     company, profile = company_context(organization_id)
     _, words = _page_budget(item.get("page_limit"))
+    notes = notes_text(item.get("writer_notes"))
+
+    context = (
+        f"SOLICITATION FILES:\n{source_text}\n\n"
+        f"HOW IT WILL BE SCORED: {json.dumps(outline.get('evaluation') or {})[:1500]}\n"
+        f"RULES THAT DISQUALIFY AN OFFER: {json.dumps([p.get('rule') for p in outline.get('pass_fail_rules') or []])[:2500]}"
+    )
 
     def build() -> Agent:
+        memory = dict(db=_session_db(), session_id=session_id, user_id=organization_id,
+                      add_history_to_context=True, num_history_runs=1,
+                      store_tool_messages=False) if session_id else {}
         return Agent(
             name="ProposalWriter",
             # The limit turns a hung call into a retry: left waiting, the line would sit on
@@ -195,23 +252,42 @@ def write_document(organization_id: str, opp: dict, outline: dict, item: dict, s
                                     reasoning_effort="low", timeout=300),
             tools=library_tools(organization_id, employee_email),
             instructions=_instructions(company, profile),
+            additional_context=context,
+            **memory,
         )
 
     guide = (_RFI_GUIDE if outline.get("solicitation_type") == "rfi"
              else _GUIDE.get(item.get("kind") or "", ""))
-    message = (
+    brief = (
         f"BID: {opp.get('title')} ({opp.get('solicitation_number') or 'no number'}), "
         f"{opp.get('agency') or 'agency not stated'}\n\n"
         f"DOCUMENT TO WRITE: {item.get('title')}\n"
         f"WHAT IT MUST CONTAIN: {item.get('detail') or 'see the solicitation'}\n"
         f"PAGE LIMIT: {item.get('page_limit') or 'none stated'} (write about {words} words)\n"
         f"WHERE IT IS ASKED FOR: {item.get('source_ref') or 'not stated'}\n"
-        f"{guide}\n\n"
-        f"HOW IT WILL BE SCORED: {json.dumps(outline.get('evaluation') or {})[:1500]}\n"
-        f"RULES THAT DISQUALIFY AN OFFER: {json.dumps([p.get('rule') for p in outline.get('pass_fail_rules') or []])[:2500]}\n\n"
-        f"SOLICITATION FILES:\n{source_text}\n\nReturn the JSON."
+        f"{guide}"
     )
-    return run_structured(build, message, WrittenDocument, label=f"Writer {str(item.get('title'))[:40]}")
+    told = ""
+    if notes:
+        told = (
+            "\n\nWHAT THE PERSON TOLD YOU (source id `notes`) — answers from the contracting "
+            "officer, corrections, facts about the company. Treat them as true and use them: they "
+            "replace any assumption or question they answer (drop those from `assumptions` and "
+            "`questions`). Cite them like a file: [[notes|exact words from the note]].\n" + notes
+        )
+    if rewrite:
+        flagged = "\n".join(f"- {g}" for g in (item.get("gaps") or [])[:40]) or "- nothing flagged"
+        message = (
+            "REWRITE this document. Your last draft is above (if you can't see it, write it fresh "
+            "from the brief below). Keep what was right; fix what the checks found:\n"
+            f"{flagged}{told}\n\nTHE BRIEF:\n{brief}\n\nReturn the whole document as JSON."
+        )
+    else:
+        message = f"{brief}{told}\n\nReturn the JSON."
+    doc = run_structured(build, message, WrittenDocument, label=f"Writer {str(item.get('title'))[:40]}")
+    if session_id:
+        _trim_session(session_id)
+    return doc
 
 
 def document_text(doc: WrittenDocument) -> str:
