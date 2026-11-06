@@ -234,7 +234,12 @@ def write_document(organization_id: str, opp: dict, outline: dict, item: dict, s
     _, words = _page_budget(item.get("page_limit"))
     notes = notes_text(item.get("writer_notes"))
 
+    from agent.capability_agent import matrix_brief
+    from client.capability_store import get_capability_store
+
+    matrix = matrix_brief(get_capability_store().get(organization_id, str(opp.get("id") or opp.get("_id") or "")))
     context = (
+        (f"{matrix}\n\n" if matrix else "") +
         f"SOLICITATION FILES:\n{source_text}\n\n"
         f"HOW IT WILL BE SCORED: {json.dumps(outline.get('evaluation') or {})[:1500]}\n"
         f"RULES THAT DISQUALIFY AN OFFER: {json.dumps([p.get('rule') for p in outline.get('pass_fail_rules') or []])[:2500]}"

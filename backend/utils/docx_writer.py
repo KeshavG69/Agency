@@ -327,7 +327,10 @@ def render(doc, solicitation: str | None, format_rules: dict | None, meta: dict 
 
     buf = io.BytesIO()
     d.save(buf)
-    return buf.getvalue()
+    from utils.office_props import clean
+
+    # The file's hidden author is the company, never the library that built it.
+    return clean(buf.getvalue(), company.get("name") or "")
 
 
 def estimate_pages(content: bytes, skip_cover: bool) -> int:

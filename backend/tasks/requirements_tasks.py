@@ -85,6 +85,10 @@ def read_requirements_task(self, opportunity_id: str, organization_id: str) -> d
     _fill_deadline(opportunity_id, organization_id, outline)
     if outline.solicitation_type == "rfi":
         _start_rfi(opportunity_id, organization_id)
+    else:  # an RFI is meant to take minutes; a matrix is for bids we write
+        from tasks.capability_tasks import queue_build
+
+        queue_build(opportunity_id, organization_id)
     return {"opportunity_id": opportunity_id, "status": "ready", "items": len(outline.items)}
 
 

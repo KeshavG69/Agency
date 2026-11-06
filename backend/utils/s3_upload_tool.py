@@ -107,6 +107,18 @@ def build_s3_upload_tool(on_uploaded: Optional[OnUploaded] = None):
 
             # Upload under a chat-artifacts namespace so we don't collide with
             # the user's actual proposal documents.
+            # Our generated Office files carry the tool's name in their hidden properties
+            # (python-docx, python-pptx, openpyxl); strip it before anyone downloads the file.
+            if filename.lower().endswith((".docx", ".pptx", ".xlsx")):
+                from utils.office_props import clean
+
+                with open(local_path, "rb") as f:
+                    raw = f.read()
+                cleaned = clean(raw)
+                if cleaned is not raw:
+                    with open(local_path, "wb") as f:
+                        f.write(cleaned)
+
             storage = get_idrive_storage()
             artifact_id = uuid.uuid4().hex[:12]
             url, object_key = storage.upload_document(

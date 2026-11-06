@@ -16,6 +16,7 @@ import tasks.action_plan_tasks  # noqa: E402,F401
 import tasks.agent_tasks  # noqa: E402,F401
 import tasks.analyst_tasks  # noqa: E402,F401
 import tasks.backfill_tasks  # noqa: E402,F401
+import tasks.capability_tasks  # noqa: E402,F401
 import tasks.capture_tasks  # noqa: E402,F401
 import tasks.contacts_tasks  # noqa: E402,F401
 import tasks.library_tasks  # noqa: E402,F401

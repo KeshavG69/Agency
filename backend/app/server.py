@@ -10,6 +10,7 @@ from routers import (
     actions,
     auth,
     calls,
+    capability,
     composio,
     contacts,
     documents,
@@ -119,6 +120,7 @@ app.include_router(intelligence.router)
 app.include_router(sharepoint.router)
 app.include_router(library.router)
 app.include_router(requirements.router)
+app.include_router(capability.router)
 app.include_router(mail.router)
 app.include_router(mail_triage.router)
 app.include_router(relationships.router)

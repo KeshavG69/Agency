@@ -630,3 +630,16 @@
 .req-email { display: flex; flex-direction: column; gap: 10px; }
 .req-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--faint); }
 .lib-upload-actions { display: flex; align-items: center; gap: 12px; }
+
+/* ---- capability matrix ---- */
+.cap-area { margin-top: 18px; }
+.cap-area-name { font-size: 13px; font-weight: 600; color: var(--ink); margin: 0 0 2px; display: flex; align-items: baseline; gap: 8px; }
+.cap-score { flex: none; width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cap-score.strong { color: var(--bid-ink); background: var(--accent-soft); }
+.cap-score.mid { color: var(--ink); background: var(--surface-2); }
+.cap-score.weak { color: var(--watch); background: var(--watch-soft); }
+.cap-gap { font-size: 12.5px; line-height: 1.45; color: var(--watch); margin: 0; }
+.cap-legend-toggle { margin-top: 2px; }
+.cap-legend { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.cap-legend li { display: flex; align-items: center; gap: 8px; }
+.cap-contacts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--ink); }

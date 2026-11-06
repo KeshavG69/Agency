@@ -541,6 +541,51 @@ export interface SubmissionEmail {
   body: string;
 }
 
+// ---- capability matrix ----------------------------------------------------------------------
+export interface CapEvidence {
+  kind: "contract" | "person" | "document";
+  name: string;
+  quote: string;
+  claim: string;
+  match: "same" | "related";
+  verified: boolean;
+  file?: string | null;
+  web_url?: string | null;
+}
+export interface CapRequirement {
+  id: string;
+  text: string;
+  source_ref?: string | null;
+  quote: string;
+  verified: boolean;
+  score: number;
+  model_score?: number | null;
+  rationale: string;
+  evidence: CapEvidence[];
+  gap?: string | null;
+  action?: string | null;
+}
+export interface CapabilityMatrix {
+  status: "building" | "ready" | "failed" | null;
+  error?: string | null;
+  areas?: { name: string; requirements: CapRequirement[] }[];
+  contacts?: { name: string; role?: string | null; email?: string | null; phone?: string | null; verified: boolean }[];
+  stats?: { requirements: number; gaps: number; strong: number; average: number | null; library_files?: number };
+  file?: { title: string; edit_url?: string | null } | null;
+  file_error?: string | null;
+  built_at?: string;
+  rubric: Record<string, string>;
+}
+const capUrl = (id: string) => `/api/opportunities/${id}/capability`;
+export async function fetchCapability(id: string): Promise<CapabilityMatrix> {
+  const { data } = await apiClient.get(capUrl(id));
+  return data;
+}
+export async function buildCapability(id: string): Promise<CapabilityMatrix> {
+  const { data } = await apiClient.post(`${capUrl(id)}/build`);
+  return data;
+}
+
 const reqUrl = (id: string) => `/api/opportunities/${id}/requirements`;
 
 export async function fetchRequirements(id: string): Promise<ProposalRequirements> {

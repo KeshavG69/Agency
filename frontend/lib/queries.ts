@@ -23,6 +23,7 @@ import {
   fetchOpportunitySharePointFiles,
   fetchPostedDates,
   fetchBidAccess,
+  fetchCapability,
   fetchRequirements,
   fetchSharePointGraph,
   fetchTodayPlan,
@@ -63,6 +64,7 @@ export const queryKeys = {
   opportunity: (id: string) => ["opportunity", id] as const,
   sharePointFiles: (id: string) => ["opportunity", id, "sharepoint-files"] as const,
   requirements: (id: string) => ["opportunity", id, "requirements"] as const,
+  capability: (id: string) => ["opportunity", id, "capability"] as const,
   counts: (p: PipelineParams) => ["counts", p] as const,
   facets: ["facets"] as const,
   postedDates: (p: PipelineParams) => ["posted-dates", p] as const,
@@ -266,6 +268,15 @@ export function bidAccessQuery(id: string) {
     queryKey: [...queryKeys.requirements(id), "access"],
     queryFn: () => fetchBidAccess(id),
     staleTime: 60_000,
+  });
+}
+
+export function capabilityQuery(id: string) {
+  return queryOptions({
+    queryKey: queryKeys.capability(id),
+    queryFn: () => fetchCapability(id),
+    staleTime: 15_000,
+    refetchInterval: (q) => (q.state.data?.status === "building" ? 5000 : false),
   });
 }
 
