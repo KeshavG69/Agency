@@ -56,6 +56,7 @@ import {
 } from "@/lib/data";
 import ContactsGraph from "./ContactsGraph";
 import RequirementsTab from "./RequirementsTab";
+import CapabilityTab from "./CapabilityTab";
 import SharePointGraph from "./SharePointGraph";
 import WorkflowSettings from "./WorkflowSettings";
 import FilePreview from "./FilePreview";
@@ -81,6 +82,7 @@ import {
   callPlanQuery,
   opportunityListQuery,
   opportunityQuery,
+  capabilityQuery,
   requirementsQuery,
   organizationQuery,
   queryKeys,
@@ -1838,6 +1840,7 @@ function Detail({
   // Read live, not from `opp`: this pane holds its own copy of the opportunity, which a tick in
   // the checklist doesn't refresh.
   const reqItems = useQuery(requirementsQuery(opp.id)).data?.items ?? [];
+  const capGaps = useQuery(capabilityQuery(opp.id)).data?.stats?.gaps;
 
   const tabs: { key: TabKey; label: string; count?: number | string }[] = [
     { key: "info", label: "Information" },
@@ -1847,6 +1850,7 @@ function Detail({
       // "7/11" rather than a bare count: how far along it is matters more than how many.
       count: reqItems.length ? `${reqItems.filter((i) => i.done).length}/${reqItems.length}` : undefined,
     },
+    { key: "capability", label: "Capability", count: capGaps ? `${capGaps} gaps` : undefined },
     { key: "contacts", label: "Contacts", count: opp.recommended_contacts?.length ?? 0 },
     { key: "documents", label: "Documents", count: docs.length },
     { key: "activity", label: "Activity", count: tasks.length },
@@ -1956,6 +1960,7 @@ function Detail({
       <div className="tab-body" key={tab}>
         {tab === "info" && <InfoTab opp={opp} />}
         {tab === "requirements" && <RequirementsTab opp={opp} />}
+        {tab === "capability" && <CapabilityTab opp={opp} />}
         {tab === "contacts" && (
           <ContactsTab
             opp={opp}

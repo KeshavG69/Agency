@@ -22,6 +22,29 @@ from client.library_store import get_library_store
 
 _PP_CATEGORIES = ("active_contract", "past_performance", "cpars", "past_proposal")
 
+# Files Collecct itself saved into SharePoint (drafts, matrices) get crawled into the library like
+# anything else. They are never proof of work the company did: citing one would be the AI quoting
+# itself. Cached briefly — a run makes many searches.
+_GENERATED: tuple[float, set[str]] = (0.0, set())
+
+
+def generated_item_ids() -> set[str]:
+    global _GENERATED
+    import time
+
+    if time.time() - _GENERATED[0] > 120:
+        from client.crm_store import get_crm_store
+
+        ids = {d["sharepoint_item_id"] for d in get_crm_store().documents.find(
+            {"sharepoint_item_id": {"$nin": [None, ""]}}, {"sharepoint_item_id": 1})}
+        _GENERATED = (time.time(), ids)
+    return _GENERATED[1]
+
+
+def _ours(rows: list[dict]) -> list[dict]:
+    skip = generated_item_ids()
+    return [r for r in rows if r.get("item_id") not in skip]
+
 
 def _cos(a: list[float] | None, b: list[float] | None) -> float:
     if not a or not b:
@@ -58,8 +81,8 @@ def _items(rows: list[dict], kind: str, query: str, keep) -> list[dict]:
 def find_past_performance(query: str, organization_id: str, employee_email: str | None = None,
                           agency: str | None = None, min_value_usd: float | None = None,
                           limit: int = 8) -> list[dict]:
-    rows = get_library_store().analysed(organization_id, email=employee_email,
-                                        categories=_PP_CATEGORIES, with_embedding=True)
+    rows = _ours(get_library_store().analysed(organization_id, email=employee_email,
+                                              categories=_PP_CATEGORIES, with_embedding=True))
     needle = (agency or "").strip().lower()
 
     def keep(c: dict) -> bool:
@@ -72,8 +95,8 @@ def find_past_performance(query: str, organization_id: str, employee_email: str 
 
 def find_resumes(query: str, organization_id: str, employee_email: str | None = None,
                  clearance: str | None = None, limit: int = 8) -> list[dict]:
-    rows = get_library_store().analysed(organization_id, email=employee_email,
-                                        categories=("resume",), with_embedding=True)
+    rows = _ours(get_library_store().analysed(organization_id, email=employee_email,
+                                              categories=("resume",), with_embedding=True))
     needle = (clearance or "").strip().lower()
     return _items(rows, "people", query,
                   lambda p: not needle or needle in (p.get("clearance") or "").lower())[:limit]
@@ -109,8 +132,9 @@ def library_tools(organization_id: str | None, employee_email: str | None) -> li
         Returns passages with their source file. Returns [] if nothing relevant."""
         from client.library_graph import search_passages
 
-        return json.dumps(search_passages(query, org, employee_email,
-                                          [category] if category else None), default=str)
+        skip = generated_item_ids()
+        found = search_passages(query, org, employee_email, [category] if category else None)
+        return json.dumps([p for p in found if p.get("id") not in skip], default=str)
 
     return [find_past_performance_tool, find_resumes_tool, search_library_tool]
 
