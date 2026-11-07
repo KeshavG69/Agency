@@ -12,6 +12,7 @@ import {
   type LibraryCounts,
   type LibraryDocument,
 } from "@/lib/data";
+import { storageName } from "@/lib/format";
 import { libraryQuery, queryKeys } from "@/lib/queries";
 import { useToastStore } from "@/lib/stores/toastStore";
 
@@ -70,7 +71,7 @@ function filePercent(files: File[], index: number, share: number) {
 
 // Shown until a file has a summary of its own, so a waiting row explains itself.
 const STAGE_NOTE: Partial<Record<LibraryDocument["status"], string>> = {
-  pending: "Saved in SharePoint. Syncing it into the library, about 2 minutes",
+  pending: "Saved. Syncing it into the library, about 2 minutes",
   analysing: "Reading it and sorting it into a category",
 };
 
@@ -162,7 +163,7 @@ function Detail({ doc, onClose }: { doc: LibraryDocument; onClose: () => void })
 
       {doc.web_url && (
         <a className="lib-open" href={doc.web_url} target="_blank" rel="noreferrer">
-          Open in SharePoint ↗
+          Open in {storageName(doc.web_url)} ↗
         </a>
       )}
       {doc.source === "upload" && (
@@ -441,7 +442,7 @@ export default function LibraryCatalogue({ isAdmin }: { isAdmin?: boolean }) {
                       {f.name}
                     </td>
                     <td>—</td>
-                    <td className="lib-muted">{pct < 100 ? "Uploading your file" : "Saving it to SharePoint"}</td>
+                    <td className="lib-muted">{pct < 100 ? "Uploading your file" : "Saving it to your storage"}</td>
                     <td className="lib-st">
                       {pct < 100 ? <Progress label={`Uploading ${pct}%`} pct={pct} /> : <Progress label="Saving…" />}
                     </td>

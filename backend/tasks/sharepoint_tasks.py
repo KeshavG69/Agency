@@ -12,7 +12,9 @@ from bson import ObjectId
 
 from app.worker import celery_app
 from client.sharepoint_graph import clear_structure, upsert_structure
+from utils import google_drive
 from utils.composio_utils import sharepoint_entity
+from utils.file_store import GOOGLE_DRIVE, is_current, provider
 from utils.organizations import get_organization_crud
 from utils.sharepoint_graph_client import crawl_all_sites_graph, graph_account, sp_rest_account
 
@@ -32,12 +34,14 @@ def sync_sharepoint_structure_task(self, organization_id: str, with_acl: bool = 
         return {"crawled": 0, "graphed": 0, "organization_id": None}
 
     entity = sharepoint_entity(org)
-    g_account = graph_account(entity)
-    if not g_account:
-        logger.warning("No SharePoint (Graph) connection for org %s — an admin must connect it.", org)
+    storage = provider(org)
+    if not storage:
+        logger.warning("No file storage connected for org %s — an admin must connect it.", org)
         return {"crawled": 0, "graphed": 0, "organization_id": org, "no_connection": True}
-    sp_account = sp_rest_account(entity) if with_acl else None
-    if with_acl and not sp_account:
+    on_google = storage == GOOGLE_DRIVE
+    g_account = google_drive.account(org) if on_google else graph_account(entity)
+    sp_account = sp_rest_account(entity) if with_acl and not on_google else None
+    if with_acl and not on_google and not sp_account:
         logger.warning("No SharePoint REST connection for org %s — site-group grants will "
                        "degrade to org-wide (company-internal) instead of exact emails.", org)
 
@@ -46,8 +50,11 @@ def sync_sharepoint_structure_task(self, organization_id: str, with_acl: bool = 
         logger.info("Org %s excludes %d SharePoint path(s) from ingestion", org, len(excluded_paths))
 
     try:
-        nodes = crawl_all_sites_graph(with_acl=with_acl, account_id=g_account, sp_account=sp_account,
-                                       excluded_paths=excluded_paths)
+        if on_google:
+            nodes = google_drive.crawl(g_account, with_acl=with_acl, excluded_paths=excluded_paths)
+        else:
+            nodes = crawl_all_sites_graph(with_acl=with_acl, account_id=g_account, sp_account=sp_account,
+                                          excluded_paths=excluded_paths)
     except Exception as exc:  # transient Graph / Composio errors -> retry
         logger.warning("SharePoint crawl failed: %s", exc)
         raise self.retry(exc=exc)
@@ -66,8 +73,8 @@ def sync_sharepoint_structure_task(self, organization_id: str, with_acl: bool = 
     # if an admin disconnected SharePoint mid-crawl (Composio deletes the connection + this same
     # task's own clear_structure runs on disconnect), persisting stale data now would resurrect
     # the org's graph right after they explicitly cleared it.
-    if not graph_account(entity):
-        logger.warning("SharePoint was disconnected mid-crawl for org %s — discarding this "
+    if provider(org) != storage:
+        logger.warning("Storage was disconnected mid-crawl for org %s — discarding this "
                        "crawl's results instead of resurrecting a cleared graph.", org)
         return {"crawled": len(nodes), "graphed": 0, "organization_id": org, "disconnected_mid_crawl": True}
 
@@ -101,7 +108,7 @@ def _file_solicitation_docs(org: str, opportunity_id: str, pointer: dict, crm) -
     import tempfile
 
     from client.idrive_storage import get_idrive_storage
-    from utils.sharepoint_writer import file_to_bid_subfolder
+    from utils.file_store import file_to_bid_subfolder
 
     docs = [d for d in crm.list_documents(opportunity_id) if d.get("agent_id") == "manual_upload"]
     storage = get_idrive_storage()
@@ -153,13 +160,11 @@ def provision_bid_folders_task(self, organization_id: str, opportunity_id: str) 
     if not opp:
         return {"skipped": "opportunity not found", "opportunity_id": opportunity_id}
 
-    from utils.sharepoint_writer import (
-        SharePointWriteError,
-        provision_bid_folders,
-    )
+    from utils.file_store import provision_bid_folders
+    from utils.sharepoint_writer import SharePointWriteError
 
     pointer = opp.get("sharepoint_folder")
-    if not pointer:
+    if not is_current(org, pointer):
         try:
             pointer = provision_bid_folders(org, opp)
         except RuntimeError as exc:  # precondition: not connected / not crawled — expected, skip

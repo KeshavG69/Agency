@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addAmendment,
@@ -352,7 +352,7 @@ function RewriteDialog({ item, pending, onCancel, onRewrite }: {
             />
           </label>
           <p className="nudge-note">
-            This replaces the SharePoint copy, including any edits made there. The old version stays in SharePoint&apos;s version history.
+            This replaces the saved copy, including any edits made there. The old version stays in the file&apos;s version history.
           </p>
           <div className="nudge-actions">
             <button className="act-btn" disabled={pending} onClick={() => onRewrite(note.trim() || undefined)}>
@@ -469,7 +469,7 @@ export default function RequirementsTab({ opp }: { opp: Opportunity }) {
 
   const setRow = (row: ProposalRequirements) => qc.setQueryData(queryKeys.requirements(opp.id), row);
   const read = useMutation({
-    mutationFn: () => readRequirements(opp.id),
+    mutationFn: (onlyIfNew: boolean) => readRequirements(opp.id, onlyIfNew),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.requirements(opp.id) }),
     onError: () => toast("Couldn't start reading — try again."),
   });
@@ -507,27 +507,42 @@ export default function RequirementsTab({ opp }: { opp: Opportunity }) {
     onError: () => toast("Couldn't add that — try again."),
   });
 
+  // A Bid gets read the first time anyone opens this tab. Only a Bid: reading also builds the
+  // capability matrix, which makes the bid's storage folder.
+  const { mutate: startRead } = read;
+  const unread = q.data?.status === "none" && opp.bid_decision === "Bid";
+  useEffect(() => {
+    if (unread) startRead(true);
+  }, [unread, startRead]);
+
   const r = q.data;
   if (q.isError && !r) return <div className="mail-err">Couldn&apos;t load the requirements.</div>;
   if (!r) return <p className="req-muted">Loading…</p>;
 
-  if (r.status === "none" || r.status === "failed") {
+  if (r.status === "failed" || (r.status === "none" && read.isError)) {
     return (
       <div className="req-empty">
         <div className="sec-title first">Required documents</div>
-        <p className="req-muted">
-          {r.status === "failed"
-            ? r.error
-            : "Collecct reads this solicitation's files and lists everything you must submit: volumes, page limits, forms, resumes, and how to submit."}
-        </p>
-        <button className="btn primary" disabled={read.isPending} onClick={() => read.mutate()}>
-          {r.status === "failed" ? "Try again" : "Read the requirements"}
+        <p className="req-muted">{r.error ?? "Couldn't start reading the solicitation's files."}</p>
+        <button className="btn primary" disabled={read.isPending} onClick={() => read.mutate(false)}>
+          Try again
         </button>
       </div>
     );
   }
 
-  if (r.status === "reading") {
+  if (r.status === "none" && opp.bid_decision !== "Bid") {
+    return (
+      <div className="req-empty">
+        <div className="sec-title first">Required documents</div>
+        <p className="req-muted">
+          Mark this opportunity as Bid and Collecct reads its files and lists everything you must submit.
+        </p>
+      </div>
+    );
+  }
+
+  if (r.status === "reading" || r.status === "none") {
     return (
       <div className="req-empty">
         <div className="sec-title first">Required documents</div>
@@ -585,7 +600,7 @@ export default function RequirementsTab({ opp }: { opp: Opportunity }) {
               e.target.value = "";
             }}
           />
-          <button className="sel-link" disabled={read.isPending} onClick={() => read.mutate()} title="Read the files again. Your ticks, notes and files are kept.">
+          <button className="sel-link" disabled={read.isPending} onClick={() => read.mutate(false)} title="Read the files again. Your ticks, notes and files are kept.">
             Re-read
           </button>
         </div>
@@ -596,7 +611,7 @@ export default function RequirementsTab({ opp }: { opp: Opportunity }) {
         <p className="req-muted">This is an RFI, so Collecct started writing straight away. Nothing goes out until you send it.</p>
       )}
       {access && !access.sharepoint_connected && (
-        <p className="req-warn">Connect SharePoint on the Library page first. Every file for this bid is saved there.</p>
+        <p className="req-warn">Connect SharePoint or Google Drive on the Library page first. Every file for this bid is saved there.</p>
       )}
 
       {r.status === "approved" && (

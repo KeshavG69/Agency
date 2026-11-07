@@ -60,12 +60,14 @@ def get_requirements(opportunity_id: str, current_user: dict = Depends(get_curre
 
 
 @router.post("/read")
-def read_now(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:
-    """Read (or re-read, after an amendment) the solicitation's files."""
+def read_now(opportunity_id: str, only_if_new: bool = False,
+             current_user: dict = Depends(get_current_user)) -> dict:
+    """Read (or re-read, after an amendment) the solicitation's files. `only_if_new` is the Bid's
+    first read, started by opening the tab: it must never restart one already there."""
     org = _scope(opportunity_id, current_user)
     from tasks.requirements_tasks import queue_read
 
-    queue_read(opportunity_id, org, only_if_new=False)
+    queue_read(opportunity_id, org, only_if_new=only_if_new)
     return {"status": "reading"}
 
 
@@ -73,14 +75,15 @@ def read_now(opportunity_id: str, current_user: dict = Depends(get_current_user)
 def access(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:
     """What this person can do with the bid's files, and where those files live."""
     org = _scope(opportunity_id, current_user)
-    from utils.composio_utils import sharepoint_entity
+    from utils.file_store import NAMES, provider
     from utils.org_settings import can_download
-    from utils.sharepoint_graph_client import graph_account
 
     opp = get_crm_store().get_opportunity(opportunity_id, org) or {}
+    storage = provider(org)
     return {
         "can_download": can_download(current_user),
-        "sharepoint_connected": bool(graph_account(sharepoint_entity(org))),
+        "sharepoint_connected": bool(storage),
+        "storage_name": NAMES.get(storage),
         "folder_url": (opp.get("sharepoint_folder") or {}).get("web_url"),
     }
 
@@ -246,6 +249,7 @@ def write_item(opportunity_id: str, item_id: str, body: WriteRequest | None = No
 def _package_files(org: str, opportunity_id: str, row: dict) -> list[tuple[str, bytes]]:
     """Every file on the checklist as it stands in SharePoint now, as (unique name, bytes)."""
     from utils import bid_files
+    from utils.scrub import clean_file
 
     crm = get_crm_store()
     out: list[tuple[str, bytes]] = []
@@ -265,7 +269,9 @@ def _package_files(org: str, opportunity_id: str, row: dict) -> list[tuple[str, 
                 logger.warning("Couldn't fetch %s from SharePoint: %s", f["title"], exc)
                 raise HTTPException(status_code=502, detail=f"Couldn't fetch {f['title']} from SharePoint.")
             used.add(name)
-            out.append((name, content))
+            # The package leaves the company (download or email): clean every file in it, a
+            # person's own uploads included, whose own properties are kept.
+            out.append((name, clean_file(name, content)))
     return out
 
 

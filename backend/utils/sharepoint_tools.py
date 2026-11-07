@@ -33,3 +33,30 @@ def sharepoint_tool_instructions() -> str:
 def load_sharepoint_tools(user_id: Optional[str] = None) -> list:
     """Return the Composio SharePoint tools as Agno toolkits for the agent."""
     return get_tools(list(sharepoint_action_slugs()), user_id=user_id)
+
+
+# Open a file by id, and nothing that searches: the connection is the admin's, so `search_sharepoint`
+# stays the only way to find a file, and it applies each employee's access.
+_GOOGLE_ACTIONS = ["GOOGLEDRIVE_GET_FILE_METADATA", "GOOGLEDRIVE_DOWNLOAD_FILE"]
+_GOOGLE_INSTRUCTIONS = """GOOGLE DRIVE: this company's files are in Google Drive, not SharePoint. \
+Ignore any SharePoint tool named above. `search_sharepoint` still finds its files. To open one, pass \
+the item id it returns as the file id to GOOGLEDRIVE_GET_FILE_METADATA or GOOGLEDRIVE_DOWNLOAD_FILE."""
+
+
+def load_storage_tools(organization_id: str) -> list:
+    """The file tools for whichever storage this company has connected."""
+    from utils.composio_utils import sharepoint_entity
+    from utils.file_store import GOOGLE_DRIVE, provider
+
+    entity = sharepoint_entity(organization_id)
+    if provider(organization_id) == GOOGLE_DRIVE:
+        return get_tools(_GOOGLE_ACTIONS, user_id=entity)
+    return load_sharepoint_tools(entity)
+
+
+def storage_tool_instructions(organization_id: str) -> str:
+    from utils.file_store import GOOGLE_DRIVE, provider
+
+    if provider(organization_id) == GOOGLE_DRIVE:
+        return _GOOGLE_INSTRUCTIONS
+    return sharepoint_tool_instructions()

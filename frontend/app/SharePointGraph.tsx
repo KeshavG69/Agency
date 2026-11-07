@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type SPNode } from "@/lib/data";
+import { storageName } from "@/lib/format";
 import { sharePointGraphQuery } from "@/lib/queries";
 import { useUiStore } from "@/lib/stores/uiStore";
 import ForceGraph, { type NodeVisual } from "./ForceGraph";
@@ -36,7 +37,7 @@ const card = (n: SPNode) => (
     {n.web_url && (
       <div style={{ marginTop: 8 }}>
         <a href={n.web_url} target="_blank" rel="noreferrer" style={{ color: "var(--bid-ink)", fontSize: 12.5 }}>
-          Open in SharePoint ↗
+          Open in {storageName(n.web_url)} ↗
         </a>
       </div>
     )}
@@ -234,16 +235,8 @@ function SPBySite({ nodes, edges }: { nodes: SPNode[]; edges: { source: string; 
 const WATCH_MS = 5 * 60_000;
 
 export default function SharePointGraph({
-  /** Whether SharePoint is connected, and how to connect it — so the empty state can carry
-      its own way forward instead of naming an action that lives 700px above it. */
-  connected,
-  onConnect,
-  connecting,
   isAdmin,
 }: {
-  connected?: boolean;
-  onConnect?: () => void;
-  connecting?: boolean;
   /** Admins can retry files that couldn't be read. */
   isAdmin?: boolean;
 } = {}) {
@@ -274,24 +267,19 @@ export default function SharePointGraph({
   if (q.isError && !data)
     return (
       <div className="graph-empty">
-        Couldn&apos;t load the SharePoint graph — connect SharePoint and sync first.
+        Couldn&apos;t load your folders — connect SharePoint or Google Drive and sync first.
       </div>
     );
   if (!data) return <div className="graph-empty">Loading structure…</div>;
-  // No SharePoint needed: documents can be uploaded directly, so the library itself still shows.
+  // No connected storage needed: documents can be uploaded directly, so the library itself still shows.
   if (data.nodes.length === 0)
     return (
       <div className="graph-wrap">
         <div className="graph-head">
           <div>
             <h2>Documents</h2>
-            <div className="graph-sub">Upload your company documents, or connect SharePoint</div>
+            <div className="graph-sub">Upload your company documents, or connect SharePoint or Google Drive</div>
           </div>
-          {!connected && onConnect && (
-            <button className="mini-btn" onClick={onConnect} disabled={connecting}>
-              {connecting ? "Opening Microsoft…" : "Connect SharePoint"}
-            </button>
-          )}
         </div>
         <LibraryCatalogue isAdmin={isAdmin} />
       </div>
@@ -311,7 +299,7 @@ export default function SharePointGraph({
       <div className="graph-sub">
         {s
           ? `${s.sites} sites · ${s.libraries} libraries · ${s.folders} folders · ${s.files} files`
-          : "SharePoint structure"}{" "}
+          : "Folder structure"}{" "}
         {view === "catalogue" ? "" : "· files hidden for clarity"}
       </div>
     </div>

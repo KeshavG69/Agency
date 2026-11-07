@@ -28,7 +28,7 @@ def build_capability_task(self, opportunity_id: str, organization_id: str,
     source = get_requirements_store().source_text(organization_id, opportunity_id)
     if not source.strip():
         store.mark_failed(organization_id, opportunity_id,
-                          "Read the requirements first: there is no solicitation text yet.")
+                          "Open the Requirements tab first, so Collecct can read the solicitation.")
         return {"opportunity_id": opportunity_id, "status": "failed"}
     # Without library search every requirement would come back "nothing in the library" — a
     # matrix of false gaps that looks real. Say what's wrong instead.

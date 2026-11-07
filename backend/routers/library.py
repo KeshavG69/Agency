@@ -42,11 +42,8 @@ async def upload_documents(files: list[UploadFile] = File(...),
     from client.idrive_storage import get_idrive_storage
     from tasks.library_tasks import analyse_document_task
     from tasks.sharepoint_tasks import sync_sharepoint_structure_task
-    from utils.sharepoint_writer import (
-        SharePointTransientError,
-        SharePointWriteError,
-        file_to_library,
-    )
+    from utils.file_store import file_to_library
+    from utils.sharepoint_writer import SharePointTransientError, SharePointWriteError
 
     added = []
     in_sharepoint = False
@@ -59,7 +56,7 @@ async def upload_documents(files: list[UploadFile] = File(...),
             sp = await asyncio.to_thread(file_to_library, org, name, data)
         except (SharePointWriteError, SharePointTransientError) as exc:
             logger.warning("Library upload to SharePoint failed for %s: %s", name, exc)
-            raise HTTPException(status_code=502, detail="SharePoint wouldn't take that file. An "
+            raise HTTPException(status_code=502, detail="Your file storage wouldn't take that file. An "
                                                         "admin may need to reconnect it with write access.")
         if sp:
             in_sharepoint = True

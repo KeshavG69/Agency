@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     #     native SharePoint site group (Owners/Members/Visitors), for EXACT per-person ACLs.
     COMPOSIO_SHAREPOINT_AUTH_CONFIG_ID: str = "ac_0AMz8kC7i7ML"
     COMPOSIO_SHAREPOINT_REST_AUTH_CONFIG_ID: str = "ac_8-hZJL5A6HFi"
+    # A company's files are in SharePoint OR Google Drive. Drive is one connection with the full
+    # `drive` scope: the library reads files people already have, not only ones Collecct made.
+    COMPOSIO_GOOGLEDRIVE_AUTH_CONFIG_ID: str = "ac_Q8YeegusNAQe"
     # Mail triage: verifies POST /api/webhooks/composio (OUTLOOK_MESSAGE_TRIGGER events).
     # From the Composio dashboard: Project Settings -> Webhook, after pointing the webhook
     # URL there at this backend's /api/webhooks/composio. MUST be set for the webhook to
@@ -155,6 +158,16 @@ class Settings(BaseSettings):
     # Writing the bid's documents. Set apart from DEFAULT_TEXT_MODEL because this text goes to
     # the government under the company's name.
     WRITER_MODEL: str = "anthropic/claude-haiku-5.5"
+    # The writer's prose is reworded by an open-weight model before it is rendered, so the
+    # writer's own text watermark doesn't reach the government (utils/rewrite_pass.py). A
+    # watermark is added by whoever runs the model, so the hosts are pinned to US inference hosts
+    # serving Gemma 4 at bf16/fp8, never Google's own API, with no fallback to anyone else.
+    # OpenRouter by default; it does NOT follow LLM_BASE_URL. To run it on the lab box instead
+    # (the only setup where nobody else runs the model), set REWRITE_BASE_URL to the tunnel and
+    # REWRITE_MODEL to the id it serves (gemma4-31b). Empty REWRITE_MODEL = off.
+    REWRITE_MODEL: str = "google/gemma-4-31b-it"
+    REWRITE_PROVIDERS: str = "deepinfra,crusoe,parasail,modal"
+    REWRITE_BASE_URL: str = ""
 
     # Capture agent — text-to-image generation via OpenRouter's Image API (POST /images).
     # NOTE: image generation always stays on OpenRouter — a self-hosted text model (Gemma)

@@ -32,8 +32,7 @@ from client.sharepoint_graph import search_sharepoint
 from utils.library_tools import LIBRARY_TOOLS_GUIDE, library_tools
 from models.mail import MailDraft, ReplyDraft
 from utils.agno_tools import create_reasoning_tool
-from utils.composio_utils import sharepoint_entity
-from utils.sharepoint_tools import load_sharepoint_tools, sharepoint_tool_instructions
+from utils.sharepoint_tools import load_storage_tools, storage_tool_instructions
 from utils.structured import arun_structured
 from utils.dates import date_context
 
@@ -76,7 +75,7 @@ def _signoff_rule(company: str, sender_name: str) -> str:
        {company}"""
 
 
-def _instructions(company: str, profile: str, sender_name: str = "") -> str:
+def _instructions(company: str, profile: str, sender_name: str = "", organization_id: str = "") -> str:
     return f"""\
 You are the business-development outreach writer for {company}. You draft the
 short email we send a contact BEFORE the pricing proposal — to open or warm the deal.
@@ -104,7 +103,7 @@ HOW TO WRITE IT (the house style):
 6. {_signoff_rule(company, sender_name)}
    Never leave any other [bracketed] fill-in-the-blank anywhere in the email.
 
-{sharepoint_tool_instructions()}
+{storage_tool_instructions(organization_id)}
 
 Also available: `search_sharepoint(query)` — searches the company's SharePoint structure graph
 (keyword + semantic) and follows the graph to return relevant docs/folders/lists with context.
@@ -152,10 +151,10 @@ def build_mail_agent(
             search_sharepoint_tool,
             *library_tools(organization_id, employee_email),
             # create_reasoning_tool(),
-            # SharePoint READ tools run under THIS ORG's SharePoint connection.
-            *load_sharepoint_tools(sharepoint_entity(organization_id or "")),
+            # File READ tools run under THIS ORG's storage connection.
+            *load_storage_tools(organization_id or ""),
         ],
-        instructions=_instructions(company, profile, _sender(employee_email)),
+        instructions=_instructions(company, profile, _sender(employee_email), organization_id or ""),
         debug_mode=True,
     )
 
@@ -298,7 +297,7 @@ def draft_outreach_batch(
 # even then it's a DRAFT sitting in their mailbox, never sent by us.
 
 
-def _reply_instructions(company: str, profile: str, sender_name: str = "") -> str:
+def _reply_instructions(company: str, profile: str, sender_name: str = "", organization_id: str = "") -> str:
     return f"""\
 You are the business-development rep for {company}, replying to an inbound email from a
 contact already engaged on one of our active pursuits.
@@ -320,7 +319,7 @@ HOW TO WRITE IT (the house style):
 6. {_signoff_rule(company, sender_name)}
    Never leave any other [bracketed] fill-in-the-blank anywhere in the reply.
 
-{sharepoint_tool_instructions()}
+{storage_tool_instructions(organization_id)}
 
 Also available: `search_sharepoint(query)` — searches the company's SharePoint structure
 graph (keyword + semantic) and follows the graph to relevant docs/folders/lists.
@@ -356,9 +355,9 @@ def build_reply_agent(
             search_sharepoint_tool,
             *library_tools(organization_id, employee_email),
             create_reasoning_tool(),
-            *load_sharepoint_tools(sharepoint_entity(organization_id or "")),
+            *load_storage_tools(organization_id or ""),
         ],
-        instructions=_reply_instructions(company, profile, _sender(employee_email)),
+        instructions=_reply_instructions(company, profile, _sender(employee_email), organization_id or ""),
         debug_mode=True,
     )
 

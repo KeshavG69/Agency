@@ -85,6 +85,7 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
                                        write_document, writer_session_id)
     from utils import bid_files
     from utils.docx_writer import estimate_pages, front_matter, render
+    from utils.rewrite_pass import rewrite_document
 
     store, crm = get_requirements_store(), get_crm_store()
     row = store.get(organization_id, opportunity_id)
@@ -107,6 +108,10 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
         # Facts from the library, claims checked against their own files, notes flagged.
         gaps = list(doc.gaps) + ground(doc, organization_id, employee_email, source,
                                        card["name"] or "", notes)
+        # The writer's prose, reworded by a model that adds no watermark. After grounding (the
+        # markers are gone, the facts are in) and before the number check, which so also covers
+        # the new wording.
+        gaps += rewrite_document(doc)
         unverified = unverified_numbers(doc, organization_id, f"{source}\n{notes}")
         if unverified:
             gaps.append("Check these figures and numbers, which aren't in your documents: " + ", ".join(unverified))

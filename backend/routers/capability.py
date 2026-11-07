@@ -22,7 +22,7 @@ def build_matrix(opportunity_id: str, current_user: dict = Depends(get_current_u
     """Build, or rebuild, from the solicitation text the requirements reader stored."""
     org = _scope(opportunity_id, current_user)
     if not get_requirements_store().source_text(org, opportunity_id).strip():
-        raise HTTPException(status_code=400, detail="Read the requirements first, so there is solicitation text to work from.")
+        raise HTTPException(status_code=400, detail="Open the Requirements tab first, so Collecct can read the solicitation.")
     from tasks.capability_tasks import queue_build
 
     queue_build(opportunity_id, org, _reader(current_user))

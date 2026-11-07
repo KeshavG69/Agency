@@ -368,21 +368,20 @@ def sharepoint_files(opportunity_id: str, current_user: dict = Depends(get_curre
     folder = opp.get("sharepoint_folder")
     if not folder:
         return {"connected": False, "folder": None, "files": []}
-    from utils.sharepoint_writer import (
-        SharePointNotConnectedError, SharePointReadError, list_bid_documents,
-    )
+    from utils.file_store import list_bid_documents
+    from utils.sharepoint_writer import SharePointNotConnectedError, SharePointReadError
 
     try:
         files = list_bid_documents(org, folder)
     except SharePointNotConnectedError:
         # A Bid folder exists but SharePoint has since been disconnected — don't pretend "empty".
         return {"connected": False, "folder": folder, "files": [],
-                "error": "SharePoint is disconnected — reconnect it to see this folder's files."}
+                "error": "Your file storage is disconnected — reconnect it to see this folder's files."}
     except SharePointReadError as exc:
         return {"connected": True, "folder": folder, "files": [], "error": str(exc)}
     except Exception as exc:  # noqa: BLE001 — surface as empty, don't 500 the detail view
         logger.warning("Live SharePoint listing failed for opp %s: %s", opportunity_id, exc)
-        return {"connected": True, "folder": folder, "files": [], "error": "Couldn't read the SharePoint folder just now."}
+        return {"connected": True, "folder": folder, "files": [], "error": "Couldn't read this folder just now."}
     return {"connected": True, "folder": folder, "files": files}
 
 

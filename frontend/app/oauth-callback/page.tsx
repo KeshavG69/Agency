@@ -12,7 +12,7 @@ import AuthShell from "@/app/auth/AuthShell";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const LABEL: Record<string, string> = { outlook: "Outlook", sharepoint: "SharePoint" };
+const LABEL: Record<string, string> = { outlook: "Outlook", sharepoint: "SharePoint", googledrive: "Google Drive" };
 
 function CallbackInner() {
   const router = useRouter();
@@ -84,6 +84,16 @@ function CallbackInner() {
               sessionStorage.removeItem("pendingProvider");
               sessionStorage.removeItem("spStage");
               setMsg("Connected — mapping your SharePoint documents…");
+              await syncSharePointStructure();
+              await sleep(800);
+              if (!cancelled) router.push(`/?connected=sharepoint`);
+              return;
+            }
+
+            if (provider === "googledrive") {
+              useConnectionStore.getState().setConnection("googledrive", true, s.connected_account_id);
+              sessionStorage.removeItem("pendingProvider");
+              setMsg("Connected — mapping your Google Drive documents…");
               await syncSharePointStructure();
               await sleep(800);
               if (!cancelled) router.push(`/?connected=sharepoint`);

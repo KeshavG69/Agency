@@ -12,6 +12,12 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": ["-c", "cd backend && redis-cli ping && uv run sh start.sh"],
       "port": 8000
+    },
+    {
+      "name": "backend-no-beat",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd backend && redis-cli ping && (SERVICE_ROLE=worker uv run sh start.sh &) && SERVICE_ROLE=web uv run sh start.sh"],
+      "port": 8000
     }
   ]
 }

@@ -70,14 +70,18 @@ def generate_image(
     item = items[0]
     ext = _EXT_BY_MIME.get((item.get("media_type") or "image/png").lower(), "png")
 
+    # The generator stamps its images with C2PA Content Credentials and other metadata. Drop it
+    # here, so the image is clean wherever it ends up: shown alone or embedded in a document.
+    from utils.scrub import clean_image
+
     b64 = item.get("b64_json")
     if b64:
-        return base64.b64decode(b64), ext
+        return clean_image(base64.b64decode(b64)), ext
     # Some providers return a URL instead of inline base64 — fetch it.
     dl = item.get("url")
     if dl:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             r2 = client.get(dl)
             r2.raise_for_status()
-            return r2.content, ext
+            return clean_image(r2.content), ext
     raise RuntimeError("OpenRouter image response had neither b64_json nor url")
