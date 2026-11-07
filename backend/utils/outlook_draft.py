@@ -48,15 +48,22 @@ def _upload_large(account: str, message_id: str, name: str, content: bytes) -> N
 
 def create_draft(user_email: str, to: list[str], subject: str, body: str,
                  attachments: list[tuple[str, bytes]]) -> dict:
-    """Returns {"id", "web_link"}. Raises OutlookNotConnected if this user hasn't connected."""
+    """Returns {"id", "web_link"}. Raises OutlookNotConnected if this user hasn't connected.
+
+    The last gate before anything leaves: the subject and body lose hidden characters, and every
+    attachment is cleaned (utils/scrub.py) — including files a person uploaded, whose own
+    properties are kept."""
+    from utils.scrub import clean_file, clean_text
+
     status = connection_status("outlook", user_email)
     account = status.get("connected_account_id") if status.get("connected") else None
     if not account:
         raise OutlookNotConnected(user_email)
 
+    attachments = [(name, clean_file(name, content)) for name, content in attachments]
     _, msg = _graph_request("POST", "me/messages", account, body={
-        "subject": subject,
-        "body": {"contentType": "Text", "content": body},
+        "subject": clean_text(subject),
+        "body": {"contentType": "Text", "content": clean_text(body)},
         "toRecipients": [{"emailAddress": {"address": a}} for a in to],
     })
     message_id = (msg or {}).get("id")

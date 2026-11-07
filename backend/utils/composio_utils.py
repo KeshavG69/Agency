@@ -179,8 +179,14 @@ def send_outlook_email(args: dict, user_id: str) -> dict:
     This is an OUTWARD action — only ever call it in response to an explicit
     human 'Send' click, never automatically. Returns {successful, error, data}.
     """
+    from utils.scrub import clean_text
+
     client = get_composio_client()
     payload = dict(args)
+    # Nothing invisible leaves in the mail: zero-width characters, odd spaces, bidi controls.
+    for key in ("subject", "body"):
+        if isinstance(payload.get(key), str):
+            payload[key] = clean_text(payload[key])
     payload.setdefault("user_id", "me")  # the Graph mailbox ('me' = the connected user)
     resp = client.tools.execute(
         "OUTLOOK_SEND_EMAIL",
@@ -639,10 +645,12 @@ def create_outlook_draft_reply(message_id: str, comment: str, user_id: str) -> d
     Drafts folder for THEM to review and send. We never send it ourselves; this mirrors
     the outward-action discipline of `send_outlook_email` (human-approved only), just one
     notch more cautious: not even a send call exists on this path, only a draft."""
+    from utils.scrub import clean_text
+
     client = get_composio_client()
     resp = client.tools.execute(
         "OUTLOOK_CREATE_DRAFT_REPLY",
-        {"message_id": message_id, "comment": comment, "user_id": "me"},
+        {"message_id": message_id, "comment": clean_text(comment), "user_id": "me"},
         user_id=user_id, dangerously_skip_version_check=True,
     )
     ok, err = _resp_ok(resp)
