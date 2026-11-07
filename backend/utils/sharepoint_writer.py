@@ -241,6 +241,8 @@ def edit_url(web_url: str | None) -> str | None:
     if not web_url:
         return None
     p = urlsplit(web_url)
+    if p.netloc.endswith("google.com"):  # a Google Drive link already opens the file to edit
+        return web_url
     q = dict(parse_qsl(p.query, keep_blank_values=True))
     q["web"] = "1"
     q["action"] = "edit"

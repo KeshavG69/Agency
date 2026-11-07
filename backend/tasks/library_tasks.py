@@ -105,7 +105,7 @@ def analyse_document_task(self, organization_id: str, item_id: str) -> dict:
     from agent.library_agent import REVIEW_BELOW, analyse_document
     from client.graph_store import _embed_query
     from client.library_graph import summary_text, write_document
-    from utils.sharepoint_writer import download_drive_item
+    from utils.file_store import download
 
     store = get_library_store()
     row = store.claim(organization_id, item_id)
@@ -114,7 +114,7 @@ def analyse_document_task(self, organization_id: str, item_id: str) -> dict:
     name = row.get("name") or item_id
     try:
         content = (_uploaded_bytes(row) if row.get("source") == "upload"
-                   else download_drive_item(organization_id, row.get("drive_id"), item_id))
+                   else download(organization_id, row.get("drive_id"), item_id))
         text = _parse_bytes(content, row.get("ext"), name)
         if not text or len(text.strip()) < 40:
             store.mark(organization_id, item_id, status=FAILED,

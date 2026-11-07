@@ -596,7 +596,8 @@ export async function fetchRequirements(id: string): Promise<ProposalRequirement
 /** What this person can do with the bid's files, and where they live. */
 export interface BidAccess {
   can_download: boolean;
-  sharepoint_connected: boolean;
+  sharepoint_connected: boolean; // true for either storage
+  storage_name?: string | null; // "SharePoint" or "Google Drive"
   folder_url?: string | null;
 }
 
@@ -612,8 +613,8 @@ export async function addAmendment(id: string, files: File[]): Promise<void> {
   await apiClient.post(`${reqUrl(id)}/amendment`, form);
 }
 
-export async function readRequirements(id: string): Promise<void> {
-  await apiClient.post(`${reqUrl(id)}/read`);
+export async function readRequirements(id: string, onlyIfNew = false): Promise<void> {
+  await apiClient.post(`${reqUrl(id)}/read`, null, { params: { only_if_new: onlyIfNew } });
 }
 
 export async function editRequirementItem(
@@ -904,6 +905,16 @@ export async function connectSharePoint(callbackUrl: string): Promise<{ auth_url
 export async function connectSharePointRest(callbackUrl: string): Promise<{ auth_url: string }> {
   const { data } = await apiClient.post("/api/composio/connect", {
     provider: "sharepoint_rest",
+    callback_url: callbackUrl,
+  });
+  return data;
+}
+
+// Google Drive is one connection, so it needs no chain and disconnects through the plain
+// endpoint, which also clears the library it produced.
+export async function connectGoogleDrive(callbackUrl: string): Promise<{ auth_url: string }> {
+  const { data } = await apiClient.post("/api/composio/connect", {
+    provider: "googledrive",
     callback_url: callbackUrl,
   });
   return data;

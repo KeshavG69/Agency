@@ -7,7 +7,7 @@ import logging
 
 from app.worker import celery_app
 from auth.database import get_mongodb_client
-from utils.composio_utils import connection_status, sharepoint_entity
+from utils.file_store import provider
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ def daily_resync() -> dict:
     for o in db["organizations"].find({}, {"_id": 1}):
         oid = str(o["_id"])
         try:
-            if connection_status("sharepoint", sharepoint_entity(oid)).get("connected"):
+            if provider(oid):
                 sync_sharepoint_structure_task.delay(oid)
                 sp += 1
         except Exception as exc:  # noqa: BLE001

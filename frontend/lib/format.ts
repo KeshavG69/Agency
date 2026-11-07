@@ -25,3 +25,8 @@ export function dueLabel(s?: string | null): { text: string; tone: DueTone; days
     days,
   };
 }
+
+/** Which storage a link points into, for "Open in …" labels. */
+export function storageName(url?: string | null): string {
+  return url?.includes("google.com") ? "Google Drive" : "SharePoint";
+}

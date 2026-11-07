@@ -50,7 +50,7 @@ export default function SharePointFolderPicker({
         setNodes(res.nodes);
         setExcluded(new Set(res.excluded_paths));
       })
-      .catch(() => setError("Couldn't read the SharePoint structure. Make sure Library is connected."))
+      .catch(() => setError("Couldn't read your folders. Make sure Library is connected."))
       .finally(() => setLoading(false));
   }, []);
 
@@ -122,12 +122,12 @@ export default function SharePointFolderPicker({
         <div className="crm-body">
           {loading ? (
             <div className="crm-state">
-              <span className="spin" /> Reading your SharePoint structure…
+              <span className="spin" /> Reading your folders…
             </div>
           ) : error ? (
             <div className="crm-state crm-err">{error}</div>
           ) : tree.length === 0 ? (
-            <div className="crm-state">No SharePoint structure found — connect and sync Library first.</div>
+            <div className="crm-state">No folders found — connect and sync Library first.</div>
           ) : (
             <div className="crm-rows">
               {tree.map((n) => (

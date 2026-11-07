@@ -60,12 +60,14 @@ def get_requirements(opportunity_id: str, current_user: dict = Depends(get_curre
 
 
 @router.post("/read")
-def read_now(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:
-    """Read (or re-read, after an amendment) the solicitation's files."""
+def read_now(opportunity_id: str, only_if_new: bool = False,
+             current_user: dict = Depends(get_current_user)) -> dict:
+    """Read (or re-read, after an amendment) the solicitation's files. `only_if_new` is the Bid's
+    first read, started by opening the tab: it must never restart one already there."""
     org = _scope(opportunity_id, current_user)
     from tasks.requirements_tasks import queue_read
 
-    queue_read(opportunity_id, org, only_if_new=False)
+    queue_read(opportunity_id, org, only_if_new=only_if_new)
     return {"status": "reading"}
 
 
@@ -73,14 +75,15 @@ def read_now(opportunity_id: str, current_user: dict = Depends(get_current_user)
 def access(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:
     """What this person can do with the bid's files, and where those files live."""
     org = _scope(opportunity_id, current_user)
-    from utils.composio_utils import sharepoint_entity
+    from utils.file_store import NAMES, provider
     from utils.org_settings import can_download
-    from utils.sharepoint_graph_client import graph_account
 
     opp = get_crm_store().get_opportunity(opportunity_id, org) or {}
+    storage = provider(org)
     return {
         "can_download": can_download(current_user),
-        "sharepoint_connected": bool(graph_account(sharepoint_entity(org))),
+        "sharepoint_connected": bool(storage),
+        "storage_name": NAMES.get(storage),
         "folder_url": (opp.get("sharepoint_folder") or {}).get("web_url"),
     }
 

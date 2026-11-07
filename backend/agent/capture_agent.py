@@ -26,12 +26,11 @@ from client.sharepoint_graph import search_sharepoint
 from models.capture import CaptureOutput
 from utils.agno_tools import create_exa_web_search_tool, create_reasoning_tool
 from utils.library_tools import LIBRARY_TOOLS_GUIDE, library_tools
-from utils.composio_utils import sharepoint_entity
 from utils.doc_parse import document_context
 from utils.python_repl_tool import python_repl_tool, set_session_id
 from utils.s3_upload_tool import build_s3_upload_tool
-from utils.sharepoint_tools import load_sharepoint_tools, sharepoint_tool_instructions
-from utils.sharepoint_writer import file_to_capture_docs
+from utils.file_store import file_to_capture_docs
+from utils.sharepoint_tools import load_storage_tools, storage_tool_instructions
 from utils.structured import coerce_output
 from utils.dates import RECORD_BOOKKEEPING_FIELDS, date_context
 
@@ -52,7 +51,7 @@ def get_capture_skills() -> Skills:
     return Skills(loaders=[LocalSkills(str(_SKILLS_DIR), validate=True)])
 
 
-def _instructions(company: str, profile: str) -> str:
+def _instructions(company: str, profile: str, organization_id: str = "") -> str:
     return f"""\
 You are a capture strategist AND proposal writer for {company} (a government contractor).
 You are given ONE opportunity. Do BOTH jobs in a single pass:
@@ -152,7 +151,7 @@ Ground everything in your research, our SharePoint past performance, and the opp
 Be honest about unknowns — never fabricate facts about the customer, competitors, or our past
 performance.
 
-{sharepoint_tool_instructions()}
+{storage_tool_instructions(organization_id)}
 
 After generating + uploading the document(s), your FINAL message must be ONLY this JSON —
 no prose, no markdown fences, no <reasoning> tags:
@@ -197,10 +196,10 @@ def build_capture_agent(
         import os
 
         from utils.python_repl_tool import ensure_session_dir
-        from utils.sharepoint_writer import download_drive_item
+        from utils.file_store import download
 
         try:
-            content = download_drive_item(str(organization_id or ""), drive_id, item_id)
+            content = download(str(organization_id or ""), drive_id, item_id)
         except Exception as exc:  # noqa: BLE001 — report to the model, never crash the run
             return ToolResult(content=f"Could not fetch SharePoint file {item_id}: {exc}")
 
@@ -300,12 +299,12 @@ def build_capture_agent(
             *library_tools(organization_id, employee_email),
             fetch_sharepoint_image,
             generate_image,
-            *load_sharepoint_tools(sharepoint_entity(organization_id or "")),
+            *load_storage_tools(organization_id or ""),
             python_repl_tool,
             upload_tool,
         ],
         skills=get_capture_skills(),
-        instructions=_instructions(company, profile),
+        instructions=_instructions(company, profile, organization_id or ""),
         debug_mode=True,
     )
 

@@ -202,7 +202,7 @@ export default function WorkflowSettings({
             disabled={!isAdmin}
           />
           <div className="wf-hint">
-            Admins always can. Everyone else edits online in SharePoint and can&apos;t use Download
+            Admins always can. Everyone else edits online and can&apos;t use Download
             all or create the Outlook draft.
           </div>
         </div>

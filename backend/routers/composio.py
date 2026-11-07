@@ -40,12 +40,14 @@ PERSONAL_PROVIDERS = {"outlook", "gmail"}
 # are TWO Composio connections chained under one "Connect Library" click — see
 # SHAREPOINT_STAGES below and the sharepoint_graph_client module docstring for why both
 # are needed (Graph alone can't resolve native SharePoint site-group membership).
-ORG_PROVIDERS = {"sharepoint", "sharepoint_rest"}
+ORG_PROVIDERS = {"sharepoint", "sharepoint_rest", "googledrive"}
 SHAREPOINT_STAGES = ["sharepoint", "sharepoint_rest"]
+# A company's files are in one place, so connecting one storage needs the other disconnected.
+STORAGE_RIVAL = {"sharepoint": "googledrive", "googledrive": "sharepoint"}
 
 
 class ConnectRequest(BaseModel):
-    provider: str = "outlook"  # outlook | gmail | sharepoint
+    provider: str = "outlook"  # outlook | gmail | sharepoint | googledrive
     callback_url: Optional[str] = None  # where Composio redirects after auth
 
 
@@ -81,7 +83,7 @@ def _composio_entity(provider: str, current_user: dict, *, write: bool) -> str:
     p = provider.lower()
     if p in ORG_PROVIDERS:
         if write and current_user.get("role") != "admin":
-            raise HTTPException(status_code=403, detail="Only admins can connect SharePoint.")
+            raise HTTPException(status_code=403, detail="Only admins can connect file storage.")
         # Per-ORG entity: one SharePoint connection per organization (admins connect it,
         # the org's employees read it). Orgs never share a connection.
         return sharepoint_entity(str(current_user.get("organization_id") or ""))
@@ -99,6 +101,10 @@ def connect(req: ConnectRequest, current_user: dict = Depends(get_current_user))
     """
     _require_config(req.provider)
     entity = _composio_entity(req.provider, current_user, write=True)
+    rival = STORAGE_RIVAL.get(req.provider.lower())
+    if rival and connection_status(rival, entity).get("connected"):
+        raise HTTPException(status_code=409, detail="Disconnect your current file storage first. "
+                                                    "A company uses one at a time.")
     try:
         return connect_provider(req.provider, user_id=entity, callback_url=req.callback_url)
     except ValueError as e:
@@ -209,18 +215,22 @@ def browse_sharepoint_folders(current_user: dict = Depends(get_current_user)) ->
     from bson import ObjectId
 
     from utils.organizations import get_organization_crud
+    from utils import google_drive
     from utils.sharepoint_graph_client import crawl_all_sites_graph, graph_account
 
     org = str(current_user.get("organization_id") or "")
-    entity = sharepoint_entity(org)
-    g_account = graph_account(entity)
-    if not g_account:
-        raise HTTPException(status_code=400, detail="SharePoint (Graph) isn't connected yet.")
+    drive_account = google_drive.account(org)
+    g_account = graph_account(sharepoint_entity(org))
+    if not g_account and not drive_account:
+        raise HTTPException(status_code=400, detail="No file storage is connected yet.")
     try:
-        nodes = crawl_all_sites_graph(with_acl=False, account_id=g_account)
+        if g_account:
+            nodes = crawl_all_sites_graph(with_acl=False, account_id=g_account)
+        else:
+            nodes = google_drive.crawl(drive_account, with_acl=False, max_depth=1)
     except Exception as e:  # noqa: BLE001
-        logger.error("SharePoint folder browse failed for org %s: %s", org, e, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Couldn't read the SharePoint structure: {e}")
+        logger.error("Folder browse failed for org %s: %s", org, e, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Couldn't read your folders: {e}")
     excluded = get_organization_crud().get_sharepoint_excluded_paths(ObjectId(org))
     return {"nodes": nodes, "excluded_paths": excluded}
 

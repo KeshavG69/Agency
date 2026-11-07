@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     #     native SharePoint site group (Owners/Members/Visitors), for EXACT per-person ACLs.
     COMPOSIO_SHAREPOINT_AUTH_CONFIG_ID: str = "ac_0AMz8kC7i7ML"
     COMPOSIO_SHAREPOINT_REST_AUTH_CONFIG_ID: str = "ac_8-hZJL5A6HFi"
+    # A company's files are in SharePoint OR Google Drive. Drive is one connection with the full
+    # `drive` scope: the library reads files people already have, not only ones Collecct made.
+    COMPOSIO_GOOGLEDRIVE_AUTH_CONFIG_ID: str = "ac_Q8YeegusNAQe"
     # Mail triage: verifies POST /api/webhooks/composio (OUTLOOK_MESSAGE_TRIGGER events).
     # From the Composio dashboard: Project Settings -> Webhook, after pointing the webhook
     # URL there at this backend's /api/webhooks/composio. MUST be set for the webhook to

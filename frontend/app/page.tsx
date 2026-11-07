@@ -44,6 +44,7 @@ import {
   previewOutlookContacts,
   ingestOutlookContacts,
   type ContactCandidate,
+  connectGoogleDrive,
   connectSharePoint,
   connectSharePointRest,
   disconnectSharePoint,
@@ -90,7 +91,7 @@ import {
 } from "@/lib/queries";
 import { useCollecctCache } from "@/lib/cache";
 import { usePrefetchOpportunity } from "@/lib/use-prefetch";
-import { dueLabel } from "@/lib/format";
+import { dueLabel, storageName } from "@/lib/format";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useConnectionStore } from "@/lib/stores/connectionStore";
 import { organizationsApi } from "@/lib/api/organizations";
@@ -310,6 +311,8 @@ function Console({ user }: { user: User }) {
   const outlookConnected = outlook.connected;
   const outlookAccount = outlook.accountId;
   const spConnected = sharepoint.connected;
+  const googleDrive = useConnectionStore((s) => s.googledrive);
+  const driveConnected = googleDrive.connected;
 
   // Which providers are connected drives the Connect bars on Contacts and Library and the
   // Organisation panel — and nothing else. Checked when one of those is opened, once, rather
@@ -328,10 +331,14 @@ function Console({ user }: { user: User }) {
     getConnStatus("sharepoint")
       .then((s) => setConnection("sharepoint", s.connected, s.connected_account_id ?? null))
       .catch(() => {});
+    getConnStatus("googledrive")
+      .then((s) => setConnection("googledrive", s.connected, s.connected_account_id ?? null))
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wantsConnStatus]);
   const [connecting, setConnecting] = useState(false);
   const [spConnecting, setSpConnecting] = useState(false);
+  const [driveConnecting, setDriveConnecting] = useState(false);
   const [resyncing, setResyncing] = useState(false);
   const [spResyncing, setSpResyncing] = useState(false);
   // "Go refetch" signals for the graph views, now in the ui store so the graph components
@@ -669,6 +676,36 @@ function Console({ user }: { user: User }) {
     }
   };
 
+  const onConnectGoogleDrive = async () => {
+    setDriveConnecting(true);
+    setError(null);
+    try {
+      sessionStorage.setItem("pendingProvider", "googledrive");
+      const { auth_url } = await connectGoogleDrive(`${window.location.origin}/oauth-callback`);
+      window.location.href = auth_url;
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      sessionStorage.removeItem("pendingProvider");
+      setError(detail ?? "Couldn't start the Google Drive connection.");
+      setDriveConnecting(false);
+    }
+  };
+
+  const onDisconnectGoogleDrive = async () => {
+    if (!googleDrive.accountId) return;
+    setDriveConnecting(true);
+    setError(null);
+    try {
+      await disconnectOutlook(googleDrive.accountId); // the plain disconnect endpoint
+      setConnection("googledrive", false, null);
+      bumpSharePointRefresh(); // disconnecting clears the library server-side
+    } catch {
+      setError("Couldn't disconnect Google Drive.");
+    } finally {
+      setDriveConnecting(false);
+    }
+  };
+
   const onDisconnectOutlook = async () => {
     if (!outlookAccount) return;
     setConnecting(true);
@@ -750,10 +787,10 @@ function Console({ user }: { user: User }) {
     setError(null);
     try {
       await syncSharePointStructure();
-      setError("SharePoint resync started — it runs in the background.");
+      setError("Refresh started — it runs in the background.");
       bumpSharePointRefresh();
     } catch {
-      setError("Couldn't start the SharePoint resync.");
+      setError("Couldn't start the refresh.");
     } finally {
       setSpResyncing(false);
     }
@@ -1131,7 +1168,8 @@ function Console({ user }: { user: User }) {
         </section>
       ) : view === "documents" ? (
         <section className="graph-pane">
-          {isAdmin && (
+          {/* A company's files are in one place, so once one is connected the other is hidden. */}
+          {isAdmin && !driveConnected && (
             <ConnectBar
               connected={spConnected}
               connectedLabel="Library connected (SharePoint)"
@@ -1145,12 +1183,22 @@ function Console({ user }: { user: User }) {
               extraAction={{ label: "Select folders", onClick: () => setSpPickerOpen(true) }}
             />
           )}
-          <SharePointGraph
-            connected={spConnected}
-            connecting={spConnecting}
-            onConnect={onConnectSharePoint}
-            isAdmin={isAdmin}
-          />
+          {isAdmin && !spConnected && (
+            <ConnectBar
+              connected={driveConnected}
+              connectedLabel="Library connected (Google Drive)"
+              connectLabel="Connect your Library (Google Drive)"
+              hint="Org-wide. Reads this Google account's My Drive and shared drives so agents can ground on your library. Bids are saved in a Collecct Bids folder there."
+              busy={driveConnecting}
+              busyLabel="Opening Google…"
+              resyncing={spResyncing}
+              onConnect={onConnectGoogleDrive}
+              onDisconnect={onDisconnectGoogleDrive}
+              onResync={onResyncSharePoint}
+              extraAction={{ label: "Select folders", onClick: () => setSpPickerOpen(true) }}
+            />
+          )}
+          <SharePointGraph isAdmin={isAdmin} />
         </section>
       ) : view === "org" ? (
         <section className="graph-pane">
@@ -1527,6 +1575,7 @@ function ConnectBar({
   connectLabel,
   hint,
   busy,
+  busyLabel = "Opening Microsoft…",
   resyncing,
   onConnect,
   onDisconnect,
@@ -1538,6 +1587,7 @@ function ConnectBar({
   connectLabel: string;
   hint: string;
   busy: boolean;
+  busyLabel?: string;
   resyncing: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
@@ -1568,7 +1618,7 @@ function ConnectBar({
       ) : (
         <div className="cb-actions">
           <button className="mini-btn" onClick={onConnect} disabled={busy}>
-            {busy ? "Opening Microsoft…" : "Connect"}
+            {busy ? busyLabel : "Connect"}
           </button>
         </div>
       )}
@@ -2455,7 +2505,7 @@ function DocumentsTab({ opp }: { opp: Opportunity }) {
               <span className="doc-preview-link">Preview</span>
               <a
                 href="#"
-                title={d.sharepoint_url ? "Open in SharePoint" : "Open the file"}
+                title={d.sharepoint_url ? `Open in ${storageName(d.sharepoint_url)}` : "Open the file"}
                 onClick={async (e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -2472,7 +2522,7 @@ function DocumentsTab({ opp }: { opp: Opportunity }) {
                   }
                 }}
               >
-                {d.sharepoint_url ? "Open in SharePoint ↗" : "Open ↗"}
+                {d.sharepoint_url ? `Open in ${storageName(d.sharepoint_url)} ↗` : "Open ↗"}
               </a>
             </div>
           </div>
@@ -2498,7 +2548,7 @@ function DocumentsTab({ opp }: { opp: Opportunity }) {
       .catch(
         () =>
           alive &&
-          setSpResp({ connected: true, files: [], error: "Couldn't read the SharePoint folder just now." }),
+          setSpResp({ connected: true, files: [], error: "Couldn't read this folder just now." }),
       )
       .finally(() => alive && setSpLoading(false));
     return () => {
@@ -2523,23 +2573,23 @@ function DocumentsTab({ opp }: { opp: Opportunity }) {
 
   const spCard = sp?.web_url ? (
     <>
-      <div className="sec-title first">Bid workspace · SharePoint</div>
+      <div className="sec-title first">Bid workspace · {storageName(sp.web_url)}</div>
       <div className="sp-folder">
         <div className="sp-folder-top">
           <div className="sp-folder-name">📁 {sp.name}</div>
           <a className="sp-open" href={sp.web_url} target="_blank" rel="noreferrer">
-            Open in SharePoint ↗
+            Open in {storageName(sp.web_url)} ↗
           </a>
         </div>
         {/* Live folder contents, grouped by subfolder. Includes agent-written deliverables
             AND anything a person dropped straight into SharePoint. */}
         {spLoading && spResp === null ? (
-          <div className="sp-files-empty">Reading the SharePoint folder…</div>
+          <div className="sp-files-empty">Reading the folder…</div>
         ) : spError ? (
           <div className="sp-files-empty sp-files-error">{spError}</div>
         ) : grouped.length === 0 ? (
           <div className="sp-files-empty">
-            Folder is empty. Files added here — by the capture agents or by anyone in SharePoint —
+            Folder is empty. Files added here — by the capture agents or by anyone in {storageName(sp.web_url)} —
             show up automatically.
           </div>
         ) : (
