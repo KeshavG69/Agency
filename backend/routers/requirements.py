@@ -247,7 +247,7 @@ def write_item(opportunity_id: str, item_id: str, body: WriteRequest | None = No
 
 
 def _package_files(org: str, opportunity_id: str, row: dict) -> list[tuple[str, bytes]]:
-    """Every file on the checklist as it stands in SharePoint now, as (unique name, bytes)."""
+    """Every file on the checklist as it stands in the file storage now, as (unique name, bytes)."""
     from utils import bid_files
     from utils.scrub import clean_file
 
@@ -266,8 +266,8 @@ def _package_files(org: str, opportunity_id: str, row: dict) -> list[tuple[str, 
             try:
                 content = bid_files.read(org, doc)
             except Exception as exc:  # noqa: BLE001 — moved, deleted, or SharePoint is down
-                logger.warning("Couldn't fetch %s from SharePoint: %s", f["title"], exc)
-                raise HTTPException(status_code=502, detail=f"Couldn't fetch {f['title']} from SharePoint.")
+                logger.warning("Couldn't fetch %s from file storage: %s", f["title"], exc)
+                raise HTTPException(status_code=502, detail=f"Couldn't fetch {f['title']} from your file storage.")
             used.add(name)
             # The package leaves the company (download or email): clean every file in it, a
             # person's own uploads included, whose own properties are kept.
