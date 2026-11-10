@@ -278,7 +278,7 @@ def _drive_unique_map(drive_id: str, site_base: str, sp_account: str, account_id
 
 def crawl_site_graph(site_id: str, site_name: str, site_web_url: str | None = None,
                      with_acl: bool = True, account_id: str | None = None,
-                     sp_account: str | None = None, max_items: int = 8000,
+                     sp_account: str | None = None, max_items: int = 20000,
                      excluded_paths: set[str] | None = None, max_depth: int | None = None) -> list[dict]:
     """Crawl one site's libraries/folders/files via Graph → flat nodes (+ ACL roster).
 

@@ -317,7 +317,7 @@ def _walk(drive_id: str, root: str, lib_id: str, lib_path: str, lib_roster: dict
             folder = it.get("mimeType") == _FOLDER
             name = it.get("name") if folder else _shown_name(it)
             path = f"{parent_path}/{name}"
-            if not name or _is_excluded(path, excluded) or (keep and depth == 0 and not keep(path)):
+            if not name or _is_excluded(path, excluded) or (keep and not keep(path)):
                 continue
             if not with_acl:
                 roster = _EMPTY
@@ -339,7 +339,7 @@ def _shared_top(account_id: str, fields: str) -> list[dict]:
 
 
 def crawl(account_id: str, with_acl: bool = True, excluded_paths: set[str] | None = None,
-          max_depth: int | None = None, max_items: int = 8000,
+          max_depth: int | None = None, max_items: int = 20000,
           shared_paths: set[str] | None = None, browse: bool = False) -> list[dict]:
     """My Drive, every shared drive and "Shared with me", as the flat nodes the SharePoint crawl
     produces: the whole Drive is one "site" and each drive is a "library".
@@ -386,14 +386,21 @@ def crawl(account_id: str, with_acl: bool = True, excluded_paths: set[str] | Non
         # Someone else owns these, and a reader usually can't see their sharing list: then only the
         # connected account gets the file (fails closed, like everywhere else).
         roster = {**owner, "unique_acl": False}
-        # In the picker, show only the top items: "what is in it" is a click away in Drive.
-        keep = None if browse else (lambda p: p in chosen or any(c.startswith(f"{p}/") for c in chosen))
+        # A pick can be a whole shared folder or one folder inside it. Keep the picks, what is
+        # inside them, and the folders on the way down to them, but nothing else in those folders:
+        # ticking "Nexagen/2026 Proposals" must not read the rest of "Nexagen".
+        def keep(p: str) -> bool:
+            return any(p == c or p.startswith(f"{c}/") or c.startswith(f"{p}/") for c in chosen)
+
         try:
             nodes.extend(_walk(SHARED, "", lib_id, shelf, roster, account_id, owner, with_acl,
-                               excluded_paths, 0 if browse else max_depth, max_items - len(nodes),
-                               top=_shared_top(account_id, fields), keep=keep))
+                               excluded_paths, max_depth, max_items - len(nodes),
+                               top=_shared_top(account_id, fields), keep=None if browse else keep))
         except (SharePointWriteError, SharePointReadError) as exc:
             logger.warning("Google Drive: crawl of %s failed: %s", SHARED_NAME, exc)
+    if not browse and len(nodes) >= max_items:
+        logger.warning("Google Drive: crawl stopped at the %d-item cap; the rest of the Drive was not "
+                       "read. Untick folders in the picker to bring it under.", max_items)
     # A shared item someone also added to their My Drive is listed twice: keep its first place.
     seen: set[str] = set()
     return [n for n in nodes if not (n["id"] in seen or seen.add(n["id"]))]

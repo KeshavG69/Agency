@@ -67,15 +67,33 @@ export default function SharePointFolderPicker({
 
   const underShared = (path: string) => !!sharedRoot && path.startsWith(`${sharedRoot}/`);
 
-  const toggle = (path: string, currentlyIncluded: boolean) =>
-    (underShared(path) ? setShared : setExcluded)((prev) => {
-      const next = new Set(prev);
-      // Shared items are a list of what's IN; everything else is a list of what's OUT.
-      const add = underShared(path) ? !currentlyIncluded : currentlyIncluded;
-      if (add) next.add(path);
-      else next.delete(path);
-      return next;
-    });
+  const toggle = (path: string, currentlyIncluded: boolean) => {
+    if (!underShared(path)) {
+      // Everywhere else the list is what's OUT.
+      setExcluded((prev) => {
+        const next = new Set(prev);
+        if (currentlyIncluded) next.add(path);
+        else next.delete(path);
+        return next;
+      });
+      return;
+    }
+    // Under "Shared with me" the list is what's IN. A subfolder can be ticked on its own, or
+    // unticked inside a ticked folder (then it goes on the OUT list, which applies here too).
+    const nextShared = new Set(shared);
+    const nextExcluded = new Set(excluded);
+    if (currentlyIncluded) {
+      if (nextShared.has(path)) nextShared.delete(path);
+      else nextExcluded.add(path);
+    } else {
+      for (const p of Array.from(nextExcluded)) {
+        if (p === path || path.startsWith(`${p}/`)) nextExcluded.delete(p);
+      }
+      if (!isExcluded(path, nextShared)) nextShared.add(path);
+    }
+    setShared(nextShared);
+    setExcluded(nextExcluded);
+  };
 
   const save = async () => {
     setSaving(true);
@@ -111,7 +129,7 @@ export default function SharePointFolderPicker({
       );
     }
     const included = underShared(node.path)
-      ? isExcluded(node.path, shared) // "in the shared list, or under something that is"
+      ? isExcluded(node.path, shared) && !isExcluded(node.path, excluded) // ticked (or inside a tick), not unticked
       : !isExcluded(node.path, excluded);
     return (
       <>
