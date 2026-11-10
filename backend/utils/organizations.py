@@ -104,6 +104,18 @@ class OrganizationCRUD:
             {"$set": {"sharepoint_excluded_paths": paths, "updated_at": datetime.utcnow()}},
         )
 
+    def get_drive_shared_paths(self, org_id: ObjectId) -> list[str]:
+        """Items under Google Drive's "Shared with me" this org opted IN to (opt-in, unlike the rest
+        of the Drive: it is whatever anyone ever shared with the account)."""
+        org = self.collection.find_one({"_id": org_id}, {"drive_shared_paths": 1})
+        return (org or {}).get("drive_shared_paths") or []
+
+    def set_drive_shared_paths(self, org_id: ObjectId, paths: list[str]) -> None:
+        self.collection.update_one(
+            {"_id": org_id},
+            {"$set": {"drive_shared_paths": paths, "updated_at": datetime.utcnow()}},
+        )
+
     def get_members(self, org_id: ObjectId, role: str = None) -> list:
         """Get all users in organization (async) - queries organizations array"""
 

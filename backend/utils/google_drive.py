@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 TOOLKIT = "googledrive"
 PREFIX = "gdrive:"
 MY_DRIVE = f"{PREFIX}root"
+# Files and folders other people shared with this account. They live in THEIR Drive, so they are
+# reached by id, not through a drive of ours: listing their children needs the plain user corpus.
+SHARED = f"{PREFIX}shared"
+SHARED_NAME = "Shared with me"
 SITE_ID = "gdrive"
 SITE_NAME = "Google Drive"
 BIDS_FOLDER = "Collecct Bids"
@@ -117,7 +121,7 @@ def _children(parent: str, drive_id: str, account_id: str, extra: str = "", fiel
     query = f"'{parent}' in parents and trashed=false{extra}"
     params = {"q": query, "pageSize": 1000, "fields": f"nextPageToken,files({fields})",
               "includeItemsFromAllDrives": "true", "supportsAllDrives": "true"}
-    if drive_id != MY_DRIVE:
+    if drive_id not in (MY_DRIVE, SHARED):
         params.update(corpora="drive", driveId=drive_id[len(PREFIX):])
     return _list(f"{_API}/files?{urlencode(params)}", "files", account_id)
 
@@ -300,17 +304,20 @@ def _shown_name(item: dict) -> str | None:
 
 def _walk(drive_id: str, root: str, lib_id: str, lib_path: str, lib_roster: dict, account_id: str,
           owner: dict, with_acl: bool, excluded: set[str] | None, max_depth: int | None,
-          room: int) -> list[dict]:
+          room: int, top: list[dict] | None = None, keep=None) -> list[dict]:
+    """`top` replaces the root's children when the library has no single parent folder (the shared
+    shelf); `keep(path)` decides which of those top items to take."""
     nodes: list[dict] = []
     fields = f"{_ITEM},{_PERMS}" if with_acl else _ITEM
     stack = [(root, lib_id, lib_path, lib_roster, 0)]
     while stack and len(nodes) < room:
         ref, parent_id, parent_path, parent_roster, depth = stack.pop()
-        for it in _children(ref, drive_id, account_id, fields=fields):
+        listed = top if (top is not None and depth == 0) else _children(ref, drive_id, account_id, fields=fields)
+        for it in listed:
             folder = it.get("mimeType") == _FOLDER
             name = it.get("name") if folder else _shown_name(it)
             path = f"{parent_path}/{name}"
-            if not name or _is_excluded(path, excluded):
+            if not name or _is_excluded(path, excluded) or (keep and depth == 0 and not keep(path)):
                 continue
             if not with_acl:
                 roster = _EMPTY
@@ -323,11 +330,23 @@ def _walk(drive_id: str, root: str, lib_id: str, lib_path: str, lib_roster: dict
     return nodes
 
 
+def _shared_top(account_id: str, fields: str) -> list[dict]:
+    """What other people shared with this account directly (the top of "Shared with me")."""
+    params = {"q": "sharedWithMe=true and trashed=false", "pageSize": 1000,
+              "fields": f"nextPageToken,files({fields})",
+              "includeItemsFromAllDrives": "true", "supportsAllDrives": "true"}
+    return list(_list(f"{_API}/files?{urlencode(params)}", "files", account_id))
+
+
 def crawl(account_id: str, with_acl: bool = True, excluded_paths: set[str] | None = None,
-          max_depth: int | None = None, max_items: int = 8000) -> list[dict]:
-    """My Drive and every shared drive, as the flat nodes the SharePoint crawl produces: the whole
-    Drive is one "site" and each drive is a "library". Files shared with this account but kept in
-    someone else's Drive aren't included; they belong to that person."""
+          max_depth: int | None = None, max_items: int = 8000,
+          shared_paths: set[str] | None = None, browse: bool = False) -> list[dict]:
+    """My Drive, every shared drive and "Shared with me", as the flat nodes the SharePoint crawl
+    produces: the whole Drive is one "site" and each drive is a "library".
+
+    "Shared with me" is opt-IN, unlike the rest: it is whatever anyone ever shared with this
+    account (on a personal account, family photos too), so only the items in `shared_paths`, and
+    what is inside them, are read. `browse=True` lists its top items for the folder picker."""
     about = _call("GET", f"{_API}/about?fields=user(emailAddress)", account_id) or {}
     email = ((about.get("user") or {}).get("emailAddress") or "").lower()
     owner = {"permitted_emails": [email] if email else [], "org_wide": False}
@@ -355,7 +374,29 @@ def crawl(account_id: str, with_acl: bool = True, excluded_paths: set[str] | Non
                                excluded_paths, max_depth, max_items - len(nodes)))
         except (SharePointWriteError, SharePointReadError) as exc:  # one bad drive mustn't sink the rest
             logger.warning("Google Drive: crawl of %s failed: %s", name, exc)
-    return nodes
+
+    chosen = set(shared_paths or ())
+    shelf = f"{SITE_NAME}/{SHARED_NAME}"
+    if browse or chosen:
+        lib_id = f"{SITE_ID}|{SHARED}"
+        nodes.append({"id": lib_id, "type": "library", "name": SHARED_NAME, "path": shelf,
+                      "web_url": "https://drive.google.com/drive/shared-with-me", "parent_id": SITE_ID,
+                      "site_id": SITE_ID, "drive_id": SHARED, **_EMPTY})
+        fields = f"{_ITEM},{_PERMS}" if with_acl else _ITEM
+        # Someone else owns these, and a reader usually can't see their sharing list: then only the
+        # connected account gets the file (fails closed, like everywhere else).
+        roster = {**owner, "unique_acl": False}
+        # In the picker, show only the top items: "what is in it" is a click away in Drive.
+        keep = None if browse else (lambda p: p in chosen or any(c.startswith(f"{p}/") for c in chosen))
+        try:
+            nodes.extend(_walk(SHARED, "", lib_id, shelf, roster, account_id, owner, with_acl,
+                               excluded_paths, 0 if browse else max_depth, max_items - len(nodes),
+                               top=_shared_top(account_id, fields), keep=keep))
+        except (SharePointWriteError, SharePointReadError) as exc:
+            logger.warning("Google Drive: crawl of %s failed: %s", SHARED_NAME, exc)
+    # A shared item someone also added to their My Drive is listed twice: keep its first place.
+    seen: set[str] = set()
+    return [n for n in nodes if not (n["id"] in seen or seen.add(n["id"]))]
 
 
 def list_bid_documents(organization_id: str, folder: dict) -> list[dict]:

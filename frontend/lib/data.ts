@@ -951,6 +951,10 @@ export interface SPBrowseNode {
 export interface SPBrowseResponse {
   nodes: SPBrowseNode[];
   excluded_paths: string[];
+  // Google Drive only: "Shared with me" is opt-IN — `shared_root` is its path, `shared_paths`
+  // the items ticked under it. Everything else stays opt-out.
+  shared_paths?: string[];
+  shared_root?: string | null;
 }
 
 export async function browseSharePointFolders(): Promise<SPBrowseResponse> {
@@ -958,8 +962,14 @@ export async function browseSharePointFolders(): Promise<SPBrowseResponse> {
   return data;
 }
 
-export async function saveSharePointExcludedFolders(excludedPaths: string[]): Promise<void> {
-  await apiClient.post("/api/composio/sharepoint/excluded-folders", { excluded_paths: excludedPaths });
+export async function saveSharePointExcludedFolders(
+  excludedPaths: string[],
+  sharedPaths?: string[],
+): Promise<void> {
+  await apiClient.post("/api/composio/sharepoint/excluded-folders", {
+    excluded_paths: excludedPaths,
+    ...(sharedPaths ? { shared_paths: sharedPaths } : {}),
+  });
 }
 
 export async function runAnalyst(): Promise<void> {
