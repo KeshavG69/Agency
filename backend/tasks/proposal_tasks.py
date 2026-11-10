@@ -21,6 +21,31 @@ def _filename(title: str) -> str:
     return (" ".join(clean.split())[:80] or "document") + ".docx"
 
 
+# "All files shall be titled, '<Company Name> CIT Network Services SSN'": the name the government
+# files submissions under. The company-name slot comes in many spellings.
+_NAME_SLOT = r"[<\[{(]?\s*(?:company|offeror|vendor|contractor|firm|business)(?:'s)?\s+name\s*[>\]})]?"
+_TITLE_RULE = re.compile(r"\b(?:titled|named|file\s?names?)\b[^\"“”'‘’]{0,40}[\"“'‘]([^\"”’]*"
+                         + _NAME_SLOT + r"[^\"”’]*)[\"”’]", re.I)
+
+
+def title_rule(row: dict) -> str | None:
+    """The file title the solicitation prescribes, with its company-name slot, if it sets one."""
+    m = _TITLE_RULE.search((row.get("submission") or {}).get("file_rules") or "")
+    return re.sub(r"\.(?:pdf|docx?|xlsx?)$", "", m.group(1).strip(), flags=re.I) if m else None
+
+
+def required_name(row: dict, item: dict, company: str | None) -> str | None:
+    """That title with the company's legal name in it, or None. Several documents to write each
+    get their own title after it, so none replaces another."""
+    rule = title_rule(row)
+    if not rule or not company:
+        return None
+    name = re.sub(_NAME_SLOT, lambda _: company, rule, count=1, flags=re.I)
+    if len(writable(row)) > 1:
+        name = f"{name} - {item.get('title')}"
+    return _filename(name)
+
+
 def free_name(row: dict, item_id: str, name: str) -> str:
     """SharePoint replaces a same-named file, so two checklist lines must never share a name."""
     used = {f["title"] for i in row.get("items") or [] if i["id"] != item_id
@@ -118,7 +143,14 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
         content = render(doc, opp.get("solicitation_number"), row.get("format_rules"),
                          _cover_meta(opp, row, card, employee_email, source, item), item.get("page_limit"))
 
-        name = free_name(row, item_id, _filename(item.get("title") or doc.title))
+        # Only a SAM.gov legal name goes in a prescribed title: without a UEI the card's name is
+        # the Collecct org name, which the government must never see as the company.
+        legal = card.get("name") if card.get("uei") else None
+        prescribed = required_name(row, item, legal)
+        if title_rule(row) and not prescribed:
+            gaps.append(f'Rename the file to the solicitation\'s required title: "{title_rule(row)}". '
+                        "Add your UEI in Organisation settings and Collecct will name it for you.")
+        name = free_name(row, item_id, prescribed or _filename(item.get("title") or doc.title))
         saved = bid_files.save(organization_id, opportunity_id, name, content,
                                bid_files.subfolder_for(item.get("title")))
         # One current draft per item. What a person attached stays alongside it.

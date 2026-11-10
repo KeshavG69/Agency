@@ -25,6 +25,7 @@ from agent.company_profile import company_context
 from app.settings import settings
 from client.library_store import get_library_store
 from client.llm_client import get_chat_llm_agno
+from utils.docx_writer import page_total
 from utils.library_tools import library_tools
 from utils.structured import run_structured
 
@@ -101,6 +102,13 @@ class WrittenDocument(BaseModel):
     commitments: list[str] = Field(default_factory=list, description="Every specific promise you made "
                                    "that no source states: schedules, reviews, staffing, targets")
     gaps: list[str] = Field(default_factory=list, description="Each company fact missing, in plain words")
+    disclosure_marking: str = Field(default="", description=(
+        "The marking printed in every page footer, or \"\" for none. You decide from the "
+        "solicitation. Use one (usually \"Proprietary Information\", or the exact wording the "
+        "solicitation requires) only when this document carries the company's own non-public data "
+        "AND the solicitation does not forbid proprietary information. Many RFIs and sources-sought "
+        "notices say not to submit proprietary information: then leave it empty. A non-empty "
+        "marking also puts the standard restrictive-use legend on the cover."))
 
 
 _GUIDE = {
@@ -120,11 +128,10 @@ _RFI_GUIDE = ("This is an RFI: the government wants information, not a proposal.
 
 
 def _page_budget(page_limit: str | None) -> tuple[int | None, int]:
-    """(page limit, target words). The first number in the limit, unless it says there is none."""
-    m = re.search(r"\d+", page_limit or "")
-    if not m or re.search(r"\bno\b", page_limit or "", re.I):
+    """(page limit, target words)."""
+    pages = page_total(page_limit)
+    if pages is None:
         return None, _DEFAULT_WORDS
-    pages = int(m.group())
     return pages, max(150, int(pages * _WORDS_PER_PAGE * 0.85))
 
 
@@ -171,9 +178,15 @@ HOW IT SHOULD READ — like a seasoned proposal manager wrote it, not a chatbot:
 - Never use: robust, seamless, leverage, cutting-edge, state-of-the-art, best-in-class,
   world-class, holistic, synergy, unparalleled, "comprehensive solution", "we are excited".
 - Write only the proposal. Never describe the document ("this volume describes…"), never mention
-  the library, a resume or a source ("per the resume"), formatting or word counts, and never offer
-  contacts or details "on request": give them, or mark them [NEEDS: …].
-- No cover page, contents page or legal notice: code adds those.
+  the library, "our records" or "our files", a resume or a source ("per the resume"), formatting or
+  word counts, and never offer contacts or details "on request": give them, or mark them [NEEDS: …].
+- Never argue against the company. Don't write what it lacks, hasn't shown, won't claim or can't
+  cite ("we have not yet demonstrated…", "Nexagen does not claim…", "no contract is available").
+  Say what you can prove; a capability you can't prove is a [NEEDS: evidence of …] marker and a
+  line in `gaps`. Where the solicitation asks for a yes/no/possibly answer with its basis, give the
+  factors that decide it, not a confession.
+- No cover page, contents page or legal notice in the text: code adds those. Whether the
+  document carries a disclosure marking at all is yours to decide (`disclosure_marking`).
 - Stay within the word budget: it is sized to the page limit.
 
 Reply with ONLY a JSON object matching this schema (no prose, no code fences):
@@ -245,7 +258,8 @@ def write_document(organization_id: str, opp: dict, outline: dict, item: dict, s
         (f"{matrix}\n\n" if matrix else "") +
         f"SOLICITATION FILES:\n{source_text}\n\n"
         f"HOW IT WILL BE SCORED: {json.dumps(outline.get('evaluation') or {})[:1500]}\n"
-        f"RULES THAT DISQUALIFY AN OFFER: {json.dumps([p.get('rule') for p in outline.get('pass_fail_rules') or []])[:2500]}"
+        f"RULES THAT DISQUALIFY AN OFFER: {json.dumps([p.get('rule') for p in outline.get('pass_fail_rules') or []])[:2500]}\n"
+        f"WHAT NOT TO SUBMIT: {json.dumps(outline.get('prohibited') or [])[:1500]}"
     )
 
     def build() -> Agent:
