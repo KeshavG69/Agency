@@ -56,7 +56,10 @@ def _found(row: dict | None) -> dict:
 @router.get("")
 def get_requirements(opportunity_id: str, current_user: dict = Depends(get_current_user)) -> dict:
     org = _scope(opportunity_id, current_user)
-    return get_requirements_store().get(org, opportunity_id) or {"status": "none", "items": []}
+    store = get_requirements_store()
+    # The checklist polls this while a write runs, so a write that died gets noticed here.
+    row = store.expire_stuck(org, opportunity_id, store.get(org, opportunity_id))
+    return row or {"status": "none", "items": []}
 
 
 @router.post("/read")

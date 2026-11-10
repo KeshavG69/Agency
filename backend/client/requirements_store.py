@@ -134,6 +134,32 @@ class RequirementsStore:
             self._mirror(row)
         return row
 
+    # A write in flight stamps `gen_at` at each stage (queued, writing, drafted, reworded). One that
+    # stops stamping died with its worker (a deploy or restart kills the task mid-run, and nothing
+    # else ever moves the line on), so the line would sit on "Writing…" with its button disabled
+    # forever. The slowest single stage is the writer: three tries of up to 5 minutes. Queued work
+    # can legitimately wait behind a big package.
+    _STUCK_MINUTES = {"writing": 20, "queued": 60}
+
+    def expire_stuck(self, organization_id: str, opportunity_id: str, row: Optional[dict]) -> Optional[dict]:
+        """Mark writes that stopped making progress as failed, so they can be started again."""
+        now = _utc_now()
+        for item in (row or {}).get("items") or []:
+            limit = self._STUCK_MINUTES.get(item.get("gen_status") or "")
+            since = item.get("gen_at") or (row or {}).get("updated_at")
+            if not limit or not since:
+                continue
+            if since.tzinfo is None:
+                since = since.replace(tzinfo=timezone.utc)
+            if (now - since).total_seconds() > limit * 60:
+                logger.warning("Write of %s/%s stuck on %s since %s: marking it failed",
+                               opportunity_id, item.get("id"), item.get("gen_status"), since)
+                row = self.edit_item(organization_id, opportunity_id, item["id"], {
+                    "gen_status": "failed",
+                    "gen_error": "The write was interrupted (the server restarted). Write it again.",
+                }) or row
+        return row
+
     def add_writer_note(self, organization_id: str, opportunity_id: str, item_id: str, text: str,
                         by: str) -> Optional[dict]:
         """What a person told the writer for this document. Notes add up: an answer given for one

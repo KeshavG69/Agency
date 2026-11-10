@@ -2,6 +2,7 @@
 import logging
 import os
 import re
+from datetime import datetime, timezone
 
 from app.worker import celery_app
 from client.crm_store import get_crm_store
@@ -10,6 +11,10 @@ from client.requirements_store import get_requirements_store
 logger = logging.getLogger(__name__)
 
 QUEUED, WRITING, WRITTEN, FAILED = "queued", "writing", "written", "failed"
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def writable(row: dict) -> list[dict]:
@@ -97,7 +102,7 @@ def queue_package(opportunity_id: str, organization_id: str, employee_email: str
 def queue_item(opportunity_id: str, organization_id: str, item_id: str,
                employee_email: str | None = None) -> None:
     get_requirements_store().edit_item(organization_id, opportunity_id, item_id,
-                                       {"gen_status": QUEUED, "gen_error": None})
+                                       {"gen_status": QUEUED, "gen_error": None, "gen_at": _now()})
     write_item_task.delay(opportunity_id, organization_id, item_id, employee_email)
 
 
@@ -119,7 +124,10 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
     if item is None or opp is None:
         return {"item_id": item_id, "skipped": "not found"}
 
-    store.edit_item(organization_id, opportunity_id, item_id, {"gen_status": WRITING})
+    # `gen_at` is the heartbeat the checklist reads to tell a slow write from a dead one
+    # (requirements_store.expire_stuck): stamped as each long stage starts.
+    beat = lambda: store.edit_item(organization_id, opportunity_id, item_id, {"gen_at": _now()})  # noqa: E731
+    store.edit_item(organization_id, opportunity_id, item_id, {"gen_status": WRITING, "gen_at": _now()})
     try:
         bid_files.bid_folder(organization_id, opportunity_id)  # before spending a model call
         source = store.source_text(organization_id, opportunity_id)
@@ -128,6 +136,7 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
         rewrite = any(f.get("generated") for f in item.get("files") or [])
         doc = write_document(organization_id, opp, row, item, source, employee_email,
                              session_id=writer_session_id(opportunity_id, item_id), rewrite=rewrite)
+        beat()
         card = company_card(organization_id)
         notes = notes_text(item.get("writer_notes"))
         # Facts from the library, claims checked against their own files, notes flagged.
@@ -136,7 +145,9 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
         # The writer's prose, reworded by a model that adds no watermark. After grounding (the
         # markers are gone, the facts are in) and before the number check, which so also covers
         # the new wording.
+        beat()
         gaps += rewrite_document(doc)
+        beat()
         unverified = unverified_numbers(doc, organization_id, f"{source}\n{notes}")
         if unverified:
             gaps.append("Check these figures and numbers, which aren't in your documents: " + ", ".join(unverified))
