@@ -13,6 +13,14 @@ ROLE="${SERVICE_ROLE:-all}"
 PORT="${PORT:-8000}"
 CONCURRENCY="${CELERY_CONCURRENCY:-15}"
 
+# numpy (pulled in by the document libraries) starts one BLAS thread per CPU the HOST has, in
+# every process that imports it: the API, the worker and beat. On a 32-64 core host that is up to
+# 190 idle threads counted against this container's limit, for maths we never do. One is enough.
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+
 WEB="uvicorn app.server:app --host 0.0.0.0 --port ${PORT}"
 WORKER="celery -A app.worker.celery_app worker --pool=threads --concurrency=${CONCURRENCY} --loglevel=info"
 BEAT="celery -A app.worker.celery_app beat --loglevel=info"

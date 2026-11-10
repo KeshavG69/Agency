@@ -1,7 +1,7 @@
-from pymongo import MongoClient
 from typing import Optional
 import threading
 from app.settings import settings
+from client.mongo import mongo_client
 
 # Users collection name
 USERS_COLLECTION = "users"
@@ -27,7 +27,8 @@ class MongoDB:
     def _initialize_connection(self):
         """Initialize MongoDB connection with error handling"""
         try:
-            self._client = MongoClient(settings.MONGODB_URL)
+            # The process's one shared client (client/mongo.py), not a second one.
+            self._client = mongo_client()
             self._db = self._client[settings.MONGODB_DATABASE]
 
             # Test connection

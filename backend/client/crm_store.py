@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 from bson import ObjectId
-from pymongo import MongoClient, ReturnDocument, UpdateOne
+from pymongo import ReturnDocument, UpdateOne
 from pymongo.errors import DuplicateKeyError
 
-from app.settings import settings
+from client.mongo import mongo_db, together
 from models.opportunity import Opportunity
 from models.verdict import AnalystVerdict
 
@@ -78,8 +77,7 @@ SLIM_PROJECTION: dict[str, int] = {f: 1 for f in (
 
 class CRMStore:
     def __init__(self):
-        client = MongoClient(settings.MONGODB_URL)
-        self.db = client[settings.MONGODB_DATABASE]
+        self.db = mongo_db()
         self.opps = self.db["opportunities"]
         self.calls = self.db["calls"]
         self.tasks = self.db["tasks"]
@@ -738,11 +736,10 @@ class CRMStore:
 
         WHY THREADS. These are three independent, network-bound queries; run serially the
         page waits for the sum of them. pymongo releases the GIL while waiting on a
-        socket, so a thread per query genuinely overlaps them and the page costs the
-        SLOWEST query rather than all three added up. (This is the sync equivalent of a
-        `Promise.all` in a Node service.) An async driver would do the same job, but this
-        store is shared with nine Celery task modules that are synchronous — threads keep
-        one code path for both callers.
+        socket, so overlapping them makes the page cost the SLOWEST query rather than all
+        three added up. They overlap on one small pool shared by the whole process
+        (client/mongo.py `together`), never a pool per request: that cost three new
+        threads on every poll and ran the server out of threads.
 
         WHY NOT `$facet` FOR THE ROWS. It looks tempting to fetch rows+total+counts in a
         single aggregation, but a `$facet` sub-pipeline CANNOT use an index: the sort
@@ -763,16 +760,11 @@ class CRMStore:
             )
             return [_serialize(d) for d in cursor]
 
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            rows_f = pool.submit(_rows)
-            total_f = pool.submit(self.opps.count_documents, q)
-            counts_f = (
-                pool.submit(self.status_counts, organization_id, viewer_id, is_admin, **filters)
-                if with_counts
-                else None
-            )
-            rows, total = rows_f.result(), total_f.result()
-            counts = counts_f.result() if counts_f else None
+        calls = [_rows, lambda: self.opps.count_documents(q)]
+        if with_counts:
+            calls.append(lambda: self.status_counts(organization_id, viewer_id, is_admin, **filters))
+        rows, total, *rest = together(*calls)
+        counts = rest[0] if rest else None
         return rows, total, counts
 
     def status_counts(

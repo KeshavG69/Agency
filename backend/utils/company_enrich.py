@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import re
 
-from pymongo import MongoClient
+from client.mongo import mongo_db
 
 from app.settings import settings
 
@@ -34,15 +34,9 @@ _PERSONAL_DOMAINS = {
 # Common mail subdomains stripped so mail.acme.com ~ acme.com (mirrors graph_store._norm_domain).
 _MAIL_SUB = re.compile(r"^(?:mail|smtp|email|mx\d*|mailer|mailgun|e|em|send|sendgrid|go|info|newsletter|marketing|notifications?)\.")
 
-_client: MongoClient | None = None
-
-
 def _companies():
     """The local `companies` collection (PDL Free Company Dataset), keyed by domain."""
-    global _client
-    if _client is None:
-        _client = MongoClient(settings.MONGODB_URL)
-    return _client[settings.MONGODB_DATABASE]["companies"]
+    return mongo_db()["companies"]
 
 
 def norm_domain(d: str | None) -> str:

@@ -35,10 +35,10 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence
 
 from bson import ObjectId
-from pymongo import MongoClient, UpdateMany, UpdateOne
+from pymongo import UpdateMany, UpdateOne
 from pymongo.errors import BulkWriteError
 
-from app.settings import settings
+from client.mongo import mongo_db
 from models.evidence import Evidence, score_evidence
 
 logger = logging.getLogger(__name__)
@@ -119,8 +119,7 @@ class FactOutcome:
 
 class FactsStore:
     def __init__(self) -> None:
-        client = MongoClient(settings.MONGODB_URL)
-        self.db = client[settings.MONGODB_DATABASE]
+        self.db = mongo_db()
         self.facts = self.db["contact_facts"]
         # Indexes live in utils/db_indexes.py: the unique (org, email, field, value) claim
         # key, the per-contact read split by status, and the org-wide review queue's

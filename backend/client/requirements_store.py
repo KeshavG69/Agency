@@ -21,9 +21,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from bson import ObjectId
-from pymongo import MongoClient, ReturnDocument
+from pymongo import ReturnDocument
 
-from app.settings import settings
+from client.mongo import mongo_db
 from models.requirements import ProposalOutline
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,7 @@ def _new_item(**fields) -> dict:
 
 class RequirementsStore:
     def __init__(self) -> None:
-        client = MongoClient(settings.MONGODB_URL, tz_aware=True)
-        self.db = client[settings.MONGODB_DATABASE]
+        self.db = mongo_db(tz_aware=True)
         self.rows = self.db["proposal_requirements"]
         self.opps = self.db["opportunities"]
 
