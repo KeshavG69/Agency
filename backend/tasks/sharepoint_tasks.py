@@ -51,7 +51,9 @@ def sync_sharepoint_structure_task(self, organization_id: str, with_acl: bool = 
 
     try:
         if on_google:
-            nodes = google_drive.crawl(g_account, with_acl=with_acl, excluded_paths=excluded_paths)
+            shared = set(get_organization_crud().get_drive_shared_paths(ObjectId(org)))
+            nodes = google_drive.crawl(g_account, with_acl=with_acl, excluded_paths=excluded_paths,
+                                       shared_paths=shared)
         else:
             nodes = crawl_all_sites_graph(with_acl=with_acl, account_id=g_account, sp_account=sp_account,
                                           excluded_paths=excluded_paths)

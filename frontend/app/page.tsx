@@ -428,7 +428,8 @@ function Console({ user }: { user: User }) {
   // The list failing to reach the backend is its own toast. Fires on the false→true edge, so
   // a retry that stays failed doesn't re-toast on every poll.
   useEffect(() => {
-    if (listQuery.isError) pushToast("Can't reach the backend — start it on :8000.");
+    // Customers read this: no ports or "backend". The 5s poll keeps retrying on its own.
+    if (listQuery.isError) pushToast("Couldn't load the pipeline. Retrying…");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listQuery.isError]);
 

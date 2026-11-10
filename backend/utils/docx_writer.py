@@ -61,9 +61,31 @@ def _excluded(counting: str | None, what: str) -> bool:
     return what in text and bool(re.search(r"not count|do not count|does not count|exclud|not includ", text))
 
 
+_NO_LIMIT = re.compile(r"\bno\s+(?:page\s+)?limit|\bnot\s+(?:stated|specified|limited)|\bunlimited\b|^\s*none\b", re.I)
+_PAGES = re.compile(r"(\d+)\s*-?\s*pages?\b", re.I)
+_PART_PAGES = re.compile(r"\b(?:part|volume|vol\.?|section|tab|factor)\s+[A-Z0-9]{1,4}\b[^;\n\d]*?(\d+)\s*-?\s*pages?\b", re.I)
+
+
+def page_total(page_limit: str | None) -> int | None:
+    """The pages a document may run to. Separate limits for its parts add up ("Part A: 1 page;
+    Part B: 5 pages; Part C: 5 pages" is 11); otherwise the first number. None when there is none."""
+    text = page_limit or ""
+    if not re.search(r"\d", text) or _NO_LIMIT.search(text):
+        return None
+    parts = _PART_PAGES.findall(text)
+    if len(parts) >= 2:
+        return sum(int(n) for n in parts)
+    # "2 pages each" is a per-person cap, not a part of the total.
+    chunks = [m.group(1) for c in re.split(r"[;\n]", text)
+              if (m := _PAGES.search(c)) and not re.search(r"\beach\b|\bper\b", c, re.I)]
+    if len(chunks) >= 2:
+        return sum(int(n) for n in chunks)
+    return int(re.search(r"\d+", text).group())
+
+
 def front_matter(page_limit: str | None, counting: str | None) -> tuple[bool, bool]:
     """(cover page, contents page). Both only where they cost the bid no counted pages."""
-    limited = bool(page_limit) and not re.search(r"\bno\b", page_limit or "", re.I)
+    limited = bool(page_limit) and not _NO_LIMIT.search(page_limit)
     if not limited:
         return True, True
     return _excluded(counting, "cover"), _excluded(counting, "table of contents") or _excluded(counting, "toc")
@@ -225,11 +247,15 @@ def render(doc, solicitation: str | None, format_rules: dict | None, meta: dict 
     h2 = sec.header.add_paragraph()
     _tabs(h2, width)
     _runs(h2, f"{volume}\t{sol}", size=size - 2)
+    # The disclosure marking is the writer's call (WrittenDocument.disclosure_marking): a proposal
+    # carrying the company's own data usually wants one, but many RFIs and sources-sought notices
+    # say not to submit proprietary information at all, and then any marking is wrong.
+    marking = (getattr(doc, "disclosure_marking", "") or "").strip()
     f = sec.footer.paragraphs[0]
     _tabs(f, width, centre=True)
-    _runs(f, f"{today}\tProprietary Information\tPage ", size=size - 2)
+    _runs(f, f"{today}\t{marking}\tPage ", size=size - 2)
     _field(f, "PAGE")
-    if cover:
+    if cover and marking:
         note = sec.footer.add_paragraph()
         note.alignment = 1
         r = note.add_run(_SHEET_NOTE)
@@ -239,7 +265,7 @@ def render(doc, solicitation: str | None, format_rules: dict | None, meta: dict 
         sec.different_first_page_header_footer = True
         cf = sec.first_page_footer.paragraphs[0]
         _tabs(cf, width, centre=True)
-        _runs(cf, f"{today}\tProprietary Information", size=size - 2)
+        _runs(cf, f"{today}\t{marking}", size=size - 2)
         for _ in range(3):
             d.add_paragraph()
         b.para(bid or doc.title, bold=True, size=size + 14, color=_NAVY)
@@ -260,8 +286,9 @@ def render(doc, solicitation: str | None, format_rules: dict | None, meta: dict 
         if meta.get("vehicle"):
             pairs.append(("Contract vehicle", meta["vehicle"]))
         b.kv(None, pairs)
-        legend = (f"{meta['validity']} " if meta.get("validity") else "") + _LEGEND
-        b.box(legend)
+        legend = " ".join(x for x in (meta.get("validity"), _LEGEND if marking else None) if x)
+        if legend:
+            b.box(legend)
         d.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
 
     if contents:

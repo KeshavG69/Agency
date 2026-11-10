@@ -41,7 +41,10 @@ _SELF_NOTE = re.compile(
     r"|\bnot (?:stated|specified|provided|defined|included|identified) in the "
     r"(?:solicitation|rfq|rfp|rfi|sow|pws|statement of work)\b"
     r"|\b(?:up)?on request\b"
-    r"|\bthis (?:volume|document|section|proposal|response) (?:describes|addresses|outlines|presents|provides)\b",
+    r"|\bthis (?:volume|document|section|proposal|response) (?:describes|addresses|outlines|presents|provides)\b"
+    r"|\bour (?:company )?(?:library|records|files)\b|\b(?:library|records) (?:does|do|did) not\b"
+    r"|\bnot (?:yet )?(?:in|recorded in|documented in) (?:the|our) (?:library|records|files)\b"
+    r"|\b(?:does|do|will) not (?:yet )?claim\b|\b(?:available|exists?) (?:for \w+ )?to cite\b",
     re.I)
 
 _FILLER = re.compile(

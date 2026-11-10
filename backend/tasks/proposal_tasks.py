@@ -2,6 +2,7 @@
 import logging
 import os
 import re
+from datetime import datetime, timezone
 
 from app.worker import celery_app
 from client.crm_store import get_crm_store
@@ -12,6 +13,10 @@ logger = logging.getLogger(__name__)
 QUEUED, WRITING, WRITTEN, FAILED = "queued", "writing", "written", "failed"
 
 
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def writable(row: dict) -> list[dict]:
     return [i for i in row.get("items") or [] if i.get("production", "write") == "write"]
 
@@ -19,6 +24,31 @@ def writable(row: dict) -> list[dict]:
 def _filename(title: str) -> str:
     clean = re.sub(r"[^A-Za-z0-9 ._()-]+", " ", title)
     return (" ".join(clean.split())[:80] or "document") + ".docx"
+
+
+# "All files shall be titled, '<Company Name> CIT Network Services SSN'": the name the government
+# files submissions under. The company-name slot comes in many spellings.
+_NAME_SLOT = r"[<\[{(]?\s*(?:company|offeror|vendor|contractor|firm|business)(?:'s)?\s+name\s*[>\]})]?"
+_TITLE_RULE = re.compile(r"\b(?:titled|named|file\s?names?)\b[^\"“”'‘’]{0,40}[\"“'‘]([^\"”’]*"
+                         + _NAME_SLOT + r"[^\"”’]*)[\"”’]", re.I)
+
+
+def title_rule(row: dict) -> str | None:
+    """The file title the solicitation prescribes, with its company-name slot, if it sets one."""
+    m = _TITLE_RULE.search((row.get("submission") or {}).get("file_rules") or "")
+    return re.sub(r"\.(?:pdf|docx?|xlsx?)$", "", m.group(1).strip(), flags=re.I) if m else None
+
+
+def required_name(row: dict, item: dict, company: str | None) -> str | None:
+    """That title with the company's legal name in it, or None. Several documents to write each
+    get their own title after it, so none replaces another."""
+    rule = title_rule(row)
+    if not rule or not company:
+        return None
+    name = re.sub(_NAME_SLOT, lambda _: company, rule, count=1, flags=re.I)
+    if len(writable(row)) > 1:
+        name = f"{name} - {item.get('title')}"
+    return _filename(name)
 
 
 def free_name(row: dict, item_id: str, name: str) -> str:
@@ -72,7 +102,7 @@ def queue_package(opportunity_id: str, organization_id: str, employee_email: str
 def queue_item(opportunity_id: str, organization_id: str, item_id: str,
                employee_email: str | None = None) -> None:
     get_requirements_store().edit_item(organization_id, opportunity_id, item_id,
-                                       {"gen_status": QUEUED, "gen_error": None})
+                                       {"gen_status": QUEUED, "gen_error": None, "gen_at": _now()})
     write_item_task.delay(opportunity_id, organization_id, item_id, employee_email)
 
 
@@ -94,7 +124,10 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
     if item is None or opp is None:
         return {"item_id": item_id, "skipped": "not found"}
 
-    store.edit_item(organization_id, opportunity_id, item_id, {"gen_status": WRITING})
+    # `gen_at` is the heartbeat the checklist reads to tell a slow write from a dead one
+    # (requirements_store.expire_stuck): stamped as each long stage starts.
+    beat = lambda: store.edit_item(organization_id, opportunity_id, item_id, {"gen_at": _now()})  # noqa: E731
+    store.edit_item(organization_id, opportunity_id, item_id, {"gen_status": WRITING, "gen_at": _now()})
     try:
         bid_files.bid_folder(organization_id, opportunity_id)  # before spending a model call
         source = store.source_text(organization_id, opportunity_id)
@@ -103,6 +136,7 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
         rewrite = any(f.get("generated") for f in item.get("files") or [])
         doc = write_document(organization_id, opp, row, item, source, employee_email,
                              session_id=writer_session_id(opportunity_id, item_id), rewrite=rewrite)
+        beat()
         card = company_card(organization_id)
         notes = notes_text(item.get("writer_notes"))
         # Facts from the library, claims checked against their own files, notes flagged.
@@ -111,14 +145,23 @@ def write_item_task(self, opportunity_id: str, organization_id: str, item_id: st
         # The writer's prose, reworded by a model that adds no watermark. After grounding (the
         # markers are gone, the facts are in) and before the number check, which so also covers
         # the new wording.
+        beat()
         gaps += rewrite_document(doc)
+        beat()
         unverified = unverified_numbers(doc, organization_id, f"{source}\n{notes}")
         if unverified:
             gaps.append("Check these figures and numbers, which aren't in your documents: " + ", ".join(unverified))
         content = render(doc, opp.get("solicitation_number"), row.get("format_rules"),
                          _cover_meta(opp, row, card, employee_email, source, item), item.get("page_limit"))
 
-        name = free_name(row, item_id, _filename(item.get("title") or doc.title))
+        # Only a SAM.gov legal name goes in a prescribed title: without a UEI the card's name is
+        # the Collecct org name, which the government must never see as the company.
+        legal = card.get("name") if card.get("uei") else None
+        prescribed = required_name(row, item, legal)
+        if title_rule(row) and not prescribed:
+            gaps.append(f'Rename the file to the solicitation\'s required title: "{title_rule(row)}". '
+                        "Add your UEI in Organisation settings and Collecct will name it for you.")
+        name = free_name(row, item_id, prescribed or _filename(item.get("title") or doc.title))
         saved = bid_files.save(organization_id, opportunity_id, name, content,
                                bid_files.subfolder_for(item.get("title")))
         # One current draft per item. What a person attached stays alongside it.

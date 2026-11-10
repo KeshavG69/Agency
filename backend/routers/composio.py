@@ -227,16 +227,20 @@ def browse_sharepoint_folders(current_user: dict = Depends(get_current_user)) ->
         if g_account:
             nodes = crawl_all_sites_graph(with_acl=False, account_id=g_account)
         else:
-            nodes = google_drive.crawl(drive_account, with_acl=False, max_depth=1)
+            nodes = google_drive.crawl(drive_account, with_acl=False, max_depth=1, browse=True)
     except Exception as e:  # noqa: BLE001
         logger.error("Folder browse failed for org %s: %s", org, e, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Couldn't read your folders: {e}")
-    excluded = get_organization_crud().get_sharepoint_excluded_paths(ObjectId(org))
-    return {"nodes": nodes, "excluded_paths": excluded}
+    crud = get_organization_crud()
+    return {"nodes": nodes, "excluded_paths": crud.get_sharepoint_excluded_paths(ObjectId(org)),
+            # Google Drive's "Shared with me" is opt-IN: these are the items ticked there.
+            "shared_paths": crud.get_drive_shared_paths(ObjectId(org)),
+            "shared_root": f"{google_drive.SITE_NAME}/{google_drive.SHARED_NAME}" if not g_account else None}
 
 
 class ExcludedFoldersRequest(BaseModel):
     excluded_paths: list[str]
+    shared_paths: list[str] | None = None  # Google Drive "Shared with me" picks (opt-in)
 
 
 @router.post("/sharepoint/excluded-folders")
@@ -252,8 +256,11 @@ def set_sharepoint_excluded_folders(
     from utils.organizations import get_organization_crud
 
     org = str(current_user.get("organization_id") or "")
-    get_organization_crud().set_sharepoint_excluded_paths(ObjectId(org), req.excluded_paths)
-    return {"saved": True, "excluded_paths": req.excluded_paths}
+    crud = get_organization_crud()
+    crud.set_sharepoint_excluded_paths(ObjectId(org), req.excluded_paths)
+    if req.shared_paths is not None:
+        crud.set_drive_shared_paths(ObjectId(org), req.shared_paths)
+    return {"saved": True, "excluded_paths": req.excluded_paths, "shared_paths": req.shared_paths}
 
 
 @router.post("/sharepoint/disconnect")
