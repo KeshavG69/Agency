@@ -21,9 +21,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-from pymongo import MongoClient
 
-from app.settings import settings
+from client.mongo import mongo_db
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +33,7 @@ def _utc_now() -> datetime:
 
 class MailboxSyncStore:
     def __init__(self) -> None:
-        client = MongoClient(settings.MONGODB_URL, tz_aware=True)
-        self.db = client[settings.MONGODB_DATABASE]
+        self.db = mongo_db(tz_aware=True)
         self.rows = self.db["mailbox_sync"]
         # Indexes live in utils/db_indexes.py: one row per mailbox — the lookup and the
         # uniqueness constraint are the same (owner_email, organization_id) key.

@@ -19,9 +19,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-from pymongo import MongoClient
 
-from app.settings import settings
+from client.mongo import mongo_db
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +31,7 @@ def _utc_now() -> datetime:
 
 class EventsStore:
     def __init__(self) -> None:
-        client = MongoClient(settings.MONGODB_URL, tz_aware=True)
-        self.db = client[settings.MONGODB_DATABASE]
+        self.db = mongo_db(tz_aware=True)
         self.events = self.db["agent_events"]
         # Indexes live in utils/db_indexes.py: (org, subject.id, created_at) serves the only
         # read that matters — the trail for one record, oldest first.

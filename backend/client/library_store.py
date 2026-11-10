@@ -23,9 +23,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
-from pymongo import MongoClient, UpdateOne
+from pymongo import UpdateOne
 
 from app.settings import settings
+from client.mongo import mongo_db
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +82,7 @@ def skip_reason(node: dict) -> Optional[str]:
 
 class LibraryStore:
     def __init__(self) -> None:
-        client = MongoClient(settings.MONGODB_URL, tz_aware=True)
-        self.db = client[settings.MONGODB_DATABASE]
+        self.db = mongo_db(tz_aware=True)
         self.docs = self.db["library_documents"]
 
     # ---- sync --------------------------------------------------------------------------

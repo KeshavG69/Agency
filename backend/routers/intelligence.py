@@ -15,13 +15,13 @@ The one exception is `decide_fact`, which is a HUMAN decision, and human decisio
 exactly what an API is for.
 """
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from auth.dependencies import get_current_user
+from client.mongo import together
 from client.events_store import get_events_store
 from client.facts_store import get_facts_store
 from client.task_store import get_task_store
@@ -160,10 +160,7 @@ def pending_suggestions(
         return out
 
     # Rows and the total, concurrently — the page costs the slower of the two, not both.
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        rows_f = pool.submit(_rows)
-        total_f = pool.submit(store.facts.count_documents, query)
-        rows, total = rows_f.result(), total_f.result()
+    rows, total = together(_rows, lambda: store.facts.count_documents(query))
 
     return {"suggestions": rows, "count": len(rows), "total": total,
             "offset": offset, "limit": limit}

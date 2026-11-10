@@ -194,7 +194,10 @@ def _session_db():
     if _SESSION_DB is None:
         from agno.db.mongo import MongoDb
 
-        _SESSION_DB = MongoDb(db_url=settings.MONGODB_URL, db_name=settings.MONGODB_DATABASE,
+        from client.mongo import mongo_client
+
+        # The process's shared client: a `db_url` would open another one, threads and all.
+        _SESSION_DB = MongoDb(db_client=mongo_client(), db_name=settings.MONGODB_DATABASE,
                               session_collection="writer_sessions")
     return _SESSION_DB
 

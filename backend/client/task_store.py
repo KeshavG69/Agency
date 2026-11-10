@@ -32,9 +32,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Sequence
 
 from bson import ObjectId
-from pymongo import MongoClient, ReturnDocument
+from pymongo import ReturnDocument
 
-from app.settings import settings
+from client.mongo import mongo_db
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +81,7 @@ class TaskStore:
         # tz_aware so datetimes come BACK from Mongo timezone-aware. Without it pymongo
         # returns naive datetimes and any Python-side comparison against an aware `now()`
         # raises — a subtle bug this store would hit the first time a lease was inspected.
-        client = MongoClient(settings.MONGODB_URL, tz_aware=True)
-        self.db = client[settings.MONGODB_DATABASE]
+        self.db = mongo_db(tz_aware=True)
         self.tasks = self.db["agent_tasks"]
         # Indexes live in utils/db_indexes.py: the de-dup lookup ("already queued or recently
         # done?") and the claim query (open, due, unleased, highest priority first).

@@ -5,9 +5,9 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-from pymongo import MongoClient, ReturnDocument
+from pymongo import ReturnDocument
 
-from app.settings import settings
+from client.mongo import mongo_db
 
 BUILDING, READY, FAILED = "building", "ready", "failed"
 
@@ -18,8 +18,7 @@ def _now() -> datetime:
 
 class CapabilityStore:
     def __init__(self) -> None:
-        client = MongoClient(settings.MONGODB_URL, tz_aware=True)
-        self.rows = client[settings.MONGODB_DATABASE]["capability_matrices"]
+        self.rows = mongo_db(tz_aware=True)["capability_matrices"]
 
     def _key(self, organization_id: str, opportunity_id: str) -> dict:
         return {"organization_id": organization_id, "opportunity_id": opportunity_id}
