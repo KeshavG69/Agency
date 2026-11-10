@@ -11,7 +11,8 @@ quotes and every code-filled fact stay exactly as they are.
 
 What can't change: code compares every rewritten passage with the original and keeps the original
 if a number, an identifier, an acronym or a [NEEDS: …]/[CHECK: …] marker moved, the length drifted,
-or a banned word crept in. Grounding has already run, so this is the only check on the new wording.
+a banned word crept in, an active sentence went passive ("…was provided by Nexagen") or a run-in
+label ("Staffing: …") was lost. Grounding has already run, so this is the only check on the new wording.
 A sentence grounding flagged is wrapped whole in [CHECK: …] and is therefore copied unchanged: a
 person edits it anyway.
 
@@ -53,6 +54,12 @@ _IDENT = re.compile(r"\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b"
                     r"|\b(?=[A-Z0-9-]*\d)(?=[A-Z0-9-]*[A-Z])[A-Z0-9]{2,}(?:-[A-Z0-9]{1,}){1,4}\b"
                     r"|\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10,}\b")
 _STRENGTH = re.compile(r"\b(shall|must|may|might|could|should|guarantee[sd]?)\b")
+# A passive with its doer named ("...was provided by Nexagen"): the easy way for a model to make a
+# sentence look different, and the stiffest way to say it. The writer almost never writes one.
+_PASSIVE = re.compile(r"\b(?:is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?"
+                      r"\w+(?:ed|en|wn|nt|lt|ld|ne|pt|ught|id|un)\b(?:\s+\S+){0,6}?\s+by\b", re.I)
+# "Staffing: ..." — a run-in label the reader scans for.
+_LABEL = re.compile(r"^\s*([A-Z][^:.\n]{1,45}):\s")
 # The writer's own banned list (agent/proposal_writer.py _instructions).
 _BANNED = ("robust", "seamless", "leverage", "cutting-edge", "state-of-the-art", "best-in-class",
            "world-class", "holistic", "synergy", "unparalleled", "comprehensive solution",
@@ -60,11 +67,20 @@ _BANNED = ("robust", "seamless", "leverage", "cutting-edge", "state-of-the-art",
 
 _SYSTEM = """\
 You reword passages from a government contract proposal. Write each passage again so that nearly
-every sentence uses different words and a different sentence structure, while it says exactly the
-same thing. Rebuild each sentence: change the order of its clauses, its verbs and its connecting
-words, rather than swapping a few words for synonyms.
+every sentence uses different words, while it says exactly the same thing. Rebuild each sentence:
+choose different verbs, nouns and connecting words, and reorder its phrases, rather than swapping
+a few words for synonyms.
 
 Rules:
+- Keep the voice. Whoever acts in the original still acts in yours, as the subject of an active
+  verb: "We run the help desk" can become "Our team operates the help desk", never "The help desk
+  is run by us" or "...by Nexagen". Don't turn an active sentence into a passive one.
+- To change the wording without going passive: name the company or say "we" / "our team" (either
+  is fine as the subject), pick a different verb and a different way to say the object, move a
+  phrase about time or place to the other end of the sentence, and split a long sentence in two or
+  join two short ones within the passage.
+- A passage that starts with a label and a colon ("Staffing: ...", "Assumption 2: ...") keeps that
+  label exactly as written; reword only what follows it.
 - Keep every fact, claim and promise, and how strong it is. Use "shall", "must", "may", "should"
   and "could" exactly where the original does and nowhere else: never turn "will" into "shall" or
   "must". Add nothing. Drop nothing.
@@ -82,8 +98,9 @@ Reply with ONLY a JSON object: {"passages": ["...", "..."]}"""
 
 _HARDER = """
 
-Your last attempt kept too much of the original wording. Keep no run of more than three original
-words except the names, numbers and terms that must stay exact."""
+Your last attempt kept too much of the original wording, or turned a sentence passive. Keep no
+run of more than three original words except the names, numbers and terms that must stay exact,
+and keep every sentence active with the same subject as the original."""
 
 
 # ---- which text is the writer's prose ---------------------------------------------------------
@@ -156,6 +173,11 @@ def rejected(old: str, new: str) -> str | None:
     # different commitment. "will" itself comes and goes as sentences are rebuilt.
     if set(_STRENGTH.findall(low_old)) != set(_STRENGTH.findall(low_new)):
         return "commitment strength changed"
+    if len(_PASSIVE.findall(rest_new)) > len(_PASSIVE.findall(rest_old)):
+        return "turned passive"
+    label = _LABEL.match(old)
+    if label and not new.lstrip().startswith(label.group(1) + ":"):
+        return "label changed"
     return None
 
 
