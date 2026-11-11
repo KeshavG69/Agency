@@ -53,7 +53,9 @@ _IDENT = re.compile(r"\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b"
                     r"|[\w.+-]+@[\w-]+\.[\w.]+"
                     r"|\b(?=[A-Z0-9-]*\d)(?=[A-Z0-9-]*[A-Z])[A-Z0-9]{2,}(?:-[A-Z0-9]{1,}){1,4}\b"
                     r"|\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10,}\b")
-_STRENGTH = re.compile(r"\b(shall|must|may|might|could|should|guarantee[sd]?)\b")
+_STRENGTH = re.compile(r"\b(shall|must|may|might|could|should|guarantee[sd]?|possibly)\b")
+# "Answer: Possibly" — a solicitation that asks for Yes / No / Possibly wants exactly that word.
+_ANSWER = re.compile(r"\b(?:answer|response)\s*:\s*(yes|no|possibly)\b", re.I)
 # A passive with its doer named ("...was provided by Nexagen"): the easy way for a model to make a
 # sentence look different, and the stiffest way to say it. The writer almost never writes one.
 _PASSIVE = re.compile(r"\b(?:is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?"
@@ -81,6 +83,8 @@ Rules:
   join two short ones within the passage.
 - A passage that starts with a label and a colon ("Staffing: ...", "Assumption 2: ...") keeps that
   label exactly as written; reword only what follows it.
+- A one-word answer the solicitation asked for ("Answer: Yes", "No", "Possibly") stays that exact
+  word: "Possibly" never becomes "Perhaps" or "Maybe".
 - Keep every fact, claim and promise, and how strong it is. Use "shall", "must", "may", "should"
   and "could" exactly where the original does and nowhere else: never turn "will" into "shall" or
   "must". Add nothing. Drop nothing.
@@ -173,6 +177,8 @@ def rejected(old: str, new: str) -> str | None:
     # different commitment. "will" itself comes and goes as sentences are rebuilt.
     if set(_STRENGTH.findall(low_old)) != set(_STRENGTH.findall(low_new)):
         return "commitment strength changed"
+    if [a.lower() for a in _ANSWER.findall(old)] != [a.lower() for a in _ANSWER.findall(new)]:
+        return "answer word changed"
     if len(_PASSIVE.findall(rest_new)) > len(_PASSIVE.findall(rest_old)):
         return "turned passive"
     label = _LABEL.match(old)
@@ -233,10 +239,11 @@ def _call(passages: list[str], harder: bool) -> list[str] | None:
         body["chat_template_kwargs"] = {"enable_thinking": False}
     else:
         # `order` makes OpenRouter move down the list when a host is rate-limited (they 429 in
-        # bursts); `only` + no fallbacks keeps it from ever leaving the list. fp4 is left out
-        # for quality; "unknown" is what Modal reports.
+        # bursts); `only` + no fallbacks keeps it from ever leaving the list. Quantizations come
+        # from settings ("unknown" is what Modal reports).
+        quants = [q.strip() for q in settings.REWRITE_QUANTIZATIONS.split(",") if q.strip()]
         body["provider"] = {"order": _allowed(), "only": _allowed(), "allow_fallbacks": False,
-                            "data_collection": "deny", "quantizations": ["bf16", "fp8", "unknown"]}
+                            "data_collection": "deny", "quantizations": quants}
         body["reasoning"] = {"enabled": False}
     resp = httpx.post(f"{base}/chat/completions", json=body, timeout=300,
                       headers={"Authorization": f"Bearer {key}"})

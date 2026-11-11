@@ -167,6 +167,9 @@ class Settings(BaseSettings):
     # REWRITE_MODEL to the id it serves (gemma4-31b). Empty REWRITE_MODEL = off.
     REWRITE_MODEL: str = "google/gemma-4-31b-it"
     REWRITE_PROVIDERS: str = "deepinfra,crusoe,parasail,modal"
+    # Which weights the hosts may serve. fp4 is left out by default for quality; a model trained
+    # for 4-bit (NVIDIA Nemotron's NVFP4) can list it.
+    REWRITE_QUANTIZATIONS: str = "bf16,fp8,unknown"
     REWRITE_BASE_URL: str = ""
 
     # Capture agent — text-to-image generation via OpenRouter's Image API (POST /images).
