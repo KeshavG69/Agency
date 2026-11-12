@@ -98,6 +98,47 @@ def _needs(what: str) -> str:
     return f"[NEEDS: {what}]"
 
 
+# Words a sentence can't end on when its object was in a removed citation marker.
+_OPEN_END = re.compile(r"(?:^|\b(?:following|hold|holds|held|include|includes|including|maintain|"
+                       r"maintains|possess|possesses|are|is|was|were|of|with|for|to|as|by|the|a|an|"
+                       r"and|or|from|under|namely|such as)|:)\s*[.:]?$", re.I)
+
+
+def _contract_anchors(number: str, title: str) -> list[str]:
+    """How a file might name a contract: each piece of its number (with and without dashes),
+    its title, and the acronym in its title ("... Center (INOC)")."""
+    out: list[str] = []
+    for n in re.split(r"[/,;]|\s{2,}|\s+(?=[A-Z0-9]{6,})", number):
+        n = n.strip()
+        if len(n) >= 6:
+            out += [n, n.replace("-", "")]
+    if len(title) >= 12:
+        out.append(title)
+    out += re.findall(r"\(([A-Z][A-Z0-9-]{2,})\)", title)
+    return list(dict.fromkeys(out))
+
+
+def _anchor_re(anchor: str) -> str:
+    return rf"(?<![a-z0-9]){re.escape(anchor.lower())}(?![a-z0-9])"
+
+
+def _dangling(plain: str) -> bool:
+    """True when what's left after removing a sentence's markers has lost its content: nothing
+    but punctuation, or a sentence that stops where its object should be."""
+    return not re.search(r"\w", plain) or bool(_OPEN_END.search(plain.strip()))
+
+
+def _with_quotes(plain: str, quotes: list[str]) -> str:
+    body = "; ".join(q.strip().rstrip(".") for q in quotes if q.strip())
+    if not body:
+        return plain
+    if not re.search(r"\w", plain):
+        return body[0].upper() + body[1:] + "."
+    head = plain.strip().rstrip(".:").rstrip()
+    joiner = ": " if re.search(r"\bfollowing$", head, re.I) else " "
+    return f"{head}{joiner}{body}."
+
+
 def _flag(text: str) -> str:
     text = text.strip()
     return text if text.startswith("[CHECK:") else f"[CHECK: {text}]"
@@ -219,10 +260,25 @@ class _Grounder:
             if lead:
                 sentences[i - 1] += lead.group(1)
                 sentences[i] = sentences[i][lead.end():]
+        def inline(s: str) -> str:
+            """'We also hold [[id|ISO 27001]] status.': the marker sits where words belong."""
+            def put(m: re.Match) -> str:
+                before, after = s[:m.start()], s[m.end():]
+                if re.search(r"\w", after) and _OPEN_END.search(before.rstrip()):
+                    return " " + marks[int(m.group(1))][1].strip().rstrip(".")
+                return m.group(0)
+            return re.sub(r"\s*§(\d+)§", put, s)
+
         out = []
         for s in sentences:
             refs = [marks[int(k)] for k in re.findall(r"§(\d+)§", s)]
+            s = inline(s)
             plain = re.sub(r"\s*§\d+§", "", s).strip()
+            if refs and _dangling(plain):
+                # The writer put the fact INSIDE the marker ("We hold the following. [[id|CMMI L3
+                # and ISO 9001]]", or a table cell that is only a marker). Deleting the marker
+                # would delete the fact, so its quoted words become the text.
+                plain = _with_quotes(plain, [q for _, q in refs])
             if not re.search(r"\w", plain):  # only the full stop a moved marker left behind
                 if out and plain:
                     out[-1] = out[-1].rstrip(".") + plain
@@ -301,9 +357,48 @@ class _Grounder:
                   for x in (o.get("title"), o.get("contract_number"))]
         part = self._part(row["item_id"], [c.get("title"), c.get("contract_number")], others)
         for x in [ref.scope, *(w.work for w in ref.work), *ref.results]:
-            self.cited(x, mine, where, part)
+            other = self._about_contract(x.source_id, c) if x.source_id not in mine else None
+            if other:
+                # A proposal or RFI response that writes this contract up is proof too, read only
+                # in its part about this contract (so another contract's facts can't lend).
+                self.cited(x, {x.source_id}, self._name(x.source_id), other)
+            else:
+                self.cited(x, mine, where, part)
         for w in ref.work:
             w.relevance = self.style(w.relevance)
+
+    def _about_contract(self, item_id: str, c: dict) -> tuple[str, set[str]] | None:
+        """The part of another library file about contract `c`, if that file names it (its number,
+        any of its order numbers, its title, or the acronym in its title); otherwise None."""
+        if not item_id or item_id not in self.rows:
+            return None
+        number = c.get("contract_number") or ""
+        title = (c.get("title") or "").strip()
+        anchors = _contract_anchors(number, title)
+        raw = self.store.source_text(self.org, item_id) or ""
+        low = raw.lower()
+        starts = sorted(m.start() for a in anchors for m in re.finditer(_anchor_re(a), low))
+        if not starts:
+            return None
+        # A past-performance book writes up several contracts, and names each in summaries too, so
+        # take EVERY stretch that starts at a mention of this one and runs to the next mention of
+        # another one (capped), never a single slice from the first mention.
+        mine = {_norm(x) for x in re.split(r"[/,;\s]+", number) if x}
+        others = [a for o in self.rows[item_id].get("contracts") or []
+                  if not ({_norm(x) for x in re.split(r"[/,;\s]+", o.get("contract_number") or "") if x} & mine)
+                  for a in _contract_anchors(o.get("contract_number") or "", (o.get("title") or "").strip())]
+        stops = sorted(m.start() for a in others for m in re.finditer(_anchor_re(a), low))
+        pieces, last = [], -1
+        for st in starts:
+            if st < last:
+                continue
+            end = next((x for x in stops if x > st + 20), len(raw))
+            end = min(end, st + 8000)
+            begin = max(0, low.rfind("\n", 0, max(0, st - 1)))
+            pieces.append(raw[begin:end])
+            last = end
+        part = " ".join(pieces)
+        return _tokens(part), _numbers(part)
 
     def person(self, p) -> None:
         hit = self.people.get(_norm(p.name)) or next(

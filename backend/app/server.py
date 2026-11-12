@@ -2,7 +2,7 @@
 import utils.agno_patches  # noqa: F401  -- apply agno reasoning patch before any agent runs
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
@@ -107,6 +107,23 @@ app.add_middleware(
 @app.get("/api/health", tags=["health"])
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/health/threads", tags=["health"], include_in_schema=False)
+async def thread_health(x_diagnostics_token: str | None = Header(default=None)) -> dict:
+    """Who holds the container's threads (utils/thread_report.py), for finding the leak behind
+    "can't start new thread". Async and token-gated on purpose: it needs no new thread and no
+    database, so it still answers when the container has none to spare. Off (404) until
+    DIAGNOSTICS_TOKEN is set; send it as the X-Diagnostics-Token header."""
+    import hmac
+
+    from app.settings import settings
+    from utils.thread_report import report
+
+    token = settings.DIAGNOSTICS_TOKEN
+    if not token or not x_diagnostics_token or not hmac.compare_digest(token, x_diagnostics_token):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return report()
 
 
 app.include_router(ingestion.router)
