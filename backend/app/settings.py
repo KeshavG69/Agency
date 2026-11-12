@@ -171,6 +171,9 @@ class Settings(BaseSettings):
     # for 4-bit (NVIDIA Nemotron's NVFP4) can list it.
     REWRITE_QUANTIZATIONS: str = "bf16,fp8,unknown"
     REWRITE_BASE_URL: str = ""
+    # /api/health/threads (who holds the container's threads) is off until this is set; callers
+    # send it as the X-Diagnostics-Token header. Staff-only: it shows server internals.
+    DIAGNOSTICS_TOKEN: str = ""
 
     # Capture agent — text-to-image generation via OpenRouter's Image API (POST /images).
     # NOTE: image generation always stays on OpenRouter — a self-hosted text model (Gemma)
