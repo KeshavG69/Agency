@@ -24,7 +24,8 @@ def sharepoint_graph(files: int = 0, current_user: dict = Depends(get_current_us
         g = get_structure(org_id, employee_email=None if is_admin else current_user["email"].lower())
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to read SharePoint graph: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"SharePoint graph unavailable: {e}")
+        logger.exception("routers/sharepoint.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=500, detail="The SharePoint map is unavailable right now. Please try again.")
 
     if not files:
         keep = {n["id"] for n in g["nodes"] if n["type"] != "file"}

@@ -5,6 +5,7 @@ handing the frontend a link that goes stale, it asks this stable endpoint for a 
 each time it previews/downloads. We don't store the object key separately — it's parsed from
 the (possibly-expired) stored URL's path, so no migration is needed.
 """
+import logging
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,6 +14,8 @@ from app.settings import settings
 from auth.dependencies import get_current_user
 from client.crm_store import get_crm_store
 from client.idrive_storage import get_idrive_storage
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -59,5 +62,6 @@ def fresh_document_url(
     try:
         url = get_idrive_storage().get_presigned_url(key, expiration=3600)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Could not mint a link: {exc}")
+        logger.exception("routers/documents.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=502, detail="Couldn't open this file right now. Please try again.")
     return {"url": url}

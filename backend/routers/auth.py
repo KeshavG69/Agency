@@ -3,6 +3,7 @@ Authentication router for user management endpoints.
 Cookie-based authentication with refresh token rotation.
 """
 
+import logging
 from fastapi import APIRouter, HTTPException, Depends, status, Response, Request, Cookie
 from datetime import timedelta, datetime
 from typing import Optional
@@ -36,6 +37,8 @@ from utils.email_verification import get_email_verification_crud
 from utils.password_reset import get_password_reset_crud
 from utils.onboarding import get_onboarding_crud
 from utils.helpers import serialize_doc
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -121,9 +124,10 @@ async def signup(user_data: UserSignup):
             detail=str(e)
         )
     except Exception as e:
+        logger.exception("routers/auth.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create user: {str(e)}"
+            detail="Couldn't create your account. Please try again."
         )
 
 
@@ -238,9 +242,10 @@ async def login(user_data: UserLogin, request: Request):
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("routers/auth.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Login failed: {str(e)}"
+            detail="Sign-in is temporarily unavailable. Please try again in a moment."
         )
 
 
@@ -360,9 +365,10 @@ async def google_login(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("routers/auth.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Google login failed: {str(e)}"
+            detail="Google sign-in failed. Please try again."
         )
 
 
@@ -377,8 +383,10 @@ async def microsoft_login_url(body: MicrosoftLoginUrlRequest):
     """
     try:
         ms_auth = MicrosoftAuthService()
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except ValueError:
+        logger.exception("Microsoft sign-in is misconfigured")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Sign in with Microsoft is unavailable right now.")
 
     state = create_state(body.invite_token)
     return {"auth_url": ms_auth.get_authorization_url(state)}
@@ -401,8 +409,10 @@ async def microsoft_callback(body: MicrosoftCallbackRequest, request: Request):
 
     try:
         ms_auth = MicrosoftAuthService()
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except ValueError:
+        logger.exception("Microsoft sign-in is misconfigured")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Sign in with Microsoft is unavailable right now.")
 
     profile, error = ms_auth.acquire_token(body.code)
     if profile is None:
@@ -696,9 +706,10 @@ async def refresh_token_endpoint(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("routers/auth.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Token refresh failed: {str(e)}"
+            detail="Couldn't refresh your session. Please sign in again."
         )
 
 
@@ -732,9 +743,10 @@ async def logout(
         )
 
     except Exception as e:
+        logger.exception("routers/auth.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Logout failed: {str(e)}"
+            detail="Couldn't sign you out. Please try again."
         )
 
 
@@ -829,9 +841,10 @@ async def verify_email(verify_data: VerifyEmailRequest, request: Request):
             detail=str(e)
         )
     except Exception as e:
+        logger.exception("routers/auth.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Email verification failed: {str(e)}"
+            detail="Email verification failed. Please try again."
         )
 
 
@@ -869,9 +882,10 @@ async def resend_verification(resend_data: ResendVerificationRequest):
             detail=str(e)
         )
     except Exception as e:
+        logger.exception("routers/auth.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to resend verification: {str(e)}"
+            detail="Couldn't resend the verification email. Please try again."
         )
 
 
@@ -949,9 +963,10 @@ async def reset_password(reset_data: ResetPasswordRequest):
             detail=str(e)
         )
     except Exception as e:
+        logger.exception("routers/auth.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Password reset failed: {str(e)}"
+            detail="Password reset failed. Please try again."
         )
 
 
@@ -1038,9 +1053,10 @@ async def change_password(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("routers/auth.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Password change failed: {str(e)}"
+            detail="Couldn't change your password. Please try again."
         )
 
 
@@ -1104,7 +1120,8 @@ async def update_profile(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("routers/auth.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Profile update failed: {str(e)}"
+            detail="Couldn't update your profile. Please try again."
         )

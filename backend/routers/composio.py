@@ -111,7 +111,8 @@ def connect(req: ConnectRequest, current_user: dict = Depends(get_current_user))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001
         logger.error("Composio connect failed (%s): %s", req.provider, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to start connect: {e}")
+        logger.exception("routers/composio.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=500, detail="Couldn't start the connection. Please try again.")
 
 
 @router.get("/status")
@@ -124,7 +125,8 @@ def status(provider: str = "outlook", current_user: dict = Depends(get_current_u
         return connection_status(provider, user_id=entity)
     except Exception as e:  # noqa: BLE001
         logger.error("Composio status check failed (%s): %s", provider, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to read status: {e}")
+        logger.exception("routers/composio.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=500, detail="Couldn't read the connection status. Please try again.")
 
 
 @router.post("/outlook/sync-contacts")
@@ -166,7 +168,8 @@ def preview_contacts(current_user: dict = Depends(get_current_user)) -> dict:
         contacts = classify_network(fetch_outlook_network(user_id=email))
     except Exception as e:  # noqa: BLE001
         logger.error("Contact preview failed for %s: %s", email, e, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Couldn't read your Outlook contacts: {e}")
+        logger.exception("routers/composio.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=502, detail="Couldn't read your Outlook contacts. Please try again.")
     work = sum(1 for c in contacts if c.get("category") == "work")
     return {"contacts": contacts, "count": len(contacts), "work": work, "personal": len(contacts) - work}
 
@@ -230,7 +233,8 @@ def browse_sharepoint_folders(current_user: dict = Depends(get_current_user)) ->
             nodes = google_drive.crawl(drive_account, with_acl=False, max_depth=1, browse=True)
     except Exception as e:  # noqa: BLE001
         logger.error("Folder browse failed for org %s: %s", org, e, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Couldn't read your folders: {e}")
+        logger.exception("routers/composio.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=502, detail="Couldn't read your folders. Please try again.")
     crud = get_organization_crud()
     return {"nodes": nodes, "excluded_paths": crud.get_sharepoint_excluded_paths(ObjectId(org)),
             # Google Drive's "Shared with me" is opt-IN: these are the items ticked there.
@@ -343,7 +347,8 @@ def disconnect(req: DisconnectRequest, current_user: dict = Depends(get_current_
         result = disconnect_account(req.connected_account_id)
     except Exception as e:  # noqa: BLE001
         logger.error("Composio disconnect failed: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to disconnect: {e}")
+        logger.exception("routers/composio.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=500, detail="Couldn't disconnect. Please try again.")
     if trigger_removed is not None:
         result["trigger_removed"] = trigger_removed
         if not trigger_removed:

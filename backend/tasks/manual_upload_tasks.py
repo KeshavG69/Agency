@@ -77,6 +77,8 @@ def process_manual_upload_task(self, opportunity_id: str, organization_id: str) 
             # The Analyst will never run, so apply_verdict can't clear the flag — clear it here
             # with the error so the opp exits "Ingesting" instead of hanging there forever.
             logger.error("Manual ingest permanently failed for opp %s: %s", opportunity_id, exc)
-            crm.set_ingesting(opportunity_id, organization_id, False, error=str(exc))
+            # Plain text only: this field is sent to the browser. The raw error is logged above.
+            crm.set_ingesting(opportunity_id, organization_id, False,
+                              error="Processing failed. Re-upload the documents to try again.")
             raise
         raise self.retry(exc=exc)

@@ -3,6 +3,7 @@ Authentication dependencies for FastAPI endpoints.
 Provides JWT token validation and role-based access control.
 """
 
+import logging
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from bson import ObjectId
@@ -11,6 +12,8 @@ from typing import Optional
 from auth import config
 from auth.database import get_mongodb_client
 
+
+logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
@@ -135,9 +138,10 @@ async def get_current_user(
             detail="Invalid token"
         )
     except Exception as e:
+        logger.exception("auth/dependencies.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication failed: {str(e)}"
+            detail="Authentication failed. Please sign in again."
         )
 
 

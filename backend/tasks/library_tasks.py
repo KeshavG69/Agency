@@ -163,7 +163,8 @@ def analyse_document_task(self, organization_id: str, item_id: str) -> dict:
             logger.warning("Library: %s failed (attempt %d), retrying: %s",
                            name, self.request.retries + 1, str(exc)[:200])
             raise self.retry(exc=exc, countdown=30 * (self.request.retries + 1))
-        store.mark(organization_id, item_id, status=FAILED, error=str(exc)[:300])
+        # Plain text only: this field is sent to the browser. The raw error is logged below.
+        store.mark(organization_id, item_id, status=FAILED, error="Couldn't read this file.")
         logger.warning("Library: %s failed for good: %s", name, exc)
         return {"item_id": item_id, "status": FAILED}
 

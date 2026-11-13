@@ -5,6 +5,21 @@ import { useConnectionStore } from '@/lib/stores/connectionStore';
 import { useUiStore } from '@/lib/stores/uiStore';
 import { useToastStore } from '@/lib/stores/toastStore';
 
+/**
+ * What a sign-in / sign-up failure may SAY on screen. A 4xx carries our own message
+ * ("Invalid email or password"); anything else is a server fault whose text is not for users —
+ * it can carry hostnames or stack detail — so it gets a fixed sentence instead.
+ */
+function authErrorMessage(error: any, fallback: string): string {
+  const status = error?.response?.status;
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === 'string' && typeof status === 'number' && status >= 400 && status < 500) {
+    return detail;
+  }
+  if (!error?.response) return "Can't reach the server. Check your connection and try again.";
+  return fallback;
+}
+
 interface SignupResult {
   email: string;
   message: string;
@@ -54,7 +69,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ user: response.user, isLoading: false });
     } catch (error: any) {
       set({
-        error: error.response?.data?.detail || 'Login failed',
+        error: authErrorMessage(error, 'Sign-in is temporarily unavailable. Please try again in a moment.'),
         isLoading: false,
       });
       throw error;
@@ -70,7 +85,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return response;
     } catch (error: any) {
       set({
-        error: error.response?.data?.detail || 'Signup failed',
+        error: authErrorMessage(error, "Couldn't create your account. Please try again."),
         isLoading: false,
       });
       throw error;

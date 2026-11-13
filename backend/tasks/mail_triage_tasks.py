@@ -137,7 +137,9 @@ def draft_triage_reply_task(self, card_id: str, employee_email: str) -> dict:
             # Retries exhausted — record the failure ON THE CARD so the frontend's poll loop
             # can show it, instead of polling forever for a suggested_reply that will never
             # arrive (e.g. the LLM never produced valid ReplyDraft JSON).
-            crm.update_mail_triage_card(card_id, employee_email, reply_error=str(exc))
+            # Plain text only: this field is sent to the browser. The raw error is logged above.
+            crm.update_mail_triage_card(card_id, employee_email,
+                                        reply_error="Couldn't draft a reply. Try again.")
             return {"drafted": False, "reason": "generation_failed"}
         raise self.retry(exc=exc)
 

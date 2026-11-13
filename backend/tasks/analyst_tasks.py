@@ -49,7 +49,9 @@ def analyze_opportunity_task(self, opp: dict, requested: bool = False) -> dict:
             # manual opp whose analysis permanently failed exits "Ingesting". No-op for the rest
             # of the batch (only the manual opp has ingesting=true).
             if opp.get("id") and opp.get("organization_id"):
-                crm.set_ingesting(opp["id"], opp["organization_id"], False, error=str(exc))
+                # Plain text only: this field is sent to the browser. The raw error is logged above.
+                crm.set_ingesting(opp["id"], opp["organization_id"], False,
+                                  error="The analysis failed. Try analysing it again.")
             raise
         raise self.retry(exc=exc)
 

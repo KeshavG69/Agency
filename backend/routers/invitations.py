@@ -3,6 +3,7 @@ Invitation management router.
 Handles email invitations with token hashing for organization members.
 """
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from bson import ObjectId
 from pydantic import BaseModel, EmailStr, Field
@@ -17,6 +18,8 @@ from auth.refresh_token import create_refresh_token
 from datetime import timedelta
 from datetime import datetime as dt
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/invitations", tags=["invitations"])
 
@@ -125,9 +128,10 @@ async def send_invitation(
             detail=str(e)
         )
     except Exception as e:
+        logger.exception("routers/invitations.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to send invitation: {str(e)}"
+            detail="Couldn't send the invitation. Please try again."
         )
 
 
@@ -499,7 +503,8 @@ async def accept_invitation(accept_data: AcceptInvitationRequest):
             detail=str(e)
         )
     except Exception as e:
+        logger.exception("routers/invitations.py: request failed")  # real error stays in the server log, never in the response
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to accept invitation: {str(e)}"
+            detail="Couldn't accept the invitation. Please try again."
         )

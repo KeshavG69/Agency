@@ -32,7 +32,8 @@ def contacts_list(
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to list contacts: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Contacts unavailable: {e}")
+        logger.exception("routers/contacts.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=500, detail="Contacts are unavailable right now. Please try again.")
 
 
 @router.get("/graph")
@@ -44,7 +45,8 @@ def contact_graph(current_user: dict = Depends(get_current_user)) -> dict:
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to read contact graph: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Graph unavailable: {e}")
+        logger.exception("routers/contacts.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=500, detail="The contact graph is unavailable right now. Please try again.")
 
 
 class RecommendRequest(BaseModel):
@@ -67,5 +69,6 @@ def recommend(req: RecommendRequest, current_user: dict = Depends(get_current_us
         )
     except Exception as e:  # noqa: BLE001
         logger.error("CRM recommend failed: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"CRM agent failed: {e}")
+        logger.exception("routers/contacts.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=500, detail="The CRM agent failed. Please try again.")
     return {"recommendations": [r.model_dump() for r in result.recommendations]}

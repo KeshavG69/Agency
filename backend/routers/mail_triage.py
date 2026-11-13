@@ -91,7 +91,8 @@ def create_outlook_draft(
         logger.error(
             "Creating Outlook draft reply failed for card %s: %s", card_id, exc, exc_info=True
         )
-        raise HTTPException(status_code=502, detail=f"Couldn't create the draft in Outlook: {exc}")
+        logger.exception("routers/mail_triage.py: request failed")  # real error stays in the server log, never in the response
+        raise HTTPException(status_code=502, detail="Couldn't create the draft in Outlook. Please try again.")
 
     crm.update_mail_triage_card(card_id, email, status="replied", suggested_reply=req.comment)
     return {"created": True, "web_link": result.get("web_link")}

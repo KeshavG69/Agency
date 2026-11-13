@@ -49,7 +49,8 @@ def capture_task(self, opp: dict, employee_email: str | None = None) -> dict:
         if self.request.retries >= self.max_retries:
             # Terminal failure — stamp captured_at so the opp leaves the UI's "Processing"
             # window (capture_approved && !captured_at) instead of sitting there forever.
-            crm.mark_capture_failed(opp["id"], str(exc))
+            # Plain text only: this field is sent to the browser. The raw error is logged above.
+            crm.mark_capture_failed(opp["id"], "The capture run failed. Retry it from the opportunity.")
             _replan(opp)  # a dead run owes the rep a "retry capture" card, today
             raise
         raise self.retry(exc=exc)
